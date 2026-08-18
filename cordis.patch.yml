@@ -1,0 +1,30 @@
+# Desktop Host operations compose around the existing Web bundle. Compatibility
+# mode keeps upstream ownership of the browser carrier and rendered UI.
+- insert:
+    - id: desktop-shell
+      name: harnessx-desktop
+      config:
+        mode: compatibility
+    - id: desktop-terminal
+      name: harnessx-desktop/terminal
+      disabled: !!js process.platform === 'linux'
+    - id: desktop-pnpm
+      name: harnessx-desktop/pnpm
+    - id: desktop-market
+      name: harnessx-desktop/market
+    - id: desktop-profiles
+      name: harnessx-desktop/profiles
+    - id: desktop-updates
+      name: harnessx-desktop/updates
+
+# A desktop launch has no terminal operator waiting for the Web readiness line.
+- id: web-runtime
+  config:
+    printUrl: false
+    surfaceContext: true
+    trustedHosts: []
+
+# Desktop credentials are encrypted through DPAPI, Keychain, or a secure Linux
+# secret-store backend. The upstream plaintext credentials provider is replaced.
+- id: credentials
+  name: harnessx-desktop/credentials

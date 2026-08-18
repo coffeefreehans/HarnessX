@@ -1,0 +1,12 @@
+# HarnessX repository rules
+
+This repository owns the desktop product around an unmodified DeepSeek Harness checkout.
+
+- `deepseek-harness/` is an upstream source snapshot committed as ordinary files. Never edit files inside it from a desktop feature branch.
+- The repository root owns the Cordis Host and Client faces, Electron bootstrap, packaging, and release tests.
+- The root package uses Yarn with `nodeLinker: node-modules`.
+- The upstream snapshot keeps its own pnpm workspace. Run upstream commands through the root `upstream:*` scripts, whose Yarn portable-shell commands enter that directory before invoking Corepack.
+- Compatibility mode must run the upstream default client without overrides. Advanced presentation belongs to desktop-owned client plugins and may replace documented slots or services through profile composition.
+- Keep graphical application launch explicit. Builds, typechecks, unit tests, and Loader smokes must remain headless-safe.
+- Commit before major changes of direction and keep upstream snapshot updates separate from desktop behavior changes.
+- Keep the flattened root package and upstream package-manager split consistent with the [owning Agent Note](.agents/notes/implemented/process/2026-08-15-pinned-upstream-and-isolated-yarn-workspace.md).

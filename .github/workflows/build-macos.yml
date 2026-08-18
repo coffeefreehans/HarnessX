@@ -1,0 +1,46 @@
+name: Build macOS release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DSH_TELEMETRY_DISABLED: '1'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: macos-15-intel
+          - architecture: arm64
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+      - run: corepack enable
+      - run: yarn install --immutable
+      - name: Verify native runner architecture
+        env:
+          EXPECTED_ARCHITECTURE: ${{ matrix.architecture }}
+        run: node -e "if (process.arch !== process.env.EXPECTED_ARCHITECTURE) { throw new Error('Expected ' + process.env.EXPECTED_ARCHITECTURE + ', received ' + process.arch) }"
+      - run: yarn build
+      - run: yarn typecheck
+      - run: yarn vitest run tests/package.spec.ts tests/update-checker.spec.ts tests/update-download.spec.ts tests/verify-mac-release.spec.ts
+      - name: Build unsigned DMG
+        run: yarn exec electron-builder --mac dmg --${{ matrix.architecture }} --publish never --config.mac.identity=null --config.mac.notarize=false --config.npmRebuild=false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HarnessX-0.1-${{ matrix.architecture }}-macOS
+          path: dist/HarnessX-0.1-${{ matrix.architecture }}.dmg
+          if-no-files-found: error
+          retention-days: 7
