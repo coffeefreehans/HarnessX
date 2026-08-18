@@ -20,7 +20,7 @@ DeepSeek HarnessX 将固定版本的 DeepSeek Harness 运行时组合成原生�
 
 [下载 SHA-256 校验文件](https://github.com/coffeefreehans/HarnessX/releases/download/v0.1/SHA256SUMS.txt)
 
-绿色 ZIP 仅用于本地测试，不上传 GitHub Release。当前公开安装包未进行发布者代码签名，Windows SmartScreen 可能显示“未知发布者”，macOS 可能要求在“系统设置 > 隐私与安全性”中手动允许打开。安装前应核对 SHA-256。
+当前公开安装包未进行发布者代码签名，Windows SmartScreen 可能显示“未知发布者”，macOS 可能要求在“系统设置 > 隐私与安全性”中手动允许打开。安装前应核对 SHA-256。
 
 ## 功能
 
