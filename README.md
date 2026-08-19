@@ -7,8 +7,6 @@
 
 DeepSeek HarnessX 将固定版本的 DeepSeek Harness 运行时组合成原生桌面应用，提供窗口与托盘管理、配置切换、本地终端、插件市场、安装任务和应用更新。它是独立维护的社区项目，不是 DeepSeek 官方产品。
 
-当前公开版本为 **0.1**。界面品牌显示为 **HARNESSX**，安装后的产品名称为 **DeepSeek HarnessX**。
-
 ## 下载
 
 | 系统 | 架构 | 安装包 |
@@ -19,8 +17,7 @@ DeepSeek HarnessX 将固定版本的 DeepSeek Harness 运行时组合成原生�
 | macOS | Apple Silicon ARM64 | [HarnessX-0.1-arm64.dmg](https://github.com/coffeefreehans/HarnessX/releases/download/v0.1/HarnessX-0.1-arm64.dmg) |
 
 [下载 SHA-256 校验文件](https://github.com/coffeefreehans/HarnessX/releases/download/v0.1/SHA256SUMS.txt)
-
-当前公开安装包未进行发布者代码签名，Windows SmartScreen 可能显示“未知发布者”，macOS 可能要求在“系统设置 > 隐私与安全性”中手动允许打开。安装前应核对 SHA-256。
+ 
 
 ## 功能
 
