@@ -40,7 +40,7 @@ jobs:
         run: yarn exec electron-builder --mac dmg --${{ matrix.architecture }} --publish never --config.mac.identity=null --config.mac.notarize=false --config.npmRebuild=false
       - uses: actions/upload-artifact@v4
         with:
-          name: HarnessX-0.1-${{ matrix.architecture }}-macOS
-          path: dist/HarnessX-0.1-${{ matrix.architecture }}.dmg
+          name: HarnessX-macOS-${{ matrix.architecture }}
+          path: dist/HarnessX-*-${{ matrix.architecture }}.dmg
           if-no-files-found: error
           retention-days: 7
