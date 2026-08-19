@@ -28,6 +28,7 @@ function options(calls: CommandCall[], logs: string[] = []): WindowsPackageOptio
     desktopRoot: 'C:\\repo',
     commandShell: 'C:\\Windows\\System32\\cmd.exe',
     builderCli: 'C:\\repo\\node_modules\\electron-builder\\cli.js',
+    manifestMerger: 'C:\\repo\\scripts\\merge-update-manifests.ts',
     verifier: 'C:\\repo\\scripts\\verify-win-installer.ts',
     nodeExecutable: 'C:\\Program Files\\nodejs\\node.exe',
     run: (command, args, cwd, env) => {
@@ -44,7 +45,7 @@ describe('Windows multi-architecture installer packaging', () => {
 
     packageWindowsInstaller(options(calls, logs))
 
-    expect(calls).toHaveLength(4)
+    expect(calls).toHaveLength(5)
     expect(calls[0]).toEqual({
       command: 'C:\\Windows\\System32\\cmd.exe',
       args: [
@@ -98,12 +99,19 @@ describe('Windows multi-architecture installer packaging', () => {
     })
     expect(calls[3]).toEqual({
       command: 'C:\\Program Files\\nodejs\\node.exe',
+      args: ['C:\\repo\\scripts\\merge-update-manifests.ts'],
+      cwd: 'C:\\repo',
+      env: { PATH: 'C:\\Windows\\System32', SAFE_VALUE: 'kept' },
+    })
+    expect(calls[4]).toEqual({
+      command: 'C:\\Program Files\\nodejs\\node.exe',
       args: ['C:\\repo\\scripts\\verify-win-installer.ts'],
       cwd: 'C:\\repo',
       env: { PATH: 'C:\\Windows\\System32', SAFE_VALUE: 'kept' },
     })
     expect(logs).toEqual([
       'Building unsigned Windows x64 and arm64 installers; Authenticode is a separate release step.',
+      'Merging multi-architecture update manifests.',
     ])
   })
 

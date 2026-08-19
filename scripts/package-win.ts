@@ -32,6 +32,8 @@ export interface WindowsPackageOptions {
   readonly commandShell: string
   /** Absolute electron-builder CLI module. */
   readonly builderCli: string
+  /** Absolute multi-architecture update manifest merger script. */
+  readonly manifestMerger: string
   /** Absolute packaged-installer verification script. */
   readonly verifier: string
   /** Node executable used to run package-local scripts. */
@@ -92,6 +94,7 @@ function defaultOptions(): WindowsPackageOptions {
       ? 'cmd.exe'
       : join(windowsRoot, 'System32', 'cmd.exe'),
     builderCli: require.resolve('electron-builder/cli.js'),
+    manifestMerger: fileURLToPath(new URL('./merge-update-manifests.ts', import.meta.url)),
     verifier: fileURLToPath(new URL('./verify-win-installer.ts', import.meta.url)),
     nodeExecutable: process.execPath,
     run,
@@ -157,6 +160,13 @@ export function packageWindowsInstaller(
       },
     )
   }
+  options.log('Merging multi-architecture update manifests.')
+  options.run(
+    options.nodeExecutable,
+    [options.manifestMerger],
+    options.desktopRoot,
+    cleanEnvironment,
+  )
   options.run(
     options.nodeExecutable,
     [options.verifier],

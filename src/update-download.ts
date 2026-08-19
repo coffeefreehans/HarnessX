@@ -3,6 +3,7 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
 import { chmod, lstat, mkdir, open, rename, unlink } from 'node:fs/promises'
 import { basename, isAbsolute, join, resolve } from 'node:path'
+import { parse as parseYaml } from 'yaml'
 import { parseSemVer, type UpdateReleaseInfo } from './update-checker.ts'
 
 /** Desktop platforms with packaged update artifacts. */
@@ -11,14 +12,16 @@ export type DesktopDownloadPlatform = 'darwin' | 'win32'
 /** CPU architectures with packaged update artifacts. */
 export type DesktopDownloadArch = 'x64' | 'arm64'
 
-/** SHA-256 manifest asset expected on every release. */
-export const UPDATE_CHECKSUMS_FILENAME = 'SHA256SUMS.txt'
+/** Return the expected update manifest asset name (electron-builder latest.yml / latest-mac.yml). */
+export function releaseManifestName(platform: DesktopDownloadPlatform): string {
+  return platform === 'darwin' ? 'latest-mac.yml' : 'latest.yml'
+}
 
 /** Maximum accepted installer size, in bytes. */
 export const MAX_UPDATE_DOWNLOAD_BYTES = 1024 * 1024 * 1024
 
-/** Maximum accepted checksum manifest size, in bytes. */
-export const MAX_UPDATE_CHECKSUM_BYTES = 64 * 1024
+/** Maximum accepted update manifest size, in bytes. */
+export const MAX_UPDATE_MANIFEST_BYTES = 64 * 1024
 
 /** Failure categories exposed to the update coordinator. */
 export type UpdateDownloadErrorCode =
@@ -81,7 +84,7 @@ export class UpdateDownloadError extends Error {
 const PRIVATE_DIRECTORY_MODE = 0o700
 const PRIVATE_FILE_MODE = 0o600
 const DECIMAL_BYTES = /^(0|[1-9][0-9]*)$/u
-const HEX_SHA256 = /^[0-9a-f]{64}$/u
+const BASE64_SHA512 = /^[A-Za-z0-9+/]{86}==$/u
 const DMG_TRAILER_BYTES = 512
 const DMG_TRAILER_MAGIC = Buffer.from('koly', 'ascii')
 const DOS_HEADER_BYTES = 64
@@ -102,8 +105,15 @@ interface ReleaseAssetSelection {
   readonly artifactName: string
   /** Installer browser download URL. */
   readonly artifactUrl: string
-  /** SHA-256 manifest browser download URL. */
-  readonly checksumsUrl: string
+  /** Update manifest browser download URL (latest.yml / latest-mac.yml). */
+  readonly manifestUrl: string
+}
+
+interface ExpectedAssetMetadata {
+  /** Decoded 64-byte SHA-512 digest. */
+  readonly sha512: Buffer
+  /** Expected byte size declared in the manifest, if present. */
+  readonly size?: number
 }
 
 /**
@@ -122,9 +132,10 @@ export async function downloadDesktopUpdate(options: DownloadDesktopUpdateOption
   const paths = await prepareDownloadPaths(userDataPath, selection.artifactName, version)
   throwIfAborted(options.signal)
 
-  const expectedHash = await fetchExpectedHash({
+  const expectedAsset = await fetchExpectedAssetMetadata({
     artifactName: selection.artifactName,
-    checksumsUrl: selection.checksumsUrl,
+    manifestUrl: selection.manifestUrl,
+    version,
     request: options.request,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   })
@@ -157,9 +168,9 @@ export async function downloadDesktopUpdate(options: DownloadDesktopUpdateOption
 
   let failure: unknown
   try {
-    const actualHash = await writeResponseBody(paths.temporary, response.body, options.signal)
+    const written = await writeResponseBody(paths.temporary, response.body, options.signal)
     throwIfAborted(options.signal)
-    verifyHash(actualHash, expectedHash)
+    verifyHashAndSize(written, expectedAsset)
     await validateArtifact(paths.temporary, platform)
     throwIfAborted(options.signal)
     await rename(paths.temporary, paths.completed)
@@ -227,31 +238,29 @@ function selectReleaseAssets(
   version: string,
 ): ReleaseAssetSelection {
   const artifactName = releaseArtifactName(platform, arch, version)
+  const manifestName = releaseManifestName(platform)
   const artifact = release.assets.find(asset => asset.name === artifactName)
-  const checksums = release.assets.find(asset => asset.name === UPDATE_CHECKSUMS_FILENAME)
-  if (artifact === undefined || checksums === undefined) {
+  const manifest = release.assets.find(asset => asset.name === manifestName)
+  if (artifact === undefined || manifest === undefined) {
     throw new UpdateDownloadError('missing-asset', 'The GitHub release is missing the required update assets.')
   }
   return {
     artifactName,
     artifactUrl: artifact.downloadUrl,
-    checksumsUrl: checksums.downloadUrl,
+    manifestUrl: manifest.downloadUrl,
   }
 }
 
-async function fetchExpectedHash(options: {
-  /** Installer file name to select from the checksum manifest. */
+async function fetchExpectedAssetMetadata(options: {
   readonly artifactName: string
-  /** URL for the checksum manifest asset. */
-  readonly checksumsUrl: string
-  /** Request adapter used by Electron or tests. */
+  readonly manifestUrl: string
+  readonly version: string
   readonly request: UpdateArtifactRequest
-  /** Optional cancellation signal. */
   readonly signal?: AbortSignal
-}): Promise<string> {
+}): Promise<ExpectedAssetMetadata> {
   let response: Response
   try {
-    response = await options.request(options.checksumsUrl, {
+    response = await options.request(options.manifestUrl, {
       method: 'GET',
       cache: 'no-store',
       redirect: 'follow',
@@ -259,31 +268,79 @@ async function fetchExpectedHash(options: {
     })
   } catch (cause) {
     if (options.signal?.aborted === true || isAbortFailure(cause)) throw aborted(cause)
-    throw new UpdateDownloadError('network', 'The update checksum manifest could not be downloaded.', { cause })
+    throw new UpdateDownloadError('network', 'The update manifest could not be downloaded.', { cause })
   }
   if (response.status !== 200) {
     throw new UpdateDownloadError(
       'http-status',
-      `The update checksum service returned HTTP ${String(response.status)}.`,
+      `The update manifest service returned HTTP ${String(response.status)}.`,
       { status: response.status },
     )
   }
-  assertDeclaredSize(response, MAX_UPDATE_CHECKSUM_BYTES)
-  const body = await readLimitedText(response, MAX_UPDATE_CHECKSUM_BYTES)
-  return parseExpectedHash(body, options.artifactName)
+  assertDeclaredSize(response, MAX_UPDATE_MANIFEST_BYTES)
+  const body = await readLimitedText(response, MAX_UPDATE_MANIFEST_BYTES)
+  return parseExpectedManifest(body, options.artifactName, options.version)
 }
 
-function parseExpectedHash(body: string, artifactName: string): string {
-  for (const rawLine of body.split(/\r?\n/u)) {
-    const line = rawLine.trim()
-    if (line.length === 0 || line.startsWith('#')) continue
-    const match = /^([0-9a-fA-F]{64})\s+\*?(.+)$/u.exec(line)
-    const hash = match?.[1]?.toLowerCase()
-    const name = match?.[2]
-    if (hash === undefined || name === undefined) continue
-    if (basename(name.trim()) === artifactName && HEX_SHA256.test(hash)) return hash
+function parseExpectedManifest(body: string, artifactName: string, version: string): ExpectedAssetMetadata {
+  let parsed: unknown
+  try {
+    parsed = parseYaml(body)
+  } catch (cause) {
+    throw new UpdateDownloadError('invalid-artifact', 'The update manifest is not valid YAML.', { cause })
   }
-  throw new UpdateDownloadError('missing-asset', 'The checksum manifest does not contain the selected update asset.')
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new UpdateDownloadError('invalid-artifact', 'The update manifest is empty or invalid.')
+  }
+
+  const manifest = parsed as Record<string, unknown>
+  if (typeof manifest.version === 'string' && manifest.version !== version) {
+    throw new UpdateDownloadError('invalid-artifact', 'The update manifest version does not match the release.')
+  }
+
+  let matchedFileEntry: { sha512?: unknown; size?: unknown } | undefined
+  if (Array.isArray(manifest.files)) {
+    for (const item of manifest.files) {
+      if (typeof item === 'object' && item !== null) {
+        const fileObj = item as Record<string, unknown>
+        const itemUrl = typeof fileObj.url === 'string' ? basename(fileObj.url.trim()) : undefined
+        const itemPath = typeof fileObj.path === 'string' ? basename(fileObj.path.trim()) : undefined
+        if (itemUrl === artifactName || itemPath === artifactName) {
+          matchedFileEntry = fileObj
+          break
+        }
+      }
+    }
+  }
+
+  if (matchedFileEntry === undefined) {
+    const topPath = typeof manifest.path === 'string' ? basename(manifest.path.trim()) : undefined
+    if (topPath === artifactName && typeof manifest.sha512 === 'string') {
+      matchedFileEntry = manifest
+    }
+  }
+
+  if (matchedFileEntry === undefined) {
+    throw new UpdateDownloadError('missing-asset', 'The update manifest does not contain the selected update asset.')
+  }
+
+  const rawSha512 = typeof matchedFileEntry.sha512 === 'string' ? matchedFileEntry.sha512.trim() : undefined
+  if (rawSha512 === undefined || !BASE64_SHA512.test(rawSha512)) {
+    throw new UpdateDownloadError('invalid-artifact', 'The update manifest contains an invalid SHA-512 hash.')
+  }
+  const sha512Buffer = Buffer.from(rawSha512, 'base64')
+  if (sha512Buffer.byteLength !== 64) {
+    throw new UpdateDownloadError('invalid-artifact', 'The update manifest contains an invalid SHA-512 buffer length.')
+  }
+
+  const size = typeof matchedFileEntry.size === 'number' && Number.isSafeInteger(matchedFileEntry.size) && matchedFileEntry.size > 0
+    ? matchedFileEntry.size
+    : undefined
+
+  return {
+    sha512: sha512Buffer,
+    ...(size === undefined ? {} : { size }),
+  }
 }
 
 async function prepareDownloadPaths(
@@ -369,14 +426,21 @@ async function readLimitedText(response: Response, maxBytes: number): Promise<st
   }
 }
 
+interface WrittenArtifactResult {
+  /** Computed SHA-512 digest buffer. */
+  readonly sha512: Buffer
+  /** Exact written byte size. */
+  readonly size: number
+}
+
 async function writeResponseBody(
   filename: string,
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal | undefined,
-): Promise<string> {
+): Promise<WrittenArtifactResult> {
   const handle = await open(filename, 'wx', PRIVATE_FILE_MODE)
   const reader = body.getReader()
-  const hash = createHash('sha256')
+  const hash = createHash('sha512')
   let bytesWritten = 0
   try {
     while (true) {
@@ -398,7 +462,10 @@ async function writeResponseBody(
       throw new UpdateDownloadError('empty-body', 'The update download service returned an empty body.')
     }
     await handle.sync()
-    return hash.digest('hex')
+    return {
+      sha512: hash.digest(),
+      size: bytesWritten,
+    }
   } catch (cause) {
     await reader.cancel(cause).catch(() => undefined)
     throw cause
@@ -420,11 +487,12 @@ async function writeAll(
   }
 }
 
-function verifyHash(actualHash: string, expectedHash: string): void {
-  const actual = Buffer.from(actualHash, 'hex')
-  const expected = Buffer.from(expectedHash, 'hex')
-  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
-    throw new UpdateDownloadError('checksum-mismatch', 'The downloaded update did not match SHA256SUMS.txt.')
+function verifyHashAndSize(actual: WrittenArtifactResult, expected: ExpectedAssetMetadata): void {
+  if (expected.size !== undefined && actual.size !== expected.size) {
+    throw new UpdateDownloadError('checksum-mismatch', 'The downloaded update size did not match the update manifest.')
+  }
+  if (actual.sha512.byteLength !== expected.sha512.byteLength || !timingSafeEqual(actual.sha512, expected.sha512)) {
+    throw new UpdateDownloadError('checksum-mismatch', 'The downloaded update hash did not match the update manifest.')
   }
 }
 
