@@ -8,9 +8,269 @@ import {
   type ReactNode,
 } from 'react'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
-import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the settings.section slot declaration into this program.
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import type {} from '@deepseek-ai/dsh-client-locale/client'
+
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface LocaleNamespaceMap {
+    'settings.market': MarketKey
+  }
+}
+
+export type MarketKey =
+  | 'nav'
+  | 'title'
+  | 'discover'
+  | 'sources'
+  | 'installed'
+  | 'jobs'
+  | 'navAria'
+  | 'searchPlaceholder'
+  | 'search'
+  | 'loading'
+  | 'loadingMore'
+  | 'loadFailed'
+  | 'empty'
+  | 'allSources'
+  | 'sourceFilter'
+  | 'install'
+  | 'installing'
+  | 'installedTag'
+  | 'uninstall'
+  | 'uninstalling'
+  | 'version'
+  | 'author'
+  | 'stars'
+  | 'official'
+  | 'viewDocs'
+  | 'viewRepo'
+  | 'viewHomepage'
+  | 'close'
+  | 'cancel'
+  | 'save'
+  | 'edit'
+  | 'delete'
+  | 'addSource'
+  | 'sourceName'
+  | 'sourceUrl'
+  | 'sourceKind'
+  | 'sourceEnabled'
+  | 'noInstalled'
+  | 'noJobs'
+  | 'jobLog'
+  | 'queuedNotice'
+  | 'processedSuccess'
+  | 'processFailed'
+  | 'cancelledNotice'
+  | 'processingNotice'
+  | 'enqueuedNotice'
+  | 'pluginCount'
+  | 'noPluginsFound'
+  | 'backToPlugins'
+  | 'description'
+  | 'noDescription'
+  | 'metadata'
+  | 'installSource'
+  | 'repository'
+  | 'homepage'
+  | 'license'
+  | 'updatedAt'
+  | 'tags'
+  | 'sourceId'
+  | 'sourceDisplayName'
+  | 'sourceType'
+  | 'sourceUrlOrPath'
+  | 'sourceGithub'
+  | 'sourceLocal'
+  | 'enableThisSource'
+  | 'saveSource'
+  | 'installedNotice'
+  | 'refresh'
+  | 'declared'
+  | 'jobAction'
+  | 'jobStatus'
+  | 'createdAt'
+  | 'startedAt'
+  | 'completedAt'
+  | 'duration'
+  | 'exitInfo'
+  | 'target'
+  | 'installPlugin'
+  | 'uninstallPlugin'
+  | 'cmdLog'
+  | 'noLogs'
+
+const zh: Record<MarketKey, string> = {
+  nav: '插件市场',
+  title: 'DeepSeek HarnessX 插件市场',
+  discover: '发现',
+  sources: '插件源',
+  installed: '已安装',
+  jobs: '任务',
+  navAria: '插件市场导航',
+  searchPlaceholder: '搜索插件名称、描述或作者…',
+  search: '搜索',
+  loading: '加载中…',
+  loadingMore: '正在加载更多…',
+  loadFailed: '加载失败',
+  empty: '没有找到匹配的插件',
+  allSources: '全部插件源',
+  sourceFilter: '插件源',
+  install: '安装',
+  installing: '准备中…',
+  installedTag: '已安装',
+  uninstall: '卸载',
+  uninstalling: '卸载中…',
+  version: '版本',
+  author: '作者',
+  stars: '星标',
+  official: '官方推荐',
+  viewDocs: '文档',
+  viewRepo: '源码仓库',
+  viewHomepage: '项目主页',
+  close: '关闭',
+  cancel: '取消',
+  save: '保存',
+  edit: '编辑',
+  delete: '删除',
+  addSource: '添加插件源',
+  sourceName: '源名称',
+  sourceUrl: '源地址',
+  sourceKind: '源类型',
+  sourceEnabled: '已启用',
+  noInstalled: '暂未安装第三方插件',
+  noJobs: '暂无任务记录',
+  jobLog: '查看完整输出日志',
+  queuedNotice: '插件操作正在排队，可切换到“任务”查看状态。',
+  processedSuccess: '{label} 已处理完成。',
+  processFailed: '{label} 处理失败：{detail}',
+  cancelledNotice: '{label} 已取消。',
+  processingNotice: '{label} 正在处理，可切换到“任务”查看日志。',
+  enqueuedNotice: '{label} 已加入任务。',
+  pluginCount: '共 {total} 个插件；当前显示 {count} 个。',
+  noPluginsFound: '没有找到插件。换一个关键词，或检查插件源。',
+  backToPlugins: '← 返回插件列表',
+  description: '简介',
+  noDescription: '暂无简介。',
+  metadata: '元数据',
+  installSource: '安装源',
+  repository: '仓库',
+  homepage: '主页',
+  license: '许可证',
+  updatedAt: '更新时间',
+  tags: '标签',
+  sourceId: '源标识',
+  sourceDisplayName: '显示名称',
+  sourceType: '类型',
+  sourceUrlOrPath: 'URL 或本地路径',
+  sourceGithub: 'GitHub 仓库',
+  sourceLocal: '本地目录',
+  enableThisSource: '启用此源',
+  saveSource: '保存源',
+  installedNotice: '已安装的第三方插件。卸载后需要重启应用才会完全生效。',
+  refresh: '刷新',
+  declared: '声明',
+  jobAction: '操作',
+  jobStatus: '状态',
+  createdAt: '创建时间',
+  startedAt: '开始时间',
+  completedAt: '完成时间',
+  duration: '耗时',
+  exitInfo: '退出信息',
+  target: '目标',
+  installPlugin: '安装插件',
+  uninstallPlugin: '卸载插件',
+  cmdLog: 'CMD / 执行日志',
+  noLogs: '暂无日志。',
+}
+
+const en: Record<MarketKey, string> = {
+  nav: 'Marketplace',
+  title: 'DeepSeek HarnessX Marketplace',
+  discover: 'Discover',
+  sources: 'Sources',
+  installed: 'Installed',
+  jobs: 'Tasks',
+  navAria: 'Marketplace navigation',
+  searchPlaceholder: 'Search plugins by name, description, or author…',
+  search: 'Search',
+  loading: 'Loading…',
+  loadingMore: 'Loading more…',
+  loadFailed: 'Failed to load',
+  empty: 'No matching plugins found',
+  allSources: 'All Sources',
+  sourceFilter: 'Sources',
+  install: 'Install',
+  installing: 'Preparing…',
+  installedTag: 'Installed',
+  uninstall: 'Uninstall',
+  uninstalling: 'Uninstalling…',
+  version: 'Version',
+  author: 'Author',
+  stars: 'Stars',
+  official: 'Official',
+  viewDocs: 'Docs',
+  viewRepo: 'Repository',
+  viewHomepage: 'Homepage',
+  close: 'Close',
+  cancel: 'Cancel',
+  save: 'Save',
+  edit: 'Edit',
+  delete: 'Delete',
+  addSource: 'Add Source',
+  sourceName: 'Source Name',
+  sourceUrl: 'Source URL',
+  sourceKind: 'Source Type',
+  sourceEnabled: 'Enabled',
+  noInstalled: 'No third-party plugins installed',
+  noJobs: 'No task history',
+  jobLog: 'View full output log',
+  queuedNotice: 'Plugin task is queued. Switch to "Tasks" to check status.',
+  processedSuccess: '{label} completed successfully.',
+  processFailed: '{label} failed: {detail}',
+  cancelledNotice: '{label} was cancelled.',
+  processingNotice: '{label} is processing. Switch to "Tasks" to view log.',
+  enqueuedNotice: '{label} has been added to tasks.',
+  pluginCount: 'Total {total} plugins; currently displaying {count}.',
+  noPluginsFound: 'No plugins found. Try another keyword or check plugin sources.',
+  backToPlugins: '← Back to plugin list',
+  description: 'Description',
+  noDescription: 'No description available.',
+  metadata: 'Metadata',
+  installSource: 'Install Source',
+  repository: 'Repository',
+  homepage: 'Homepage',
+  license: 'License',
+  updatedAt: 'Updated At',
+  tags: 'Tags',
+  sourceId: 'Source ID',
+  sourceDisplayName: 'Display Name',
+  sourceType: 'Type',
+  sourceUrlOrPath: 'URL or Local Path',
+  sourceGithub: 'GitHub Repository',
+  sourceLocal: 'Local Directory',
+  enableThisSource: 'Enable this source',
+  saveSource: 'Save Source',
+  installedNotice: 'Installed third-party plugins. Uninstalling requires application restart to take full effect.',
+  refresh: 'Refresh',
+  declared: 'Declared',
+  jobAction: 'Action',
+  jobStatus: 'Status',
+  createdAt: 'Created At',
+  startedAt: 'Started At',
+  completedAt: 'Completed At',
+  duration: 'Duration',
+  exitInfo: 'Exit Info',
+  target: 'Target',
+  installPlugin: 'Install Plugin',
+  uninstallPlugin: 'Uninstall Plugin',
+  cmdLog: 'CMD / Execution Logs',
+  noLogs: 'No logs available.',
+}
+
+const NS = 'settings.market'
 import type {} from './contracts.ts'
 import {
   createLatestRequestGate,
@@ -277,16 +537,19 @@ const MARKET_STYLES = `
 
 /** Register the market page in the upstream settings panel. */
 export function applyMarket(ctx: ClientContext): void {
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'market: dictionaries')
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'plugin-market',
     order: 90,
-    label: '插件市场',
+    label: () => ctx.locale.bind(NS)('nav'),
+    locale: NS,
   }, MarketSettingsSection))
 }
 
 /** Settings-panel page with a tree on the left and market content on the right. */
-function MarketSettingsSection(_props: PropsRuntime<'settings.section'>): ReactNode {
+function MarketSettingsSection(props: PropsRuntime<'settings.section'> & PropsLocale<'settings.market'>): ReactNode {
+  const { t } = props
   const [active, setActive] = useState<ActiveNode>('discover')
   const [sources, setSources] = useState<PluginSource[]>([])
   const [installed, setInstalled] = useState<InstalledPlugin[]>([])
@@ -328,30 +591,30 @@ function MarketSettingsSection(_props: PropsRuntime<'settings.section'>): ReactN
       const job = await requestJson<MarketJob>(`/api/desktop/market/jobs/${jobId}`)
       setJobs(current => [...current.filter(item => item.id !== job.id), job])
       if (job.status === 'queued') {
-        setNotice({ tone: 'info', text: '插件操作正在排队，可切换到“任务”查看状态。' })
+        setNotice({ tone: 'info', text: t('queuedNotice') })
         await wait(800)
         continue
       }
       if (job.status !== 'running') {
         await reloadInstalled().catch(() => undefined)
         if (job.status === 'success') {
-          setNotice({ tone: 'success', text: `${job.label} 已处理完成。` })
+          setNotice({ tone: 'success', text: t('processedSuccess', { label: job.label }) })
         } else if (job.status === 'failed') {
           const detail = job.output.at(-1)
-          setNotice({ tone: 'error', text: detail === undefined || detail.length === 0 ? `${job.label} 处理失败，请查看任务日志。` : `${job.label} 处理失败：${detail}` })
+          setNotice({ tone: 'error', text: t('processFailed', { label: job.label, detail: detail ?? 'failed' }) })
         } else {
-          setNotice({ tone: 'info', text: `${job.label} 已取消。` })
+          setNotice({ tone: 'info', text: t('cancelledNotice', { label: job.label }) })
         }
         return
       }
-      setNotice({ tone: 'info', text: `${job.label} 正在处理，可切换到“任务”查看日志。` })
+      setNotice({ tone: 'info', text: t('processingNotice', { label: job.label }) })
       await wait(800)
     }
   }
 
   const startJob = (job: MarketJob): void => {
     setJobs(current => [...current.filter(item => item.id !== job.id), job])
-    setNotice({ tone: 'info', text: `${job.label} 已加入任务。` })
+    setNotice({ tone: 'info', text: t('enqueuedNotice', { label: job.label }) })
     void watchJob(job.id)
   }
 
@@ -382,6 +645,7 @@ function MarketSettingsSection(_props: PropsRuntime<'settings.section'>): ReactN
       return (
         <CatalogPanel
           key="discover"
+          t={t}
           sourceId={discoverSourceId}
           sources={sources}
           onSourceChange={setDiscoverSourceId}
@@ -392,12 +656,13 @@ function MarketSettingsSection(_props: PropsRuntime<'settings.section'>): ReactN
       )
     }
     if (active === 'sources') {
-      return <SourcesPanel key="sources" sources={sources} onChanged={() => { setRefresh(value => value + 1) }} />
+      return <SourcesPanel key="sources" t={t} sources={sources} onChanged={() => { setRefresh(value => value + 1) }} />
     }
     if (active === 'installed') {
       return (
         <InstalledPanel
           key="installed"
+          t={t}
           installed={installed}
           onJobStarted={startJob}
           onChanged={() => { setRefresh(value => value + 1) }}
@@ -405,7 +670,7 @@ function MarketSettingsSection(_props: PropsRuntime<'settings.section'>): ReactN
       )
     }
     if (active === 'jobs') {
-      return <JobsPanel key="jobs" jobs={jobs} onCancel={cancelJob} />
+      return <JobsPanel key="jobs" t={t} jobs={jobs} onCancel={cancelJob} />
     }
     return null
   }
@@ -413,13 +678,13 @@ function MarketSettingsSection(_props: PropsRuntime<'settings.section'>): ReactN
   return (
     <div className="dshMarketSection">
       <header className="dshMarketHeader">
-        <h2 className="dshMarketTitle">DeepSeek HarnessX 插件市场</h2>
+        <h2 className="dshMarketTitle">{t('title')}</h2>
       </header>
-      <nav className="dshMarketTabs" aria-label="插件市场导航">
-        <TabButton label="发现" count={undefined} current={active === 'discover'} onClick={() => { selectNode('discover') }} />
-        <TabButton label="插件源" count={sources.length} current={active === 'sources'} onClick={() => { selectNode('sources') }} />
-        <TabButton label="已安装" count={installed.length} current={active === 'installed'} onClick={() => { selectNode('installed') }} />
-        <TabButton label="任务" count={jobs.length} current={active === 'jobs'} onClick={() => { selectNode('jobs') }} />
+      <nav className="dshMarketTabs" aria-label={t('navAria')}>
+        <TabButton label={t('discover')} count={undefined} current={active === 'discover'} onClick={() => { selectNode('discover') }} />
+        <TabButton label={t('sources')} count={sources.length} current={active === 'sources'} onClick={() => { selectNode('sources') }} />
+        <TabButton label={t('installed')} count={installed.length} current={active === 'installed'} onClick={() => { selectNode('installed') }} />
+        <TabButton label={t('jobs')} count={jobs.length} current={active === 'jobs'} onClick={() => { selectNode('jobs') }} />
       </nav>
       <main className="dshMarketContent">
         {notice !== undefined && (
@@ -435,6 +700,7 @@ function MarketSettingsSection(_props: PropsRuntime<'settings.section'>): ReactN
 
 /** Catalog search and installation panel. */
 function CatalogPanel(props: {
+  t: (key: MarketKey, params?: Record<string, string | number>) => string
   sourceId: string | undefined
   sources: PluginSource[]
   onSourceChange: (sourceId: string | undefined) => void
@@ -442,6 +708,7 @@ function CatalogPanel(props: {
   jobs: MarketJob[]
   onJobStarted: (job: MarketJob) => void
 }): ReactNode {
+  const { t } = props
   const [query, setQuery] = useState('')
   const [items, setItems] = useState<MarketPlugin[]>([])
   const [total, setTotal] = useState(0)
@@ -515,6 +782,7 @@ function CatalogPanel(props: {
     const job = pluginJob(selectedPlugin, props.jobs)
     return (
       <PluginDetail
+        t={t}
         plugin={selectedPlugin}
         installed={isPluginInstalled(selectedPlugin, props.installedNames)}
         status={job?.status}
@@ -529,13 +797,13 @@ function CatalogPanel(props: {
     <div className="dshMarketCatalog">
       <div className="dshMarketToolbar">
         <label className="dshMarketSourceFilter">
-          <span className="dshMarketFieldLabel">插件源</span>
+          <span className="dshMarketFieldLabel">{t('sourceFilter')}</span>
           <select
             className="dshMarketSelect"
             value={props.sourceId ?? ''}
             onChange={(event) => { props.onSourceChange(event.target.value === '' ? undefined : event.target.value) }}
           >
-            <option value="">全部源</option>
+            <option value="">{t('allSources')}</option>
             {props.sources.map(source => (
               <option key={source.id} value={source.id}>{source.name}</option>
             ))}
@@ -549,10 +817,10 @@ function CatalogPanel(props: {
             className="dshMarketInput"
             value={query}
             onChange={(event) => { setQuery(event.target.value) }}
-            placeholder="搜索插件名称、描述、标签"
+            placeholder={t('searchPlaceholder')}
           />
           <button className="dshMarketButtonPrimary" type="submit" disabled={loading}>
-            {loading ? '加载中…' : '搜索'}
+            {loading ? t('loading') : t('search')}
           </button>
         </form>
       </div>
@@ -564,14 +832,15 @@ function CatalogPanel(props: {
           ))}
         </div>
       )}
-      <p className="dshMarketNotice">共 {total} 个插件；当前显示 {items.length} 个。</p>
-      {items.length === 0 && !loading && <p className="dshMarketEmpty">没有找到插件。换一个关键词，或检查插件源。</p>}
+      <p className="dshMarketNotice">{t('pluginCount', { total, count: items.length })}</p>
+      {items.length === 0 && !loading && <p className="dshMarketEmpty">{t('noPluginsFound')}</p>}
       <div className="dshMarketList">
         {sortedItems.map(plugin => {
           const job = pluginJob(plugin, props.jobs)
           return (
             <PluginCard
               key={`${plugin.sourceId}:${plugin.id}`}
+              t={t}
               plugin={plugin}
               installed={isPluginInstalled(plugin, props.installedNames)}
               status={job?.status}
@@ -589,7 +858,7 @@ function CatalogPanel(props: {
           disabled={loadingMore}
           onClick={() => { void loadPage(query, items.length, true) }}
         >
-          {loadingMore ? '加载中…' : '加载更多'}
+          {loadingMore ? t('loadingMore') : t('loadingMore')}
         </button>
       )}
     </div>
@@ -598,6 +867,7 @@ function CatalogPanel(props: {
 
 /** One catalog card with install action. */
 function PluginCard(props: {
+  t: (key: MarketKey, params?: Record<string, string | number>) => string
   plugin: MarketPlugin
   installed: boolean
   status: JobStatus | undefined
@@ -605,8 +875,9 @@ function PluginCard(props: {
   onOpen: () => void
   onInstall: () => void
 }): ReactNode {
-  const { plugin } = props
-  const action = pluginInstallAction(props.installed, props.status, props.preparing)
+  const { plugin, t } = props
+  const isZh = t('install') === '安装'
+  const action = pluginInstallAction(props.installed, props.status, props.preparing, isZh)
   return (
     <article
       className="dshMarketCard dshMarketCardClickable"
@@ -630,7 +901,7 @@ function PluginCard(props: {
           {plugin.author && <span>{plugin.author}</span>}
           {plugin.stars !== undefined && <span>★ {formatCount(plugin.stars)}</span>}
           {plugin.license && <span>{plugin.license}</span>}
-          {plugin.updatedAt && <span>更新 {plugin.updatedAt}</span>}
+          {plugin.updatedAt && <span>{t('updatedAt')} {plugin.updatedAt}</span>}
         </div>
         {plugin.description && <p className="dshMarketCardDesc">{plugin.description}</p>}
       </div>
@@ -653,6 +924,7 @@ function PluginCard(props: {
 
 /** Full-screen detail view inside the market content area. */
 function PluginDetail(props: {
+  t: (key: MarketKey, params?: Record<string, string | number>) => string
   plugin: MarketPlugin
   installed: boolean
   status: JobStatus | undefined
@@ -660,11 +932,12 @@ function PluginDetail(props: {
   onBack: () => void
   onInstall: () => void
 }): ReactNode {
-  const { plugin } = props
-  const action = pluginInstallAction(props.installed, props.status, props.preparing)
+  const { plugin, t } = props
+  const isZh = t('install') === '安装'
+  const action = pluginInstallAction(props.installed, props.status, props.preparing, isZh)
   return (
     <div className="dshMarketDetail">
-      <button className="dshMarketBack" type="button" onClick={props.onBack}>← 返回插件列表</button>
+      <button className="dshMarketBack" type="button" onClick={props.onBack}>{t('backToPlugins')}</button>
       <header className="dshMarketDetailHeader">
         <div>
           <h3 className="dshMarketDetailTitle">{plugin.name}</h3>
@@ -684,23 +957,23 @@ function PluginDetail(props: {
         </button>
       </header>
       <section className="dshMarketDetailSection">
-        <h4 className="dshMarketDetailLabel">简介</h4>
-        <p className="dshMarketDetailText">{plugin.description || '暂无简介。'}</p>
+        <h4 className="dshMarketDetailLabel">{t('description')}</h4>
+        <p className="dshMarketDetailText">{plugin.description || t('noDescription')}</p>
       </section>
       <section className="dshMarketDetailSection">
-        <h4 className="dshMarketDetailLabel">元数据</h4>
+        <h4 className="dshMarketDetailLabel">{t('metadata')}</h4>
         <dl className="dshMarketDetailMeta">
-          <div><dt>安装源</dt><dd>{plugin.install}</dd></div>
-          {plugin.repository && <div><dt>仓库</dt><dd><a href={plugin.repository} target="_blank" rel="noreferrer">{plugin.repository}</a></dd></div>}
-          {plugin.homepage && <div><dt>主页</dt><dd><a href={plugin.homepage} target="_blank" rel="noreferrer">{plugin.homepage}</a></dd></div>}
-          {plugin.license && <div><dt>许可证</dt><dd>{plugin.license}</dd></div>}
-          {plugin.updatedAt && <div><dt>更新时间</dt><dd>{plugin.updatedAt}</dd></div>}
-          {plugin.stars !== undefined && <div><dt>星标</dt><dd>★ {formatCount(plugin.stars)}</dd></div>}
+          <div><dt>{t('installSource')}</dt><dd>{plugin.install}</dd></div>
+          {plugin.repository && <div><dt>{t('repository')}</dt><dd><a href={plugin.repository} target="_blank" rel="noreferrer">{plugin.repository}</a></dd></div>}
+          {plugin.homepage && <div><dt>{t('homepage')}</dt><dd><a href={plugin.homepage} target="_blank" rel="noreferrer">{plugin.homepage}</a></dd></div>}
+          {plugin.license && <div><dt>{t('license')}</dt><dd>{plugin.license}</dd></div>}
+          {plugin.updatedAt && <div><dt>{t('updatedAt')}</dt><dd>{plugin.updatedAt}</dd></div>}
+          {plugin.stars !== undefined && <div><dt>{t('stars')}</dt><dd>★ {formatCount(plugin.stars)}</dd></div>}
         </dl>
       </section>
       {plugin.tags !== undefined && plugin.tags.length > 0 && (
         <section className="dshMarketDetailSection">
-          <h4 className="dshMarketDetailLabel">标签</h4>
+          <h4 className="dshMarketDetailLabel">{t('tags')}</h4>
           <div className="dshMarketTagRow">
             {plugin.tags.map(tag => <span className="dshMarketTag" key={tag}>{tag}</span>)}
           </div>
@@ -712,9 +985,11 @@ function PluginDetail(props: {
 
 /** Source list and editor panel. */
 function SourcesPanel(props: {
+  t: (key: MarketKey, params?: Record<string, string | number>) => string
   sources: PluginSource[]
   onChanged: () => void
 }): ReactNode {
+  const { t } = props
   const [form, setForm] = useState<SourceFormState>(EMPTY_SOURCE_FORM)
   const [error, setError] = useState<string | undefined>()
 
@@ -761,32 +1036,32 @@ function SourcesPanel(props: {
     <div className="dshMarketStack">
       <div className="dshMarketSourceEditor">
         <div className="dshMarketField">
-          <label className="dshMarketFieldLabel">源标识</label>
+          <label className="dshMarketFieldLabel">{t('sourceId')}</label>
           <input className="dshMarketInput" value={form.id} onChange={(event) => { setForm({ ...form, id: event.target.value }) }} placeholder="例如 my-source" />
         </div>
         <div className="dshMarketField">
-          <label className="dshMarketFieldLabel">显示名称</label>
+          <label className="dshMarketFieldLabel">{t('sourceDisplayName')}</label>
           <input className="dshMarketInput" value={form.name} onChange={(event) => { setForm({ ...form, name: event.target.value }) }} placeholder="例如 My Marketplace" />
         </div>
         <div className="dshMarketField">
-          <label className="dshMarketFieldLabel">类型</label>
+          <label className="dshMarketFieldLabel">{t('sourceType')}</label>
           <select className="dshMarketSelect" value={form.kind} onChange={(event) => { setForm({ ...form, kind: event.target.value as PluginSourceKind }) }}>
             <option value="manifest">Manifest URL</option>
-            <option value="github">GitHub 仓库</option>
-            <option value="local">本地目录</option>
+            <option value="github">{t('sourceGithub')}</option>
+            <option value="local">{t('sourceLocal')}</option>
             <option value="npm">npm registry</option>
           </select>
         </div>
         <div className="dshMarketField">
-          <label className="dshMarketFieldLabel">URL 或本地路径</label>
+          <label className="dshMarketFieldLabel">{t('sourceUrlOrPath')}</label>
           <input className="dshMarketInput" value={form.url} onChange={(event) => { setForm({ ...form, url: event.target.value }) }} placeholder={urlPlaceholder(form.kind)} />
         </div>
         <label className="dshMarketCardMeta">
           <input type="checkbox" checked={form.enabled} onChange={(event) => { setForm({ ...form, enabled: event.target.checked }) }} />
-          启用此源
+          {t('enableThisSource')}
         </label>
         <div className="dshMarketCardFooter">
-          <button className="dshMarketButtonPrimary" type="button" onClick={() => { void saveSource() }}>保存源</button>
+          <button className="dshMarketButtonPrimary" type="button" onClick={() => { void saveSource() }}>{t('saveSource')}</button>
         </div>
       </div>
       {error && <p className="dshMarketError">{error}</p>}
@@ -797,18 +1072,18 @@ function SourcesPanel(props: {
               <strong className="dshMarketSourceName">{source.name}</strong>
               <div className="dshMarketCardMeta">
                 <span>{source.kind}</span>
-                <span>{source.enabled ? '启用' : '停用'}</span>
+                <span>{source.enabled ? t('sourceEnabled') : t('delete')}</span>
                 <span>{source.url}</span>
               </div>
             </div>
             <div className="dshMarketSourceFooter">
               <button className="dshMarketButtonGhost" type="button" onClick={() => {
                 setForm({ id: source.id, name: source.name, kind: source.kind, url: source.url, enabled: source.enabled })
-              }}>编辑</button>
+              }}>{t('edit')}</button>
               <button className="dshMarketButtonGhost" type="button" onClick={() => { void updateSource(source, !source.enabled) }}>
-                {source.enabled ? '停用' : '启用'}
+                {source.enabled ? t('cancel') : t('sourceEnabled')}
               </button>
-              <button className="dshMarketButtonGhost" type="button" onClick={() => { void deleteSource(source.id) }}>删除</button>
+              <button className="dshMarketButtonGhost" type="button" onClick={() => { void deleteSource(source.id) }}>{t('delete')}</button>
             </div>
           </div>
         ))}
@@ -819,10 +1094,12 @@ function SourcesPanel(props: {
 
 /** Installed plugin management panel. */
 function InstalledPanel(props: {
+  t: (key: MarketKey, params?: Record<string, string | number>) => string
   installed: InstalledPlugin[]
   onJobStarted: (job: MarketJob) => void
   onChanged: () => void
 }): ReactNode {
+  const { t } = props
   const [removing, setRemoving] = useState<string | undefined>()
   const [error, setError] = useState<string | undefined>()
 
@@ -848,11 +1125,11 @@ function InstalledPanel(props: {
   return (
     <div className="dshMarketStack">
       <div className="dshMarketRow">
-        <p className="dshMarketNotice">已安装的第三方插件。卸载后需要重启应用才会完全生效。</p>
-        <button className="dshMarketButtonGhost" type="button" onClick={props.onChanged}>刷新</button>
+        <p className="dshMarketNotice">{t('installedNotice')}</p>
+        <button className="dshMarketButtonGhost" type="button" onClick={props.onChanged}>{t('refresh')}</button>
       </div>
       {error && <p className="dshMarketError">{error}</p>}
-      {props.installed.length === 0 && <p className="dshMarketEmpty">还没有安装第三方插件。</p>}
+      {props.installed.length === 0 && <p className="dshMarketEmpty">{t('noInstalled')}</p>}
       {props.installed.map(plugin => (
         <div className="dshMarketCard" key={plugin.name}>
           <div className="dshMarketCardBody">
@@ -861,12 +1138,12 @@ function InstalledPanel(props: {
             </div>
             <div className="dshMarketCardMeta">
               {plugin.version && <span>v{plugin.version}</span>}
-              {plugin.requested && <span>声明 {plugin.requested}</span>}
+              {plugin.requested && <span>{t('declared')} {plugin.requested}</span>}
             </div>
           </div>
           <div className="dshMarketCardFooter">
             <button className="dshMarketButtonGhost" type="button" disabled={removing === plugin.name} onClick={() => { void runUninstall(plugin.name) }}>
-              {removing === plugin.name ? '卸载中…' : '卸载'}
+              {removing === plugin.name ? t('uninstalling') : t('uninstall')}
             </button>
           </div>
         </div>
@@ -877,14 +1154,16 @@ function InstalledPanel(props: {
 
 /** Install/remove job log panel. */
 function JobsPanel(props: {
+  t: (key: MarketKey, params?: Record<string, string | number>) => string
   jobs: MarketJob[]
   onCancel: (jobId: string) => Promise<void>
 }): ReactNode {
+  const { t } = props
   return (
     <div className="dshMarketJobs">
-      {props.jobs.length === 0 && <p className="dshMarketEmpty">暂无安装或卸载任务。</p>}
+      {props.jobs.length === 0 && <p className="dshMarketEmpty">{t('noJobs')}</p>}
       {newestMarketJobs(props.jobs).map(job => (
-        <MarketJobCard job={job} key={job.id} onCancel={props.onCancel} />
+        <MarketJobCard t={t} job={job} key={job.id} onCancel={props.onCancel} />
       ))}
     </div>
   )
@@ -892,6 +1171,7 @@ function JobsPanel(props: {
 
 /** One task result using the same summary-and-facts layout as desktop updates. */
 interface MarketJobCardProps {
+  t: (key: MarketKey, params?: Record<string, string | number>) => string
   /** Task snapshot rendered by the card. */
   job: MarketJob
   /** Cancel one queued or running task. */
@@ -899,7 +1179,8 @@ interface MarketJobCardProps {
 }
 
 function MarketJobCard(props: MarketJobCardProps): ReactNode {
-  const { job } = props
+  const { job, t } = props
+  const isZh = t('install') === '安装'
   const [logsOpen, setLogsOpen] = useState(job.status === 'failed')
   useEffect(() => {
     if (job.status === 'failed') setLogsOpen(true)
@@ -911,22 +1192,22 @@ function MarketJobCard(props: MarketJobCardProps): ReactNode {
     <section className="dshMarketJob" data-status={job.status}>
       <header className="dshMarketJobHead">
         <div className="dshMarketJobTitle">
-          <h3 className="dshMarketJobHeadline">{marketJobHeadline(job.action, job.status)}</h3>
+          <h3 className="dshMarketJobHeadline">{marketJobHeadline(job.action, job.status, isZh)}</h3>
           <p className="dshMarketJobPlugin">{job.label || job.target || job.id}</p>
         </div>
         {(job.status === 'queued' || job.status === 'running')
-          ? <button className="dshMarketButtonGhost" type="button" onClick={() => { void props.onCancel(job.id) }}>取消</button>
-          : <span className="dshMarketJobStatus">{jobStatusLabel(job.status)}</span>}
+          ? <button className="dshMarketButtonGhost" type="button" onClick={() => { void props.onCancel(job.id) }}>{t('cancel')}</button>
+          : <span className="dshMarketJobStatus">{jobStatusLabel(job.status, isZh)}</span>}
       </header>
       <dl className="dshMarketJobFacts">
-        <JobFact label="操作" value={job.action === 'install' ? '安装插件' : '卸载插件'} />
-        <JobFact label="状态" value={marketJobHeadline(job.action, job.status)} />
-        <JobFact label="创建时间" value={formatJobTime(job.createdAt)} />
-        <JobFact label="开始时间" value={formatJobTime(job.startedAt)} />
-        <JobFact label="完成时间" value={formatJobTime(job.completedAt)} />
-        <JobFact label="耗时" value={marketJobDuration(job.startedAt, job.completedAt)} />
-        <JobFact label="退出信息" value={jobExitLabel(job)} />
-        <JobFact label="目标" value={job.target || '—'} />
+        <JobFact label={t('jobAction')} value={job.action === 'install' ? t('installPlugin') : t('uninstallPlugin')} />
+        <JobFact label={t('jobStatus')} value={marketJobHeadline(job.action, job.status, isZh)} />
+        <JobFact label={t('createdAt')} value={formatJobTime(job.createdAt)} />
+        <JobFact label={t('startedAt')} value={formatJobTime(job.startedAt)} />
+        <JobFact label={t('completedAt')} value={formatJobTime(job.completedAt)} />
+        <JobFact label={t('duration')} value={marketJobDuration(job.startedAt, job.completedAt, Date.now(), isZh)} />
+        <JobFact label={t('exitInfo')} value={jobExitLabel(job, isZh)} />
+        <JobFact label={t('target')} value={job.target || '—'} />
       </dl>
       {errorLine !== undefined && <p className="dshMarketJobError">{errorLine}</p>}
       <details
@@ -934,8 +1215,8 @@ function MarketJobCard(props: MarketJobCardProps): ReactNode {
         open={logsOpen}
         onToggle={(event) => { setLogsOpen(event.currentTarget.open) }}
       >
-        <summary>CMD / 执行日志</summary>
-        <pre className="dshMarketJobOutput">{job.output.length === 0 ? '暂无日志。' : job.output.join('\n')}</pre>
+        <summary>{t('cmdLog')}</summary>
+        <pre className="dshMarketJobOutput">{job.output.length === 0 ? t('noLogs') : job.output.join('\n')}</pre>
       </details>
     </section>
   )
@@ -991,13 +1272,22 @@ function formatCount(value: number): string {
   return String(value)
 }
 
-function jobStatusLabel(status: JobStatus): string {
+function jobStatusLabel(status: JobStatus, isZh = true): string {
+  if (isZh) {
+    switch (status) {
+      case 'queued': return '排队中'
+      case 'running': return '运行中'
+      case 'success': return '成功'
+      case 'failed': return '失败'
+      case 'cancelled': return '已取消'
+    }
+  }
   switch (status) {
-    case 'queued': return '排队中'
-    case 'running': return '运行中'
-    case 'success': return '成功'
-    case 'failed': return '失败'
-    case 'cancelled': return '已取消'
+    case 'queued': return 'Queued'
+    case 'running': return 'Running'
+    case 'success': return 'Success'
+    case 'failed': return 'Failed'
+    case 'cancelled': return 'Cancelled'
   }
 }
 
@@ -1006,15 +1296,22 @@ function formatJobTime(value: string | undefined): string {
   if (value === undefined) return '—'
   const date = new Date(value)
   if (!Number.isFinite(date.getTime())) return '—'
-  return date.toLocaleString('zh-CN', { hour12: false })
+  return date.toLocaleString(undefined, { hour12: false })
 }
 
 /** Describe process completion without exposing a raw command line. */
-function jobExitLabel(job: MarketJob): string {
-  if (job.exitCode !== null) return `退出码 ${job.exitCode}`
-  if (job.signal !== null) return `信号 ${job.signal}`
-  if (job.status === 'queued') return '尚未启动'
-  if (job.status === 'running') return '运行中'
+function jobExitLabel(job: MarketJob, isZh = true): string {
+  if (isZh) {
+    if (job.exitCode !== null) return `退出码 ${job.exitCode}`
+    if (job.signal !== null) return `信号 ${job.signal}`
+    if (job.status === 'queued') return '尚未启动'
+    if (job.status === 'running') return '运行中'
+    return '—'
+  }
+  if (job.exitCode !== null) return `Exit code ${job.exitCode}`
+  if (job.signal !== null) return `Signal ${job.signal}`
+  if (job.status === 'queued') return 'Not started'
+  if (job.status === 'running') return 'Running'
   return '—'
 }
 

@@ -294,6 +294,34 @@ describe('published package surface', () => {
     expect(installedCodeSign).toContain('"-k", keychainPassword, keychainFile')
   })
 
+  it('isolates a failed browser plugin from the core application shell', () => {
+    const patchResolution = 'patch:@deepseek-ai/dsh-client-web@npm%3A0.1.0-rc.7#./patches/dsh-client-web@0.1.0-rc.7.patch'
+    const frontendPatchResolution = 'patch:@deepseek-ai/dsh-web-frontend@npm%3A0.1.0-rc.7#./patches/dsh-web-frontend@0.1.0-rc.7.patch'
+    const lockfile = readFileSync(new URL('yarn.lock', workspaceRoot), 'utf8')
+    const patch = readFileSync(new URL('patches/dsh-client-web@0.1.0-rc.7.patch', workspaceRoot), 'utf8')
+    const frontendPatch = readFileSync(new URL('patches/dsh-web-frontend@0.1.0-rc.7.patch', workspaceRoot), 'utf8')
+    const workspaceRequire = createRequire(new URL('package.json', packageRoot))
+    const webManifest = workspaceRequire.resolve('@deepseek-ai/dsh-client-web/package.json')
+    const installedWeb = readFileSync(join(dirname(webManifest), 'lib/index.js'), 'utf8')
+    const frontendManifest = workspaceRequire.resolve('@deepseek-ai/dsh-web-frontend/package.json')
+    const frontendAssets = readdirSync(join(dirname(frontendManifest), 'dist', 'assets'))
+      .filter(name => name.endsWith('.js'))
+      .map(name => readFileSync(join(dirname(frontendManifest), 'dist', 'assets', name), 'utf8'))
+      .join('\n')
+
+    expect(workspaceManifest.resolutions).toMatchObject({
+      '@deepseek-ai/dsh-client-web@npm:^0.1.0-rc.7': patchResolution,
+      '@deepseek-ai/dsh-web-frontend@npm:^0.1.0-rc.7': frontendPatchResolution,
+    })
+    expect(lockfile).toContain('@deepseek-ai/dsh-client-web@patch:@deepseek-ai/dsh-client-web@npm%3A0.1.0-rc.7#./patches/dsh-client-web@0.1.0-rc.7.patch')
+    expect(lockfile).toContain('@deepseek-ai/dsh-web-frontend@patch:@deepseek-ai/dsh-web-frontend@npm%3A0.1.0-rc.7#./patches/dsh-web-frontend@0.1.0-rc.7.patch')
+    expect(patch).toContain('disabling failed optional plugin')
+    expect(frontendPatch).toContain('disabling failed optional plugin')
+    expect(installedWeb).toContain('disabling failed optional plugin')
+    expect(frontendAssets).toContain('disabling failed optional plugin')
+    expect(installedWeb).toContain('await loader.remove(entry.id)')
+  })
+
   it('starts restricted Windows shells with a hidden console show state', () => {
     const patchResolution = 'patch:@deepseek-ai/dsh-sandbox-windows-acl@npm%3A0.1.0-rc.7#./patches/dsh-sandbox-windows-acl@0.1.0-rc.7.patch'
     const lockfile = readFileSync(new URL('yarn.lock', workspaceRoot), 'utf8')

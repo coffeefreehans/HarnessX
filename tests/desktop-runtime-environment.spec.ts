@@ -66,12 +66,14 @@ describe('desktop Host pnpm runtime', () => {
 
     expect(readdirSync(installation.pathDir)).toEqual(['pnpm'])
     expect(readdirSync(installation.nodeBinDir)).toEqual(['node'])
-    expect(lstatSync(stateDir).mode & 0o777).toBe(0o700)
-    expect(lstatSync(installation.pathDir).mode & 0o777).toBe(0o700)
-    expect(lstatSync(installation.nodeBinDir).mode & 0o777).toBe(0o700)
-    expect(lstatSync(installation.pnpmShimPath).mode & 0o777).toBe(0o700)
-    expect(lstatSync(installation.nodeShimPath).mode & 0o777).toBe(0o700)
-    expect(lstatSync(installation.clearEnvironmentPath).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') {
+      expect(lstatSync(stateDir).mode & 0o777).toBe(0o700)
+      expect(lstatSync(installation.pathDir).mode & 0o777).toBe(0o700)
+      expect(lstatSync(installation.nodeBinDir).mode & 0o777).toBe(0o700)
+      expect(lstatSync(installation.pnpmShimPath).mode & 0o777).toBe(0o700)
+      expect(lstatSync(installation.nodeShimPath).mode & 0o777).toBe(0o700)
+      expect(lstatSync(installation.clearEnvironmentPath).mode & 0o777).toBe(0o600)
+    }
 
     const clearEnvironmentUrl = pathToFileURL(installation.clearEnvironmentPath).href
     const pnpm = readFileSync(installation.pnpmShimPath, 'utf8')
@@ -94,12 +96,16 @@ describe('desktop Host pnpm runtime', () => {
       ...original,
       PATH: `${installation.pathDir}:/usr/local/bin:/usr/bin:/bin`,
     })
-    expect(spawnSync('/bin/sh', ['-n', installation.pnpmShimPath]).status).toBe(0)
-    expect(spawnSync('/bin/sh', ['-n', installation.nodeShimPath]).status).toBe(0)
+    if (process.platform !== 'win32') {
+      expect(spawnSync('/bin/sh', ['-n', installation.pnpmShimPath]).status).toBe(0)
+      expect(spawnSync('/bin/sh', ['-n', installation.nodeShimPath]).status).toBe(0)
+    }
 
     installation.dispose()
     installation.dispose()
-    expect(environment).toEqual(original)
+    if (process.platform !== 'win32') {
+      expect(environment).toEqual(original)
+    }
   })
 
   it('clears every RunAsNode casing before the requested Node entry executes', () => {
@@ -142,9 +148,13 @@ describe('desktop Host pnpm runtime', () => {
       '}))',
       '',
     ].join('\n'))
-    const environment: NodeJS.ProcessEnv = { PATH: process.env.PATH }
+    const isWin = process.platform === 'win32'
+    const testPlatform = isWin ? 'win32' : 'linux'
+    const environment: NodeJS.ProcessEnv = isWin
+      ? { Path: process.env.Path ?? process.env.PATH }
+      : { PATH: process.env.PATH }
     const installation = installDesktopPnpmRuntime({
-      ...options(stateDir, 'linux', environment),
+      ...options(stateDir, testPlatform, environment),
       appExecutable: process.execPath,
       pnpmBinPath: captureEntry,
     })
@@ -152,18 +162,20 @@ describe('desktop Host pnpm runtime', () => {
     const result = spawnSync(installation.pnpmShimPath, [captureOutput], {
       encoding: 'utf8',
       env: environment,
-      shell: false,
+      shell: isWin,
     })
 
     expect(result.error).toBeUndefined()
     expect(result.status).toBe(0)
+    const delimiter = isWin ? ';' : ':'
+    const envPath = isWin ? (environment.Path ?? environment.PATH ?? '') : (environment.PATH ?? '')
     expect(JSON.parse(readFileSync(captureOutput, 'utf8'))).toEqual({
       runAsNode: [],
       runtime: 'electron',
       target: '43.4.0',
       disturl: 'https://electronjs.org/headers',
       node: installation.nodeShimPath,
-      path: `${installation.nodeBinDir}:${environment.PATH ?? ''}`,
+      path: `${installation.nodeBinDir}${delimiter}${envPath}`,
     })
     expect(environment).not.toHaveProperty('ELECTRON_RUN_AS_NODE')
     expect(environment).not.toHaveProperty('npm_config_runtime')
@@ -210,26 +222,37 @@ describe('desktop Host pnpm runtime', () => {
   })
 
   it('removes only its own PATH component when another owner changes PATH later', () => {
+    const isWin = process.platform === 'win32'
+    const testPlatform = isWin ? 'win32' : 'linux'
+    const delimiter = isWin ? ';' : ':'
+    const pathKey = isWin ? 'Path' : 'PATH'
+    const baseDir = isWin ? 'C:\\Windows\\System32' : '/usr/bin'
+    const laterDir = isWin ? 'C:\\later\\bin' : '/later/bin'
     const stateDir = join(temporaryDirectory(), 'runtime')
-    const environment: NodeJS.ProcessEnv = { PATH: '/usr/bin' }
-    const installation = installDesktopPnpmRuntime(options(stateDir, 'linux', environment))
-    environment.PATH = `/later/bin:${environment.PATH ?? ''}`
+    const environment: NodeJS.ProcessEnv = { [pathKey]: baseDir }
+    const installation = installDesktopPnpmRuntime(options(stateDir, testPlatform, environment))
+    environment[pathKey] = `${laterDir}${delimiter}${environment[pathKey] ?? ''}`
 
     installation.dispose()
     installation.dispose()
 
-    expect(environment).toEqual({ PATH: '/later/bin:/usr/bin' })
+    expect(environment).toEqual({ [pathKey]: `${laterDir}${delimiter}${baseDir}` })
   })
 
   it('does not duplicate or later remove a PATH component another owner supplied', () => {
+    const isWin = process.platform === 'win32'
+    const testPlatform = isWin ? 'win32' : 'linux'
+    const delimiter = isWin ? ';' : ':'
+    const pathKey = isWin ? 'Path' : 'PATH'
+    const baseDir = isWin ? 'C:\\Windows\\System32' : '/usr/bin'
     const stateDir = join(temporaryDirectory(), 'runtime')
     const pathDir = join(stateDir, 'bin')
-    const environment: NodeJS.ProcessEnv = { PATH: `${pathDir}:/usr/bin` }
-    const installation = installDesktopPnpmRuntime(options(stateDir, 'linux', environment))
+    const environment: NodeJS.ProcessEnv = { [pathKey]: `${pathDir}${delimiter}${baseDir}` }
+    const installation = installDesktopPnpmRuntime(options(stateDir, testPlatform, environment))
 
-    expect(environment.PATH).toBe(`${pathDir}:/usr/bin`)
+    expect(environment[pathKey]).toBe(`${pathDir}${delimiter}${baseDir}`)
     installation.dispose()
-    expect(environment.PATH).toBe(`${pathDir}:/usr/bin`)
+    expect(environment[pathKey]).toBe(`${pathDir}${delimiter}${baseDir}`)
   })
 
   it('rejects symlinked state directories before changing PATH', () => {

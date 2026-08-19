@@ -1,8 +1,9 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  assertPluginUninstalled,
   assertDshPluginDirectory,
   ensureProfilePnpmWorkspace,
   parseGitHubRepository,
@@ -104,6 +105,24 @@ describe('profile pnpm workspace', () => {
       expect(workspace).toContain('autoInstallPeers: false')
       expect(workspace).toContain('strictDepBuilds: true')
       expect(workspace).not.toContain('allowBuilds:')
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('plugin uninstall verification', () => {
+  it('rejects dependency or bundle residue after a successful package-manager exit', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'harnessx-uninstall-'))
+    try {
+      await writeFile(join(directory, 'package.json'), JSON.stringify({
+        name: 'test-profile',
+        private: true,
+        dependencies: { 'broken-plugin': '1.0.0' },
+        dsh: { profile: { bundles: ['broken-plugin'] } },
+      }))
+
+      expect(() => assertPluginUninstalled('broken-plugin', directory)).toThrow('still installed')
     } finally {
       await rm(directory, { recursive: true, force: true })
     }

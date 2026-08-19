@@ -43,14 +43,25 @@ export function newestMarketJobs<T>(jobs: readonly T[]): T[] {
 export function marketJobHeadline(
   action: ClientMarketJobAction,
   status: ClientMarketJobStatus,
+  isZh: boolean = true,
 ): string {
-  const actionLabel = action === 'install' ? '安装' : '卸载'
+  if (isZh) {
+    const actionLabel = action === 'install' ? '安装' : '卸载'
+    switch (status) {
+      case 'queued': return `等待${actionLabel}`
+      case 'running': return `正在${actionLabel}`
+      case 'success': return `${actionLabel}成功`
+      case 'failed': return `${actionLabel}失败`
+      case 'cancelled': return `${actionLabel}已取消`
+    }
+  }
+  const actionLabel = action === 'install' ? 'Install' : 'Uninstall'
   switch (status) {
-    case 'queued': return `等待${actionLabel}`
-    case 'running': return `正在${actionLabel}`
-    case 'success': return `${actionLabel}成功`
-    case 'failed': return `${actionLabel}失败`
-    case 'cancelled': return `${actionLabel}已取消`
+    case 'queued': return `Queued for ${actionLabel}`
+    case 'running': return `${actionLabel}ing`
+    case 'success': return `${actionLabel} Succeeded`
+    case 'failed': return `${actionLabel} Failed`
+    case 'cancelled': return `${actionLabel} Cancelled`
   }
 }
 
@@ -59,15 +70,16 @@ export function marketJobDuration(
   startedAt: string | undefined,
   completedAt: string | undefined,
   now: number = Date.now(),
+  isZh: boolean = true,
 ): string {
   if (startedAt === undefined) return '—'
   const startTime = Date.parse(startedAt)
   const endTime = completedAt === undefined ? now : Date.parse(completedAt)
   if (!Number.isFinite(startTime) || !Number.isFinite(endTime)) return '—'
   const totalSeconds = Math.max(0, Math.floor((endTime - startTime) / 1000))
-  if (totalSeconds < 60) return `${totalSeconds} 秒`
+  if (totalSeconds < 60) return isZh ? `${totalSeconds} 秒` : `${totalSeconds}s`
   const minutes = Math.floor(totalSeconds / 60)
-  return `${minutes} 分 ${totalSeconds % 60} 秒`
+  return isZh ? `${minutes} 分 ${totalSeconds % 60} 秒` : `${minutes}m ${totalSeconds % 60}s`
 }
 
 /** Return the newest task associated with one catalog plugin. */
@@ -84,14 +96,15 @@ export function pluginInstallAction(
   installed: boolean,
   status: ClientMarketJobStatus | undefined,
   preparing: boolean,
+  isZh: boolean = true,
 ): PluginInstallAction {
-  if (installed) return { label: '已安装', disabled: true }
-  if (preparing) return { label: '准备中…', disabled: true }
-  if (status === 'queued') return { label: '排队中…', disabled: true }
-  if (status === 'running') return { label: '安装中…', disabled: true }
-  if (status === 'success') return { label: '确认中…', disabled: true }
-  if (status === 'failed') return { label: '重试', disabled: false }
-  return { label: '安装', disabled: false }
+  if (installed) return { label: isZh ? '已安装' : 'Installed', disabled: true }
+  if (preparing) return { label: isZh ? '准备中…' : 'Preparing…', disabled: true }
+  if (status === 'queued') return { label: isZh ? '排队中…' : 'Queued…', disabled: true }
+  if (status === 'running') return { label: isZh ? '安装中…' : 'Installing…', disabled: true }
+  if (status === 'success') return { label: isZh ? '确认中…' : 'Confirming…', disabled: true }
+  if (status === 'failed') return { label: isZh ? '重试' : 'Retry', disabled: false }
+  return { label: isZh ? '安装' : 'Install', disabled: false }
 }
 
 /** Create a request gate whose latest started request owns state updates. */

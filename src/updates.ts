@@ -341,14 +341,19 @@ export function apply(ctx: Context, config: Config): void {
     const disposeCheck = registerApi(UPDATE_ROUTE + '/check', 'POST', runSettingsCheck)
     const disposeDownload = registerApi(UPDATE_ROUTE + '/download', 'POST', runSettingsDownload)
 
+    const isZh = (process.env.LANG ?? process.env.LC_ALL ?? '').toLowerCase().startsWith('zh')
+      || Intl.DateTimeFormat().resolvedOptions().locale.toLowerCase().startsWith('zh')
+
     const registration = ctx.desktopRuntime.registerTrayItem({
       group: 'status',
       order: 10,
       label: () => downloadingVersion === undefined
         ? availableResult() === undefined
-          ? checking ? 'Checking for Updates…' : 'Check for Updates…'
-          : 'DeepSeek HarnessX ' + availableResult()!.latestVersion + ' Available'
-        : 'Downloading DeepSeek HarnessX ' + downloadingVersion + '…',
+          ? checking
+            ? (isZh ? '正在检查更新…' : 'Checking for Updates…')
+            : (isZh ? '检查更新…' : 'Check for Updates…')
+          : (isZh ? `发现新版本 DeepSeek HarnessX ${availableResult()!.latestVersion}` : `DeepSeek HarnessX ${availableResult()!.latestVersion} Available`)
+        : (isZh ? `正在下载 DeepSeek HarnessX ${downloadingVersion}…` : `Downloading DeepSeek HarnessX ${downloadingVersion}…`),
       invoke: runManualCheck,
     })
     refreshTray = registration.refresh

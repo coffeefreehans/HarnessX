@@ -13,11 +13,12 @@ export { applyAdvancedShell } from './advanced-shell.ts'
 export { parseDesktopClientEnvironment } from './environment.ts'
 export type { DesktopClientEnvironment, DesktopClientMode, DesktopClientPlatform } from './environment.ts'
 
-/** Services required by advanced presentation. */
+/** Services required by advanced presentation and market/updates panels. */
 export const inject = [
   'slots',
   'sessions',
   'theme',
+  'locale',
 ]
 
 /** Register desktop-owned client surfaces for the current BrowserWindow mode. @param ctx - browser Cordis context. */

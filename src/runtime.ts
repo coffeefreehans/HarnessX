@@ -181,6 +181,9 @@ export interface DesktopRuntime {
   /** Apply a built-in theme preference to Electron's native appearance. */
   setThemeSource(source: DesktopThemeSource): void
 
+  /** Open a native file/folder picker dialog. */
+  showOpenDialog(options: { title?: string; properties?: string[] }): Promise<string | null>
+
   /** Request orderly Cordis teardown followed by an Electron relaunch. */
   requestRestart(): Promise<void>
 

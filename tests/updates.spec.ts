@@ -185,7 +185,9 @@ describe('desktop update Host plugin', () => {
       publishedAt: RELEASE.publishedAt,
       releaseUrl: RELEASE.releaseUrl,
     })
-    expect(harness.tray.label()).toBe('DeepSeek HarnessX 0.2 Available')
+    const isZh = (process.env.LANG ?? process.env.LC_ALL ?? '').toLowerCase().startsWith('zh')
+      || Intl.DateTimeFormat().resolvedOptions().locale.toLowerCase().startsWith('zh')
+    expect(harness.tray.label()).toBe(isZh ? '发现新版本 DeepSeek HarnessX 0.2' : 'DeepSeek HarnessX 0.2 Available')
     await harness.dispose()
   })
 

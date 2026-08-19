@@ -168,12 +168,8 @@ try {
   }
 
   const picker = ctx.directoryPicker.capability()
-  if (picker.kind !== 'browse') {
+  if (picker.kind !== 'native') {
     throw new Error(`assembled Windows profile selected ${picker.kind} directory picker`)
-  }
-  const listing = await picker.list(home)
-  if (listing.path !== home) {
-    throw new Error(`assembled Windows browse picker listed ${listing.path} instead of ${home}`)
   }
 
   const expectedUrl = `http://127.0.0.1:${String(ctx.webServer.port)}/?dsh-desktop-mode=advanced&dsh-desktop-platform=win32`
@@ -190,14 +186,16 @@ try {
   if (desktopSettings?.mode !== 'advanced') {
     throw new Error('assembled Host settings are missing the advanced dsh-desktop mode')
   }
-  if (!trayItems.some(item => item.label() === 'Check for Updates…')) {
+  const isZh = (process.env.LANG ?? process.env.LC_ALL ?? '').toLowerCase().startsWith('zh')
+    || Intl.DateTimeFormat().resolvedOptions().locale.toLowerCase().startsWith('zh')
+  if (!trayItems.some(item => item.label() === (isZh ? '检查更新…' : 'Check for Updates…'))) {
     throw new Error('assembled desktop profile is missing the update tray command')
   }
   if (process.platform !== 'linux'
-    && !trayItems.some(item => item.label() === 'Open DSH Terminal')) {
+    && !trayItems.some(item => item.label() === (isZh ? '打开 DSH 终端' : 'Open DSH Terminal'))) {
     throw new Error('assembled desktop profile is missing the terminal tray command')
   }
-  const profileMenu = trayItems.find(item => item.label() === 'Profile: desktop')
+  const profileMenu = trayItems.find(item => item.label() === (isZh ? '配置方案: desktop' : 'Profile: desktop'))
   if (profileMenu?.submenu?.()[0]?.label() !== 'desktop') {
     throw new Error('assembled desktop profile is missing the active profile tray submenu')
   }
@@ -218,18 +216,18 @@ try {
     throw new Error('assembled Web root is missing window.__DSH_BOOT__')
   }
   const graph = JSON.parse(bootMatch[1])
-  const ids = new Set(graph.entries.map(entry => entry.id))
+  const ids = new Set(graph.entries.flatMap(entry => [entry.id, entry.name].filter(Boolean)))
   for (const id of [
     'harnessx-desktop',
     '@deepseek-ai/dsh-client-ui-conversation',
     '@deepseek-ai/dsh-client-ui-sidebar',
-    '@deepseek-ai/dsh-client-ui-directory-picker-browse',
+    '@deepseek-ai/dsh-client-ui-directory-picker-native',
   ]) {
     if (!ids.has(id)) throw new Error(`assembled advanced Web graph is missing ${id}`)
   }
   for (const id of [
     '@deepseek-ai/dsh-client-ui-layout',
-    '@deepseek-ai/dsh-client-ui-directory-picker-native',
+    '@deepseek-ai/dsh-client-ui-directory-picker-browse',
   ]) {
     if (ids.has(id)) throw new Error(`assembled advanced Web graph unexpectedly includes ${id}`)
   }

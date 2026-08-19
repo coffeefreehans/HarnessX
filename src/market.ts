@@ -452,7 +452,10 @@ export function apply(ctx: Context): void {
             start: () => ctx.desktopPnpm.run(['remove', pluginName]),
             captureBefore: () => readProfileManifest(BIN_NAME, profileDir),
             onSettled: async (outcome, before) => {
-              if (outcome.exitCode === 0) reconcileProfileBundles(before, profileDir)
+              if (outcome.exitCode === 0) {
+                reconcileProfileBundles(before, profileDir)
+                assertPluginUninstalled(pluginName, profileDir)
+              }
             },
           })
           sendJson(response, 202, { jobId: job.id, job: jobSnapshot(job) })
@@ -745,6 +748,22 @@ function reconcileProfileBundles(before: ReturnType<typeof readProfileManifest>,
       },
     },
   })
+}
+
+/**
+ * Reject a nominally successful uninstall when pnpm or bundle reconciliation left residue.
+ * @param pluginName - exact installed dependency name requested for removal.
+ * @param profileDir - active profile directory containing package and bundle state.
+ */
+export function assertPluginUninstalled(pluginName: string, profileDir: string): void {
+  const manifest = readProfileManifest(BIN_NAME, profileDir)
+  if (Object.hasOwn(manifest.dependencies ?? {}, pluginName)) {
+    throw new Error(`uninstall incomplete: dependency ${pluginName} is still installed`)
+  }
+  const configured = (manifest.dsh?.profile as { bundles?: unknown } | undefined)?.bundles
+  if (Array.isArray(configured) && configured.includes(pluginName)) {
+    throw new Error(`uninstall incomplete: bundle ${pluginName} is still enabled`)
+  }
 }
 
 /** Read and validate the persisted source list while merging newly shipped defaults. */

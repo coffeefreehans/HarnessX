@@ -17,20 +17,23 @@ function selectable(profile: DesktopProfileSummary): boolean {
 }
 
 /** Render unavailable profiles without exposing manifest diagnostics in native menus. */
-function profileLabel(profile: DesktopProfileSummary): string {
-  return selectable(profile) ? profile.name : `${profile.name} (Unavailable for Desktop)`
+function profileLabel(profile: DesktopProfileSummary, isZh: boolean): string {
+  if (selectable(profile)) return profile.name
+  return isZh ? `${profile.name} (不可用于桌面版)` : `${profile.name} (Unavailable for Desktop)`
 }
 
 /** Register the current profile and restart-safe switch commands in the native tray. */
 export function apply(ctx: Context): void {
   ctx.effect(() => {
+    const isZh = (process.env.LANG ?? process.env.LC_ALL ?? '').toLowerCase().startsWith('zh')
+      || Intl.DateTimeFormat().resolvedOptions().locale.toLowerCase().startsWith('zh')
     const registration = ctx.desktopRuntime.registerTrayItem({
       group: 'profiles',
       order: 10,
-      label: () => `Profile: ${ctx.desktopProfiles.current.name}`,
+      label: () => isZh ? `配置方案: ${ctx.desktopProfiles.current.name}` : `Profile: ${ctx.desktopProfiles.current.name}`,
       invoke: () => {},
       submenu: () => ctx.desktopProfiles.list().map(profile => ({
-        label: () => profileLabel(profile),
+        label: () => profileLabel(profile, isZh),
         type: 'radio',
         checked: () => profile.name === ctx.desktopProfiles.current.name,
         enabled: () => selectable(profile),

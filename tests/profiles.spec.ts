@@ -37,10 +37,12 @@ describe('desktop profiles Host plugin', () => {
 
     apply(ctx)
 
+    const isZh = (process.env.LANG ?? process.env.LC_ALL ?? '').toLowerCase().startsWith('zh')
+      || Intl.DateTimeFormat().resolvedOptions().locale.toLowerCase().startsWith('zh')
     expect(name).toBe('desktop-profiles')
     expect(inject).toEqual(['desktopRuntime', 'desktopProfiles'])
     expect(trayItem).toMatchObject({ group: 'profiles', order: 10 })
-    expect(trayItem?.label()).toBe('Profile: desktop')
+    expect(trayItem?.label()).toBe(isZh ? '配置方案: desktop' : 'Profile: desktop')
     const commands = trayItem?.submenu?.() ?? []
     expect(commands.map(command => ({
       label: command.label(),
@@ -49,7 +51,7 @@ describe('desktop profiles Host plugin', () => {
     }))).toEqual([
       { label: 'desktop', checked: true, enabled: true },
       { label: '工作 profile', checked: false, enabled: true },
-      { label: 'headless (Unavailable for Desktop)', checked: false, enabled: false },
+      { label: isZh ? 'headless (不可用于桌面版)' : 'headless (Unavailable for Desktop)', checked: false, enabled: false },
     ])
 
     await commands[1]?.invoke()

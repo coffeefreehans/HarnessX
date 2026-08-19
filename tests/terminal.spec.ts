@@ -27,10 +27,12 @@ describe('desktop terminal Host plugin', () => {
 
     apply(ctx)
 
+    const isZh = (process.env.LANG ?? process.env.LC_ALL ?? '').toLowerCase().startsWith('zh')
+      || Intl.DateTimeFormat().resolvedOptions().locale.toLowerCase().startsWith('zh')
     expect(name).toBe('desktop-terminal')
     expect(inject).toEqual(['desktopRuntime'])
     expect(trayItem).toMatchObject({ group: 'tools', order: 10 })
-    expect(trayItem?.label()).toBe('Open DSH Terminal')
+    expect(trayItem?.label()).toBe(isZh ? '打开 DSH 终端' : 'Open DSH Terminal')
     trayItem?.invoke()
     expect(openTerminal).toHaveBeenCalledOnce()
 

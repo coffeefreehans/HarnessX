@@ -1,5 +1,3 @@
-/** Build an unsigned unpacked application for the current host platform. */
-
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { dirname } from 'node:path'
@@ -10,7 +8,12 @@ const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const builderCli = require.resolve('electron-builder/cli.js')
 const result = spawnSync(process.execPath, [
   builderCli,
-  '--dir',
+  '--win',
+  'zip',
+  '--x64',
+  '--publish',
+  'never',
+  '--config.win.signExecutable=false',
   '--config.npmRebuild=false',
 ], {
   cwd: packageRoot,
@@ -23,5 +26,5 @@ const result = spawnSync(process.execPath, [
 
 if (result.error !== undefined) throw result.error
 if (result.status !== 0) {
-  throw new Error(`electron-builder --dir exited with ${String(result.status)}`)
+  throw new Error(`electron-builder zip exited with ${String(result.status)}`)
 }

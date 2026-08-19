@@ -49,6 +49,12 @@ export function nextDesktopShellMode(mode: DesktopShellSpec['mode']): DesktopShe
 
 /** Return the tray command describing the mode that will be activated. */
 export function modeToggleLabel(mode: DesktopShellSpec['mode']): string {
+  const isZh = (app.getLocale?.() ?? 'zh').toLowerCase().startsWith('zh')
+  if (isZh) {
+    return mode === 'compatibility'
+      ? '切换至高级模式'
+      : '切换至兼容模式'
+  }
   return mode === 'compatibility'
     ? 'Switch to Advanced Mode'
     : 'Switch to Compatibility Mode'
@@ -232,6 +238,20 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
     if (this.scheduled?.mode === 'advanced' && this.window !== undefined) {
       nativeTheme.themeSource = source
     }
+  }
+
+  /** @inheritdoc */
+  async showOpenDialog(options: { title?: string; properties?: string[] }): Promise<string | null> {
+    const window = this.window
+    const properties = (options.properties ?? ['openDirectory']) as Array<'openFile' | 'openDirectory' | 'multiSelections' | 'showHiddenFiles' | 'createDirectory' | 'promptToCreate' | 'noResolveAliases' | 'treatPackageAsDirectory' | 'dontAddToRecent'>
+    const dialogOptions: Electron.OpenDialogOptions = options.title !== undefined
+      ? { title: options.title, properties }
+      : { properties }
+    const result = window !== undefined && !window.isDestroyed()
+      ? await dialog.showOpenDialog(window, dialogOptions)
+      : await dialog.showOpenDialog(dialogOptions)
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0] ?? null
   }
 
   /** @inheritdoc */
@@ -444,12 +464,13 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
     const spec = this.scheduled
     if (tray === undefined || spec === undefined) return
 
+    const isZh = (app.getLocale?.() ?? 'zh').toLowerCase().startsWith('zh')
     const show = (): void => { this.show() }
     const tools = this.contributedTrayItems('tools')
     const profiles = this.contributedTrayItems('profiles')
     const status = this.contributedTrayItems('status')
     const template: Electron.MenuItemConstructorOptions[] = [
-      { label: `Open ${spec.productName}`, click: show },
+      { label: isZh ? `打开 ${spec.productName}` : `Open ${spec.productName}`, click: show },
     ]
     if (tools.length > 0) template.push({ type: 'separator' }, ...tools)
     if (profiles.length > 0) template.push({ type: 'separator' }, ...profiles)
@@ -466,9 +487,56 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
         },
       },
       { type: 'separator' },
-      { label: 'Quit', click: () => { spec.requestQuit(0) } },
+      { label: isZh ? '退出' : 'Quit', click: () => { spec.requestQuit(0) } },
     )
     tray.setContextMenu(Menu.buildFromTemplate(template))
+  }
+
+  private setupContextMenu(window: BrowserWindow): void {
+    const isZh = (app.getLocale?.() ?? 'zh').toLowerCase().startsWith('zh')
+    const labels = isZh ? {
+      undo: '撤销',
+      redo: '重做',
+      cut: '剪切',
+      copy: '复制',
+      paste: '粘贴',
+      selectAll: '全选',
+    } : {
+      undo: 'Undo',
+      redo: 'Redo',
+      cut: 'Cut',
+      copy: 'Copy',
+      paste: 'Paste',
+      selectAll: 'Select All',
+    }
+
+    window.webContents.on('context-menu', (_event, params) => {
+      const template: Electron.MenuItemConstructorOptions[] = []
+
+      if (params.isEditable) {
+        template.push(
+          { role: 'undo', label: labels.undo },
+          { role: 'redo', label: labels.redo },
+          { type: 'separator' },
+          { role: 'cut', label: labels.cut },
+          { role: 'copy', label: labels.copy },
+          { role: 'paste', label: labels.paste },
+          { type: 'separator' },
+          { role: 'selectAll', label: labels.selectAll },
+        )
+      } else if (params.selectionText.length > 0) {
+        template.push(
+          { role: 'copy', label: labels.copy },
+          { type: 'separator' },
+          { role: 'selectAll', label: labels.selectAll },
+        )
+      }
+
+      if (template.length > 0) {
+        const menu = Menu.buildFromTemplate(template)
+        menu.popup({ window })
+      }
+    })
   }
 
   private async mount(
@@ -522,6 +590,7 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
     app.on('activate', show)
     window.on('close', close)
     window.on('page-title-updated', preserveBlankTitle)
+    this.setupContextMenu(window)
     window.webContents.on('will-frame-navigate', navigate)
     window.webContents.on('will-redirect', navigate)
     window.webContents.setWindowOpenHandler(({ url }) => {

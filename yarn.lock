@@ -1628,7 +1628,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@deepseek-ai/dsh-client-web@npm:^0.1.0-rc.7":
+"@deepseek-ai/dsh-client-web@npm:0.1.0-rc.7":
   version: 0.1.0-rc.7
   resolution: "@deepseek-ai/dsh-client-web@npm:0.1.0-rc.7"
   dependencies:
@@ -1646,6 +1646,27 @@ __metadata:
     "@deepseek-ai/cordis-plugin-loader": ^1.0.2
     "@deepseek-ai/dsh-invariants": ^0.1.0-rc.7
   checksum: 10c0/ea34e41222cf7b573fcf5832c2fd1d7c05b0aea361c3e2e8dd9a9a1e3af8941a72bb7c02fb7618f386b2d1624efe1fd0eac4f84d038829e89ed0ae51c8953a1b
+  languageName: node
+  linkType: hard
+
+"@deepseek-ai/dsh-client-web@patch:@deepseek-ai/dsh-client-web@npm%3A0.1.0-rc.7#./patches/dsh-client-web@0.1.0-rc.7.patch::locator=harnessx-desktop%40workspace%3A.":
+  version: 0.1.0-rc.7
+  resolution: "@deepseek-ai/dsh-client-web@patch:@deepseek-ai/dsh-client-web@npm%3A0.1.0-rc.7#./patches/dsh-client-web@0.1.0-rc.7.patch::version=0.1.0-rc.7&hash=6c1a7f&locator=harnessx-desktop%40workspace%3A."
+  dependencies:
+    "@deepseek-ai/dsh-client-modules": "npm:^0.1.0-rc.7"
+    "@deepseek-ai/dsh-client-schema-form": "npm:^0.1.0-rc.7"
+    "@deepseek-ai/dsh-client-ui-attachment": "npm:^0.1.0-rc.7"
+    "@deepseek-ai/dsh-client-ui-primitives": "npm:^0.1.0-rc.7"
+    "@deepseek-ai/dsh-client-ui-slots": "npm:^0.1.0-rc.7"
+    "@deepseek-ai/dsh-client-ui-theme": "npm:^0.1.0-rc.7"
+    "@deepseek-ai/dsh-client-web-react": "npm:^0.1.0-rc.7"
+    react: "npm:^18.2.0"
+    react-dom: "npm:^18.2.0"
+  peerDependencies:
+    "@deepseek-ai/cordis": ^4.0.1
+    "@deepseek-ai/cordis-plugin-loader": ^1.0.2
+    "@deepseek-ai/dsh-invariants": ^0.1.0-rc.7
+  checksum: 10c0/13e208e76f4fae4502c2d0c617da1c076e455c8f773e278161b71a82a41c1acb1705630ea1ed3abeb8b1f1ca871c6c3e6aa87f578e8118fa2bc9e66ef01e6136
   languageName: node
   linkType: hard
 
@@ -3626,7 +3647,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@deepseek-ai/dsh-web-frontend@npm:^0.1.0-rc.7":
+"@deepseek-ai/dsh-web-frontend@npm:0.1.0-rc.7":
   version: 0.1.0-rc.7
   resolution: "@deepseek-ai/dsh-web-frontend@npm:0.1.0-rc.7"
   dependencies:
@@ -3634,6 +3655,17 @@ __metadata:
     react: "npm:^18.2.0"
     react-dom: "npm:^18.2.0"
   checksum: 10c0/489fe037318cc013b00667a021cada332ff8ae3ea17d3546f8a014114340304c5066b2fd10571db77a8b9ec0203b582b85b0ac9a82cf8847d2b547995b26e7e7
+  languageName: node
+  linkType: hard
+
+"@deepseek-ai/dsh-web-frontend@patch:@deepseek-ai/dsh-web-frontend@npm%3A0.1.0-rc.7#./patches/dsh-web-frontend@0.1.0-rc.7.patch::locator=harnessx-desktop%40workspace%3A.":
+  version: 0.1.0-rc.7
+  resolution: "@deepseek-ai/dsh-web-frontend@patch:@deepseek-ai/dsh-web-frontend@npm%3A0.1.0-rc.7#./patches/dsh-web-frontend@0.1.0-rc.7.patch::version=0.1.0-rc.7&hash=776461&locator=harnessx-desktop%40workspace%3A."
+  dependencies:
+    "@deepseek-ai/dsh-client-web": "npm:^0.1.0-rc.7"
+    react: "npm:^18.2.0"
+    react-dom: "npm:^18.2.0"
+  checksum: 10c0/1f56cc42bd10145767fcbb45f5aebc3db60a2dc7fbefdd9df7740f431db771341d237c3ce8ecb06753c1fa67e2b4d4dffa6bd9d4dd2467d4a1e43ee39f603a6d
   languageName: node
   linkType: hard
 

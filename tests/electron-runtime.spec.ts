@@ -149,6 +149,7 @@ const electron = vi.hoisted(() => {
       dock: { setIcon: vi.fn() },
       getPath: vi.fn(() => '/tmp/dsh-desktop-user-data'),
       getVersion: vi.fn(() => '43.4.0'),
+      getLocale: vi.fn(() => 'en'),
       isPackaged: false,
       on: vi.fn(),
       off: vi.fn(),
@@ -228,6 +229,8 @@ describe('Electron compatibility runtime', () => {
     electron.menuTemplates.length = 0
     electron.notifications.length = 0
     childProcess.reset()
+    updater.download.mockReset()
+    terminal.open.mockReset()
     vi.clearAllMocks()
     electron.loadURL.mockReset()
     electron.loadURL.mockResolvedValue(undefined)
@@ -499,7 +502,7 @@ describe('Electron compatibility runtime', () => {
         pnpmBinPath: expect.stringMatching(/[\\/]node_modules[\\/]pnpm[\\/]bin[\\/]pnpm\.mjs$/u),
         electronVersion: '43.4.0',
         profileName: 'desktop',
-        productVersion: '0.1',
+        productVersion: '0.1.1',
         profileDir: '/tmp/dsh-home/profiles/desktop',
         homeDir: '/tmp/dsh-home',
         stateDir: expect.stringMatching(/^[\\/]tmp[\\/]dsh-desktop-user-data[\\/]cli[\\/][a-f0-9]{64}$/u),
@@ -566,7 +569,7 @@ describe('Electron compatibility runtime', () => {
     expect(runtime.updates).toMatchObject({
       isPackaged: false,
       canDownload: false,
-      currentVersion: '0.1',
+      currentVersion: '0.1.1',
       statePath: expect.stringMatching(/[\\/]tmp[\\/]dsh-desktop-user-data[\\/]updates[\\/]state\.json$/u),
     })
     electron.app.isPackaged = true

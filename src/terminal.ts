@@ -18,10 +18,12 @@ export function apply(ctx: Context): void {
     throw new Error('harnessx-desktop: the packaged terminal is supported on macOS and Windows')
   }
   ctx.effect(() => {
+    const isZh = (process.env.LANG ?? process.env.LC_ALL ?? '').toLowerCase().startsWith('zh')
+      || Intl.DateTimeFormat().resolvedOptions().locale.toLowerCase().startsWith('zh')
     const registration = ctx.desktopRuntime.registerTrayItem({
       group: 'tools',
       order: 10,
-      label: () => 'Open DSH Terminal',
+      label: () => isZh ? '打开 DSH 终端' : 'Open DSH Terminal',
       invoke: () => { ctx.desktopRuntime.openTerminal() },
     })
     return () => { registration.dispose() }

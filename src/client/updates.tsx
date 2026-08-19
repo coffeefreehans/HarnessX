@@ -2,8 +2,100 @@
 
 import { useEffect, useState, type ReactNode } from 'react'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
-import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+import type {} from '@deepseek-ai/dsh-client-locale/client'
+
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface LocaleNamespaceMap {
+    'settings.updates': UpdatesKey
+  }
+}
+
+export type UpdatesKey =
+  | 'nav'
+  | 'title'
+  | 'loading'
+  | 'openRelease'
+  | 'checkUpdates'
+  | 'checking'
+  | 'downloadAndInstall'
+  | 'processing'
+  | 'currentVersion'
+  | 'latestVersion'
+  | 'notChecked'
+  | 'arch'
+  | 'publishedAt'
+  | 'releaseTitle'
+  | 'lastChecked'
+  | 'releaseNotes'
+  | 'noReleaseNotes'
+  | 'statusNotLoaded'
+  | 'statusProcessing'
+  | 'statusChecking'
+  | 'statusAvailable'
+  | 'statusUpToDate'
+  | 'statusError'
+  | 'statusIdle'
+  | 'requestFailed'
+
+const zh: Record<UpdatesKey, string> = {
+  nav: '应用更新',
+  title: 'DeepSeek HarnessX 应用更新',
+  loading: '正在读取更新状态…',
+  openRelease: '打开 Release',
+  checkUpdates: '检查更新',
+  checking: '检查中…',
+  downloadAndInstall: '下载并安装',
+  processing: '处理中…',
+  currentVersion: '当前版本',
+  latestVersion: '最新版本',
+  notChecked: '尚未检查',
+  arch: 'CPU 架构',
+  publishedAt: '发布时间',
+  releaseTitle: '版本标题',
+  lastChecked: '上次检查',
+  releaseNotes: '版本说明',
+  noReleaseNotes: '暂无版本说明。',
+  statusNotLoaded: '尚未读取更新状态。',
+  statusProcessing: '正在处理 DeepSeek HarnessX {version}。',
+  statusChecking: '正在检查 GitHub Releases。',
+  statusAvailable: '发现新版本，可以下载并安装。',
+  statusUpToDate: '当前已经是最新版本。',
+  statusError: '上次检查失败。',
+  statusIdle: '点击“检查更新”获取最新版本。',
+  requestFailed: '更新请求失败。',
+}
+
+const en: Record<UpdatesKey, string> = {
+  nav: 'Updates',
+  title: 'DeepSeek HarnessX Updates',
+  loading: 'Loading update status…',
+  openRelease: 'Open Release',
+  checkUpdates: 'Check for Updates',
+  checking: 'Checking…',
+  downloadAndInstall: 'Download and Install',
+  processing: 'Processing…',
+  currentVersion: 'Current Version',
+  latestVersion: 'Latest Version',
+  notChecked: 'Not checked yet',
+  arch: 'Architecture',
+  publishedAt: 'Published At',
+  releaseTitle: 'Release Title',
+  lastChecked: 'Last Checked',
+  releaseNotes: 'Release Notes',
+  noReleaseNotes: 'No release notes available.',
+  statusNotLoaded: 'Update status not loaded.',
+  statusProcessing: 'Processing DeepSeek HarnessX {version}.',
+  statusChecking: 'Checking GitHub Releases.',
+  statusAvailable: 'A new version is available for download and installation.',
+  statusUpToDate: 'You are on the latest version.',
+  statusError: 'Last check failed.',
+  statusIdle: 'Click "Check for Updates" to fetch the latest version.',
+  requestFailed: 'Update request failed.',
+}
+
+const NS = 'settings.updates'
 
 /** Update state returned by the desktop Host API. */
 interface UpdateSnapshot {
@@ -64,16 +156,19 @@ const UPDATE_STYLES = `
 
 /** Register the HarnessX update page in the upstream settings panel. */
 export function applyUpdates(ctx: ClientContext): void {
+  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'updates: dictionaries')
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'application-updates',
     order: 100,
-    label: '应用更新',
+    label: () => ctx.locale.bind(NS)('nav'),
+    locale: NS,
   }, UpdateSettingsSection))
 }
 
 /** Settings-panel page for GitHub Release update discovery and installation. */
-function UpdateSettingsSection(_props: PropsRuntime<'settings.section'>): ReactNode {
+function UpdateSettingsSection(props: PropsRuntime<'settings.section'> & PropsLocale<'settings.updates'>): ReactNode {
+  const { t } = props
   const [snapshot, setSnapshot] = useState<UpdateSnapshot>()
   const [loading, setLoading] = useState(true)
   const [action, setAction] = useState<'check' | 'download'>()
@@ -110,7 +205,7 @@ function UpdateSettingsSection(_props: PropsRuntime<'settings.section'>): ReactN
   }
 
   const currentVersion = snapshot?.currentVersion ?? '—'
-  const latestVersion = snapshot?.latestVersion ?? '尚未检查'
+  const latestVersion = snapshot?.latestVersion ?? t('notChecked')
   const busy = action !== undefined || snapshot?.checking === true || snapshot?.downloadingVersion !== undefined
   const canDownload = snapshot?.status === 'update-available' && snapshot.canDownload
 
@@ -118,13 +213,13 @@ function UpdateSettingsSection(_props: PropsRuntime<'settings.section'>): ReactN
     <section className="harnessxUpdates">
       <header className="harnessxUpdatesHeader">
         <div>
-          <h2 className="harnessxUpdatesTitle">DeepSeek HarnessX 应用更新</h2>
-          <p className="harnessxUpdatesStatus">{loading ? '正在读取更新状态…' : statusLabel(snapshot)}</p>
+          <h2 className="harnessxUpdatesTitle">{t('title')}</h2>
+          <p className="harnessxUpdatesStatus">{loading ? t('loading') : statusLabel(snapshot, t)}</p>
         </div>
         <div className="harnessxUpdatesActions">
           {snapshot?.releaseUrl !== undefined && (
             <a className="harnessxUpdatesButton" href={snapshot.releaseUrl} target="_blank" rel="noreferrer">
-              打开 Release
+              {t('openRelease')}
             </a>
           )}
           <button
@@ -133,7 +228,7 @@ function UpdateSettingsSection(_props: PropsRuntime<'settings.section'>): ReactN
             disabled={busy}
             onClick={() => { void runAction('check') }}
           >
-            {action === 'check' ? '检查中…' : '检查更新'}
+            {action === 'check' ? t('checking') : t('checkUpdates')}
           </button>
           <button
             className="harnessxUpdatesButton harnessxUpdatesButtonPrimary"
@@ -141,23 +236,23 @@ function UpdateSettingsSection(_props: PropsRuntime<'settings.section'>): ReactN
             disabled={busy || !canDownload}
             onClick={() => { void runAction('download') }}
           >
-            {action === 'download' || snapshot?.downloadingVersion !== undefined ? '处理中…' : '下载并安装'}
+            {action === 'download' || snapshot?.downloadingVersion !== undefined ? t('processing') : t('downloadAndInstall')}
           </button>
         </div>
       </header>
 
       <dl className="harnessxUpdatesGrid">
-        <div className="harnessxUpdatesField"><dt>当前版本</dt><dd>{currentVersion}</dd></div>
-        <div className="harnessxUpdatesField"><dt>最新版本</dt><dd>{latestVersion}</dd></div>
-        <div className="harnessxUpdatesField"><dt>CPU 架构</dt><dd>{snapshot?.arch ?? '—'}</dd></div>
-        <div className="harnessxUpdatesField"><dt>发布时间</dt><dd>{formatDate(snapshot?.publishedAt)}</dd></div>
-        <div className="harnessxUpdatesField"><dt>版本标题</dt><dd>{snapshot?.releaseName ?? '—'}</dd></div>
-        <div className="harnessxUpdatesField"><dt>上次检查</dt><dd>{formatDate(snapshot?.lastCheckedAt)}</dd></div>
+        <div className="harnessxUpdatesField"><dt>{t('currentVersion')}</dt><dd>{currentVersion}</dd></div>
+        <div className="harnessxUpdatesField"><dt>{t('latestVersion')}</dt><dd>{latestVersion}</dd></div>
+        <div className="harnessxUpdatesField"><dt>{t('arch')}</dt><dd>{snapshot?.arch ?? '—'}</dd></div>
+        <div className="harnessxUpdatesField"><dt>{t('publishedAt')}</dt><dd>{formatDate(snapshot?.publishedAt)}</dd></div>
+        <div className="harnessxUpdatesField"><dt>{t('releaseTitle')}</dt><dd>{snapshot?.releaseName ?? '—'}</dd></div>
+        <div className="harnessxUpdatesField"><dt>{t('lastChecked')}</dt><dd>{formatDate(snapshot?.lastCheckedAt)}</dd></div>
       </dl>
 
       <section className="harnessxUpdatesRelease">
-        <h3 className="harnessxUpdatesReleaseTitle">版本说明</h3>
-        <pre className="harnessxUpdatesNotes">{snapshot?.releaseNotes?.trim() || '暂无版本说明。'}</pre>
+        <h3 className="harnessxUpdatesReleaseTitle">{t('releaseNotes')}</h3>
+        <pre className="harnessxUpdatesNotes">{snapshot?.releaseNotes?.trim() || t('noReleaseNotes')}</pre>
       </section>
 
       {(error ?? snapshot?.error) !== undefined && (
@@ -167,14 +262,14 @@ function UpdateSettingsSection(_props: PropsRuntime<'settings.section'>): ReactN
   )
 }
 
-function statusLabel(snapshot: UpdateSnapshot | undefined): string {
-  if (snapshot === undefined) return '尚未读取更新状态。'
-  if (snapshot.downloadingVersion !== undefined) return '正在处理 DeepSeek HarnessX ' + snapshot.downloadingVersion + '。'
-  if (snapshot.checking) return '正在检查 GitHub Releases。'
-  if (snapshot.status === 'update-available') return '发现新版本，可以下载并安装。'
-  if (snapshot.status === 'up-to-date') return '当前已经是最新版本。'
-  if (snapshot.status === 'error') return '上次检查失败。'
-  return '点击“检查更新”获取最新版本。'
+function statusLabel(snapshot: UpdateSnapshot | undefined, t: (key: UpdatesKey, params?: Record<string, string | number>) => string): string {
+  if (snapshot === undefined) return t('statusNotLoaded')
+  if (snapshot.downloadingVersion !== undefined) return t('statusProcessing', { version: snapshot.downloadingVersion })
+  if (snapshot.checking) return t('statusChecking')
+  if (snapshot.status === 'update-available') return t('statusAvailable')
+  if (snapshot.status === 'up-to-date') return t('statusUpToDate')
+  if (snapshot.status === 'error') return t('statusError')
+  return t('statusIdle')
 }
 
 function formatDate(value: string | undefined): string {
