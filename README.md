@@ -7,18 +7,6 @@
 
 DeepSeek HarnessX 将固定版本的 DeepSeek Harness 运行时组合成原生桌面应用，提供窗口与托盘管理、配置切换、本地终端、插件市场、安装任务和应用更新。它是独立维护的社区项目，不是 DeepSeek 官方产品。
 
-## 下载
-
-| 系统 | 架构 | 安装包 |
-| --- | --- | --- |
-| Windows | x64 | [HarnessX-0.1-x64-Setup.exe](https://github.com/coffeefreehans/HarnessX/releases/download/v0.1/HarnessX-0.1-x64-Setup.exe) |
-| Windows | ARM64 | [HarnessX-0.1-arm64-Setup.exe](https://github.com/coffeefreehans/HarnessX/releases/download/v0.1/HarnessX-0.1-arm64-Setup.exe) |
-| macOS | Intel x64 | [HarnessX-0.1-x64.dmg](https://github.com/coffeefreehans/HarnessX/releases/download/v0.1/HarnessX-0.1-x64.dmg) |
-| macOS | Apple Silicon ARM64 | [HarnessX-0.1-arm64.dmg](https://github.com/coffeefreehans/HarnessX/releases/download/v0.1/HarnessX-0.1-arm64.dmg) |
-
-[下载 SHA-256 校验文件](https://github.com/coffeefreehans/HarnessX/releases/download/v0.1/SHA256SUMS.txt)
- 
-
 ## 功能
 
 - 原生 Electron 窗口、系统托盘与单实例运行
