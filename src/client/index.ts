@@ -8,10 +8,20 @@ import { applyAdvancedShell } from './advanced-shell.ts'
 import { parseDesktopClientEnvironment } from './environment.ts'
 import { applyMarket } from './market.tsx'
 import { applyUpdates } from './updates.tsx'
+import { applySessionNotifications } from './session-notifications.ts'
+import { applyNotificationSettings } from './notification-settings.tsx'
+import { applySync } from './sync.tsx'
 
 export { applyAdvancedShell } from './advanced-shell.ts'
 export { parseDesktopClientEnvironment } from './environment.ts'
 export type { DesktopClientEnvironment, DesktopClientMode, DesktopClientPlatform } from './environment.ts'
+export { playCompletionSound } from './sound.ts'
+export {
+  getNotificationSettingsStore,
+  notifySessionCompleted,
+  NOTIFICATION_SETTINGS_STORAGE_KEY,
+} from './notifications.ts'
+export type { NotificationSettings } from './notifications.ts'
 
 /** Services required by advanced presentation and market/updates panels. */
 export const inject = [
@@ -27,4 +37,7 @@ export function apply(ctx: ClientContext): void {
   if (environment.mode === 'advanced') applyAdvancedShell(ctx, environment)
   applyMarket(ctx)
   applyUpdates(ctx)
+  applySessionNotifications(ctx)
+  applyNotificationSettings(ctx)
+  applySync(ctx)
 }

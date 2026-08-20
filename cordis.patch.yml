@@ -16,6 +16,8 @@
       name: harnessx-desktop/profiles
     - id: desktop-updates
       name: harnessx-desktop/updates
+    - id: desktop-sync
+      name: harnessx-desktop/sync
 
 # A desktop launch has no terminal operator waiting for the Web readiness line.
 - id: web-runtime
