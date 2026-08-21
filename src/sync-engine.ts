@@ -84,52 +84,33 @@ export class SyncEngine {
     }
 
     if (categories.includes('plugins')) {
-      // Profile manifest
-      const pkgPath = join(this.profileDir, 'package.json')
-      if (existsSync(pkgPath)) {
-        try {
-          const st = await stat(pkgPath)
-          if (st.isFile()) {
-            fileMap.set('plugins/package.json', {
-              fullPath: pkgPath,
-              category: 'plugins',
-              mtimeMs: st.mtimeMs,
-              size: st.size,
-            })
-          }
-        } catch {}
+      // Scan entire plugin directories recursively (excludes node_modules)
+      // ponytail: covers .dsh-plugin-desktop, .harnessx-desktop, .hernessx-desktop; upgrade to explicit allowlist when plugin dir naming stabilizes
+      const pluginDirs = ['.dsh-plugin-desktop', '.harnessx-desktop', '.hernessx-desktop']
+      for (const dirName of pluginDirs) {
+        const pluginRoot = join(this.profileDir, dirName)
+        if (existsSync(pluginRoot)) {
+          await this.scanPluginDirectoryRecursively(pluginRoot, pluginRoot, fileMap)
+        }
       }
 
-      // Profile cordis patch
-      const patchPath = join(this.profileDir, 'cordis.patch.yml')
-      if (existsSync(patchPath)) {
-        try {
-          const st = await stat(patchPath)
-          if (st.isFile()) {
-            fileMap.set('plugins/cordis.patch.yml', {
-              fullPath: patchPath,
-              category: 'plugins',
-              mtimeMs: st.mtimeMs,
-              size: st.size,
-            })
-          }
-        } catch {}
-      }
-
-      // Market sources
-      const marketSourcesPath = join(this.profileDir, '.harnessx-desktop', 'market', 'sources.json')
-      if (existsSync(marketSourcesPath)) {
-        try {
-          const st = await stat(marketSourcesPath)
-          if (st.isFile()) {
-            fileMap.set('plugins/market-sources.json', {
-              fullPath: marketSourcesPath,
-              category: 'plugins',
-              mtimeMs: st.mtimeMs,
-              size: st.size,
-            })
-          }
-        } catch {}
+      // Also sync top-level profile config files
+      const profileConfigs = ['package.json', 'cordis.patch.yml', 'cordis.yml']
+      for (const fileName of profileConfigs) {
+        const filePath = join(this.profileDir, fileName)
+        if (existsSync(filePath)) {
+          try {
+            const st = await stat(filePath)
+            if (st.isFile()) {
+              fileMap.set(`plugins/${fileName}`, {
+                fullPath: filePath,
+                category: 'plugins',
+                mtimeMs: st.mtimeMs,
+                size: st.size,
+              })
+            }
+          } catch {}
+        }
       }
     }
 
@@ -171,18 +152,40 @@ export class SyncEngine {
     } catch {}
   }
 
+  private async scanPluginDirectoryRecursively(
+    rootDir: string,
+    currentDir: string,
+    outMap: Map<string, { fullPath: string; category: SyncCategory; mtimeMs: number; size: number }>,
+  ): Promise<void> {
+    try {
+      const entries = await readdir(currentDir, { withFileTypes: true })
+      for (const entry of entries) {
+        if (entry.name === 'node_modules') continue
+        const full = join(currentDir, entry.name)
+        if (entry.isDirectory()) {
+          await this.scanPluginDirectoryRecursively(rootDir, full, outMap)
+        } else if (entry.isFile()) {
+          const rel = relative(this.profileDir, full).replace(/\\/g, '/')
+          const key = `plugins/${rel}`
+          const st = await stat(full)
+          outMap.set(key, {
+            fullPath: full,
+            category: 'plugins',
+            mtimeMs: st.mtimeMs,
+            size: st.size,
+          })
+        }
+      }
+    } catch {}
+  }
+
   resolveLocalFullPath(relKey: string): string {
     if (relKey === 'settings/settings.yaml') {
       return join(this.dshHome, 'settings.yaml')
     }
-    if (relKey === 'plugins/package.json') {
-      return join(this.profileDir, 'package.json')
-    }
-    if (relKey === 'plugins/cordis.patch.yml') {
-      return join(this.profileDir, 'cordis.patch.yml')
-    }
-    if (relKey === 'plugins/market-sources.json') {
-      return join(this.profileDir, '.harnessx-desktop', 'market', 'sources.json')
+    if (relKey.startsWith('plugins/')) {
+      const pluginSub = relKey.slice('plugins/'.length)
+      return join(this.profileDir, pluginSub)
     }
     if (relKey.startsWith('sessions/')) {
       const sessionSub = relKey.slice('sessions/'.length)
