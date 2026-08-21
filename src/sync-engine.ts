@@ -2,7 +2,7 @@
 
 import { createHash, randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'
 import type { GoogleDriveClient, GoogleDriveFile } from './google-drive.ts'
 
@@ -252,7 +252,7 @@ export class SyncEngine {
             }
             result.uploaded.push(key)
           } else if (remoteMeta && remoteMeta.sha256 !== localHash) {
-            // File changed - compare mtime
+            // Content differs - compare mtime to decide direction
             if (local.mtimeMs > remoteMeta.mtimeMs) {
               // Local is newer -> upload
               await this.driveClient.uploadAppDataFile(
@@ -275,17 +275,21 @@ export class SyncEngine {
               const content = await this.driveClient.downloadFile(remoteDriveFile.id)
               const dest = this.resolveLocalFullPath(key)
               await writeFileAtomicSafe(dest, content)
+              // Restore remote mtime so next sync doesn't see local as newer
+              const remoteMtime = new Date(remoteMeta.mtimeMs)
+              try { await utimes(dest, remoteMtime, remoteMtime) } catch {}
               remoteManifest.items[key] = {
                 path: key,
                 category: local.category,
                 sha256: sha256Buffer(content),
-                mtimeMs: Date.now(),
+                mtimeMs: remoteMeta.mtimeMs,
                 size: content.length,
                 driveFileId: remoteDriveFile.id,
               }
               result.downloaded.push(key)
             }
           }
+          // If sha256 matches, skip entirely - no upload or download needed
         } catch (err: unknown) {
           result.errors.push({ path: key, error: err instanceof Error ? err.message : String(err) })
         }
@@ -304,11 +308,14 @@ export class SyncEngine {
           const content = await this.driveClient.downloadFile(remoteDriveFile.id)
           const dest = this.resolveLocalFullPath(key)
           await writeFileAtomicSafe(dest, content)
+          // Restore remote mtime so next sync doesn't see local as newer
+          const remoteMtime = new Date(item.mtimeMs)
+          try { await utimes(dest, remoteMtime, remoteMtime) } catch {}
           remoteManifest.items[key] = {
             path: key,
             category: item.category,
             sha256: sha256Buffer(content),
-            mtimeMs: Date.now(),
+            mtimeMs: item.mtimeMs,
             size: content.length,
             driveFileId: remoteDriveFile.id,
           }
