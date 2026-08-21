@@ -228,7 +228,6 @@ export class SyncEngine {
           const remoteDriveFile = remoteByName.get(encodedKey)
 
           if (!remoteDriveFile) {
-            // No remote file at all -> upload
             const uploaded = await this.driveClient.uploadAppDataFile(
               encodedKey,
               localContent,
@@ -244,12 +243,35 @@ export class SyncEngine {
             }
             result.uploaded.push(key)
           } else if (remoteMeta && remoteMeta.sha256 === localHash) {
-            // Content identical -> skip, but update manifest mtime if stale
-            if (remoteMeta.mtimeMs !== local.mtimeMs) {
+            // Local hash matches manifest. But check if remote file was updated by another machine
+            // since our last sync (remote mtime > manifest mtime means another machine uploaded newer content)
+            const remoteMtime = remoteDriveFile.modifiedTime ? new Date(remoteDriveFile.modifiedTime).getTime() : 0
+            if (remoteMtime > remoteMeta.mtimeMs) {
+              // Remote was updated after our manifest was written -> download and verify
+              const remoteContent = await this.driveClient.downloadFile(remoteDriveFile.id)
+              const remoteHash = sha256Buffer(remoteContent)
+              if (remoteHash !== localHash) {
+                // Content actually differs -> accept remote
+                const dest = this.resolveLocalFullPath(key)
+                await writeFileAtomicSafe(dest, remoteContent)
+                await utimes(dest, new Date(remoteMtime), new Date(remoteMtime)).catch(() => {})
+                remoteManifest.items[key] = {
+                  path: key,
+                  category: local.category,
+                  sha256: remoteHash,
+                  mtimeMs: remoteMtime,
+                  size: remoteContent.length,
+                  driveFileId: remoteDriveFile.id,
+                }
+                result.downloaded.push(key)
+              } else {
+                // Hash same despite mtime change -> just update manifest mtime
+                remoteManifest.items[key] = { ...remoteMeta, mtimeMs: remoteMtime }
+              }
+            } else if (remoteMeta.mtimeMs !== local.mtimeMs) {
               remoteManifest.items[key] = { ...remoteMeta, mtimeMs: local.mtimeMs }
             }
           } else if (remoteMeta && remoteMeta.sha256 !== localHash) {
-            // Both have manifest entry, content differs -> compare mtime
             if (local.mtimeMs > remoteMeta.mtimeMs) {
               await this.driveClient.uploadAppDataFile(
                 encodedKey,
@@ -283,12 +305,10 @@ export class SyncEngine {
               result.downloaded.push(key)
             }
           } else {
-            // Remote file exists on Drive but no manifest entry (other machine uploaded)
-            // Download and compare before deciding direction
+            // Remote file exists on Drive but no manifest entry
             const remoteContent = await this.driveClient.downloadFile(remoteDriveFile.id)
             const remoteHash = sha256Buffer(remoteContent)
             if (remoteHash === localHash) {
-              // Identical content -> just register in manifest
               remoteManifest.items[key] = {
                 path: key,
                 category: local.category,
@@ -298,7 +318,6 @@ export class SyncEngine {
                 driveFileId: remoteDriveFile.id,
               }
             } else if (local.mtimeMs > (remoteDriveFile.modifiedTime ? new Date(remoteDriveFile.modifiedTime).getTime() : 0)) {
-              // Local is newer -> upload
               await this.driveClient.uploadAppDataFile(
                 encodedKey,
                 localContent,
@@ -315,7 +334,6 @@ export class SyncEngine {
               }
               result.uploaded.push(key)
             } else {
-              // Remote is newer -> download
               const dest = this.resolveLocalFullPath(key)
               await writeFileAtomicSafe(dest, remoteContent)
               const remoteMtime = remoteDriveFile.modifiedTime ? new Date(remoteDriveFile.modifiedTime).getTime() : Date.now()
@@ -336,7 +354,6 @@ export class SyncEngine {
         }
       }
 
-      // Download remote-only files (exist in manifest but not locally)
       for (const [key, item] of Object.entries(remoteManifest.items)) {
         if (!options.categories.includes(item.category)) continue
         if (localFiles.has(key)) continue
