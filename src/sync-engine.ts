@@ -84,7 +84,6 @@ export class SyncEngine {
     }
 
     if (categories.includes('plugins')) {
-      // Scan entire plugin directories recursively (excludes node_modules)
       // ponytail: covers .dsh-plugin-desktop, .harnessx-desktop, .hernessx-desktop; upgrade to explicit allowlist when plugin dir naming stabilizes
       const pluginDirs = ['.dsh-plugin-desktop', '.harnessx-desktop', '.hernessx-desktop']
       for (const dirName of pluginDirs) {
@@ -94,7 +93,6 @@ export class SyncEngine {
         }
       }
 
-      // Also sync top-level profile config files
       const profileConfigs = ['package.json', 'cordis.patch.yml', 'cordis.yml']
       for (const fileName of profileConfigs) {
         const filePath = join(this.profileDir, fileName)
@@ -115,7 +113,6 @@ export class SyncEngine {
     }
 
     if (categories.includes('sessions')) {
-      // Traverse $DSH_HOME/sessions recursively
       const sessionsRoot = join(this.dshHome, 'sessions')
       if (existsSync(sessionsRoot)) {
         await this.scanDirectoryRecursively(sessionsRoot, sessionsRoot, 'sessions', fileMap)
@@ -229,18 +226,18 @@ export class SyncEngine {
       const localFiles = await this.scanLocalFiles(options.categories)
 
       // 4. Determine uploads and downloads
-      // Check local files against remote
       for (const [key, local] of localFiles.entries()) {
         try {
           const localContent = await readFile(local.fullPath)
           const localHash = sha256Buffer(localContent)
           const remoteMeta = remoteManifest.items[key]
-          const remoteDriveFile = remoteByName.get(encodeURIComponent(key))
+          const encodedKey = encodeURIComponent(key)
+          const remoteDriveFile = remoteByName.get(encodedKey)
 
           if (!remoteDriveFile) {
             // Remote does not exist -> upload
             const uploaded = await this.driveClient.uploadAppDataFile(
-              encodeURIComponent(key),
+              encodedKey,
               localContent,
               'application/octet-stream',
             )
@@ -254,11 +251,11 @@ export class SyncEngine {
             }
             result.uploaded.push(key)
           } else if (remoteMeta && remoteMeta.sha256 !== localHash) {
-            // File changed
+            // File changed - compare mtime
             if (local.mtimeMs > remoteMeta.mtimeMs) {
               // Local is newer -> upload
               await this.driveClient.uploadAppDataFile(
-                encodeURIComponent(key),
+                encodedKey,
                 localContent,
                 'application/octet-stream',
                 remoteDriveFile.id,
@@ -293,21 +290,30 @@ export class SyncEngine {
         }
       }
 
-      // Check remote items for categories being synced that do not exist locally
+      // Download remote-only files (exist in manifest but not locally)
       for (const [key, item] of Object.entries(remoteManifest.items)) {
         if (!options.categories.includes(item.category)) continue
-        if (!localFiles.has(key)) {
-          const remoteDriveFile = item.driveFileId ? { id: item.driveFileId } : remoteByName.get(encodeURIComponent(key))
-          if (remoteDriveFile) {
-            try {
-              const content = await this.driveClient.downloadFile(remoteDriveFile.id)
-              const dest = this.resolveLocalFullPath(key)
-              await writeFileAtomicSafe(dest, content)
-              result.downloaded.push(key)
-            } catch (err: unknown) {
-              result.errors.push({ path: key, error: err instanceof Error ? err.message : String(err) })
-            }
+        if (localFiles.has(key)) continue
+        const encodedKey = encodeURIComponent(key)
+        const remoteDriveFile = item.driveFileId
+          ? { id: item.driveFileId }
+          : remoteByName.get(encodedKey)
+        if (!remoteDriveFile) continue
+        try {
+          const content = await this.driveClient.downloadFile(remoteDriveFile.id)
+          const dest = this.resolveLocalFullPath(key)
+          await writeFileAtomicSafe(dest, content)
+          remoteManifest.items[key] = {
+            path: key,
+            category: item.category,
+            sha256: sha256Buffer(content),
+            mtimeMs: Date.now(),
+            size: content.length,
+            driveFileId: remoteDriveFile.id,
           }
+          result.downloaded.push(key)
+        } catch (err: unknown) {
+          result.errors.push({ path: key, error: err instanceof Error ? err.message : String(err) })
         }
       }
 
