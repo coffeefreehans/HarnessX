@@ -131,6 +131,7 @@ export class SyncEngine {
     try {
       const entries = await readdir(currentDir, { withFileTypes: true })
       for (const entry of entries) {
+        if (entry.name === '.git') continue
         const full = join(currentDir, entry.name)
         if (entry.isDirectory()) {
           await this.scanDirectoryRecursively(rootDir, full, category, outMap)
@@ -157,7 +158,7 @@ export class SyncEngine {
     try {
       const entries = await readdir(currentDir, { withFileTypes: true })
       for (const entry of entries) {
-        if (entry.name === 'node_modules') continue
+        if (entry.name === 'node_modules' || entry.name === '.git') continue
         const full = join(currentDir, entry.name)
         if (entry.isDirectory()) {
           await this.scanPluginDirectoryRecursively(rootDir, full, outMap)
