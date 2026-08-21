@@ -133,6 +133,7 @@ const SYNC_STYLES = `
 .harnessxSyncConfigRow input[type="number"] { width: 80px; padding: 4px 6px; }
 .harnessxSyncConfigRow input[type="text"] { flex: 1; min-width: 200px; padding: 4px 6px; }
 .harnessxSyncError { margin: 16px 0 0; padding: 10px 12px; border-left: 3px solid #dc2626; background: rgb(254 242 242 / 75%); color: #b42318; font-size: 13px; line-height: 1.5; }
+.harnessxSyncSuccess { margin: 16px 0 0; padding: 10px 12px; border-left: 3px solid #16a34a; background: rgb(240 253 244 / 75%); color: #15803d; font-size: 13px; line-height: 1.5; }
 @media (max-width: 720px) {
   .harnessxSync { padding: 18px; }
   .harnessxSyncHeader { flex-direction: column; }
@@ -158,6 +159,7 @@ function SyncSettingsSection(props: PropsRuntime<'settings.section'> & PropsLoca
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
   const [action, setAction] = useState<'sync' | 'auth' | 'logout' | 'config'>()
+  const [syncSummary, setSyncSummary] = useState<string>()
   const [config, setConfig] = useState<{
     enabled: boolean
     autoSync: boolean
@@ -235,6 +237,7 @@ function SyncSettingsSection(props: PropsRuntime<'settings.section'> & PropsLoca
   const doAction = async (endpoint: string, method = 'POST', body?: unknown) => {
     setAction(endpoint as any)
     setError(undefined)
+    setSyncSummary(undefined)
     try {
       const res = await fetch(`/api/desktop/sync/${endpoint}`, {
         method,
@@ -247,6 +250,28 @@ function SyncSettingsSection(props: PropsRuntime<'settings.section'> & PropsLoca
       }
       if (endpoint === 'auth/start') {
         void pollUntilAuthenticated().finally(() => setAction(undefined))
+      } else if (endpoint === 'trigger') {
+        const data = await res.json().catch(() => ({})) as { result?: { uploaded: string[]; downloaded: string[]; errors: Array<{ path: string; error: string }> } }
+        const r = data.result
+        if (r) {
+          const parts: string[] = []
+          if (r.uploaded?.length) parts.push(`上传 ${r.uploaded.length} 个文件`)
+          if (r.downloaded?.length) parts.push(`下载 ${r.downloaded.length} 个文件`)
+          if (r.errors?.length) parts.push(`${r.errors.length} 个错误`)
+          setSyncSummary(parts.length ? parts.join('，') : '同步完成，无变更')
+        }
+        const newStatus = await fetchStatus()
+        setStatus(newStatus)
+        if (newStatus.config) {
+          setConfig({
+            enabled: newStatus.config.enabled ?? false,
+            autoSync: newStatus.config.autoSync ?? false,
+            intervalMinutes: newStatus.config.intervalMinutes ?? 30,
+            categories: newStatus.config.categories?.length ? newStatus.config.categories : ['sessions', 'plugins', 'settings'],
+            customClientId: newStatus.config.customClientId || '',
+            customClientSecret: newStatus.config.customClientSecret || '',
+          })
+        }
       } else {
         const newStatus = await fetchStatus()
         setStatus(newStatus)
@@ -282,6 +307,7 @@ function SyncSettingsSection(props: PropsRuntime<'settings.section'> & PropsLoca
   const busy = action !== undefined || status?.syncing === true
   const authenticated = status?.authenticated === true
   const accountEmail = status?.accountEmail
+  const hasErrors = syncSummary?.includes('错误')
 
   return (
     <section className="harnessxSync">
@@ -361,6 +387,9 @@ function SyncSettingsSection(props: PropsRuntime<'settings.section'> & PropsLoca
         </div>
       </div>
 
+      {syncSummary !== undefined && (
+        <p className={hasErrors ? 'harnessxSyncError' : 'harnessxSyncSuccess'}>{syncSummary}</p>
+      )}
       {(error ?? status?.error) !== undefined && (
         <p className="harnessxSyncError">{error ?? status?.error}</p>
       )}
