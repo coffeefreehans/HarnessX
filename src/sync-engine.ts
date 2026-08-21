@@ -62,7 +62,6 @@ export class SyncEngine {
     private readonly driveClient: GoogleDriveClient,
   ) {}
 
-  /** Scan local files relevant to sync. */
   async scanLocalFiles(categories: SyncCategory[]): Promise<Map<string, { fullPath: string; category: SyncCategory; mtimeMs: number; size: number }>> {
     const fileMap = new Map<string, { fullPath: string; category: SyncCategory; mtimeMs: number; size: number }>()
 
@@ -192,7 +191,6 @@ export class SyncEngine {
     throw new Error(`Unknown sync file key: ${relKey}`)
   }
 
-  /** Run sync operation against Google Drive appDataFolder. */
   async sync(options: SyncOptions): Promise<SyncResult> {
     const result: SyncResult = {
       uploaded: [],
@@ -204,29 +202,23 @@ export class SyncEngine {
     }
 
     try {
-      // 1. List remote files in appDataFolder
       const remoteFiles = await this.driveClient.listAppDataFiles()
       const remoteByName = new Map<string, GoogleDriveFile>()
       for (const f of remoteFiles) {
         remoteByName.set(f.name, f)
       }
 
-      // 2. Fetch or initialize remote manifest
       let remoteManifest: SyncManifest = { version: 1, lastSyncTime: 0, items: {} }
       const remoteManifestFile = remoteByName.get(MANIFEST_FILE_NAME)
       if (remoteManifestFile) {
         try {
           const manifestBuf = await this.driveClient.downloadFile(remoteManifestFile.id)
           remoteManifest = JSON.parse(manifestBuf.toString('utf8')) as SyncManifest
-        } catch {
-          // ignore parsing error, start fresh
-        }
+        } catch {}
       }
 
-      // 3. Scan local files
       const localFiles = await this.scanLocalFiles(options.categories)
 
-      // 4. Determine uploads and downloads
       for (const [key, local] of localFiles.entries()) {
         try {
           const localContent = await readFile(local.fullPath)
@@ -236,7 +228,7 @@ export class SyncEngine {
           const remoteDriveFile = remoteByName.get(encodedKey)
 
           if (!remoteDriveFile) {
-            // Remote does not exist -> upload
+            // No remote file at all -> upload
             const uploaded = await this.driveClient.uploadAppDataFile(
               encodedKey,
               localContent,
@@ -251,9 +243,61 @@ export class SyncEngine {
               driveFileId: uploaded.id,
             }
             result.uploaded.push(key)
+          } else if (remoteMeta && remoteMeta.sha256 === localHash) {
+            // Content identical -> skip, but update manifest mtime if stale
+            if (remoteMeta.mtimeMs !== local.mtimeMs) {
+              remoteManifest.items[key] = { ...remoteMeta, mtimeMs: local.mtimeMs }
+            }
           } else if (remoteMeta && remoteMeta.sha256 !== localHash) {
-            // Content differs - compare mtime to decide direction
+            // Both have manifest entry, content differs -> compare mtime
             if (local.mtimeMs > remoteMeta.mtimeMs) {
+              await this.driveClient.uploadAppDataFile(
+                encodedKey,
+                localContent,
+                'application/octet-stream',
+                remoteDriveFile.id,
+              )
+              remoteManifest.items[key] = {
+                path: key,
+                category: local.category,
+                sha256: localHash,
+                mtimeMs: local.mtimeMs,
+                size: local.size,
+                driveFileId: remoteDriveFile.id,
+              }
+              result.uploaded.push(key)
+            } else {
+              const content = await this.driveClient.downloadFile(remoteDriveFile.id)
+              const dest = this.resolveLocalFullPath(key)
+              await writeFileAtomicSafe(dest, content)
+              const remoteMtime = remoteMeta.mtimeMs
+              await utimes(dest, new Date(remoteMtime), new Date(remoteMtime)).catch(() => {})
+              remoteManifest.items[key] = {
+                path: key,
+                category: local.category,
+                sha256: sha256Buffer(content),
+                mtimeMs: remoteMtime,
+                size: content.length,
+                driveFileId: remoteDriveFile.id,
+              }
+              result.downloaded.push(key)
+            }
+          } else {
+            // Remote file exists on Drive but no manifest entry (other machine uploaded)
+            // Download and compare before deciding direction
+            const remoteContent = await this.driveClient.downloadFile(remoteDriveFile.id)
+            const remoteHash = sha256Buffer(remoteContent)
+            if (remoteHash === localHash) {
+              // Identical content -> just register in manifest
+              remoteManifest.items[key] = {
+                path: key,
+                category: local.category,
+                sha256: localHash,
+                mtimeMs: local.mtimeMs,
+                size: local.size,
+                driveFileId: remoteDriveFile.id,
+              }
+            } else if (local.mtimeMs > (remoteDriveFile.modifiedTime ? new Date(remoteDriveFile.modifiedTime).getTime() : 0)) {
               // Local is newer -> upload
               await this.driveClient.uploadAppDataFile(
                 encodedKey,
@@ -272,24 +316,21 @@ export class SyncEngine {
               result.uploaded.push(key)
             } else {
               // Remote is newer -> download
-              const content = await this.driveClient.downloadFile(remoteDriveFile.id)
               const dest = this.resolveLocalFullPath(key)
-              await writeFileAtomicSafe(dest, content)
-              // Restore remote mtime so next sync doesn't see local as newer
-              const remoteMtime = new Date(remoteMeta.mtimeMs)
-              try { await utimes(dest, remoteMtime, remoteMtime) } catch {}
+              await writeFileAtomicSafe(dest, remoteContent)
+              const remoteMtime = remoteDriveFile.modifiedTime ? new Date(remoteDriveFile.modifiedTime).getTime() : Date.now()
+              await utimes(dest, new Date(remoteMtime), new Date(remoteMtime)).catch(() => {})
               remoteManifest.items[key] = {
                 path: key,
                 category: local.category,
-                sha256: sha256Buffer(content),
-                mtimeMs: remoteMeta.mtimeMs,
-                size: content.length,
+                sha256: remoteHash,
+                mtimeMs: remoteMtime,
+                size: remoteContent.length,
                 driveFileId: remoteDriveFile.id,
               }
               result.downloaded.push(key)
             }
           }
-          // If sha256 matches, skip entirely - no upload or download needed
         } catch (err: unknown) {
           result.errors.push({ path: key, error: err instanceof Error ? err.message : String(err) })
         }
@@ -308,14 +349,13 @@ export class SyncEngine {
           const content = await this.driveClient.downloadFile(remoteDriveFile.id)
           const dest = this.resolveLocalFullPath(key)
           await writeFileAtomicSafe(dest, content)
-          // Restore remote mtime so next sync doesn't see local as newer
-          const remoteMtime = new Date(item.mtimeMs)
-          try { await utimes(dest, remoteMtime, remoteMtime) } catch {}
+          const remoteMtime = item.mtimeMs
+          await utimes(dest, new Date(remoteMtime), new Date(remoteMtime)).catch(() => {})
           remoteManifest.items[key] = {
             path: key,
             category: item.category,
             sha256: sha256Buffer(content),
-            mtimeMs: item.mtimeMs,
+            mtimeMs: remoteMtime,
             size: content.length,
             driveFileId: remoteDriveFile.id,
           }
@@ -325,7 +365,6 @@ export class SyncEngine {
         }
       }
 
-      // 5. Update remote manifest.json
       remoteManifest.lastSyncTime = Date.now()
       const manifestJson = JSON.stringify(remoteManifest, null, 2)
       await this.driveClient.uploadAppDataFile(
