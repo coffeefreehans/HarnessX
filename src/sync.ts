@@ -64,6 +64,7 @@ export function apply(ctx: Context, config: Config): void {
   const syncStateDir = join(dshHome, '.sync')
   const tokenFile = join(syncStateDir, 'google-tokens.json')
   const configFile = join(syncStateDir, 'config.json')
+  const stateFile = join(syncStateDir, 'state.json')
 
   let currentConfig: Config = {
     autoSync: config.autoSync ?? false,
@@ -82,6 +83,17 @@ export function apply(ctx: Context, config: Config): void {
   let activeAuthFlow: { close: () => void } | undefined
   let autoSyncTimer: ReturnType<typeof setInterval> | undefined
 
+  /** Persist the last-sync time and result so a restart keeps the panel populated. */
+  const persistState = async (): Promise<void> => {
+    try {
+      await mkdir(syncStateDir, { recursive: true })
+      await writeFileAtomic(stateFile, JSON.stringify({
+        ...(lastSyncTime !== undefined ? { lastSyncTime } : {}),
+        ...(lastSyncResult !== undefined ? { lastSyncResult } : {}),
+      }, null, 2), { mode: 0o600, dirMode: 0o700 })
+    } catch {}
+  }
+
   const loadPersisted = async () => {
     try {
       if (existsSync(tokenFile)) {
@@ -94,6 +106,25 @@ export function apply(ctx: Context, config: Config): void {
       if (existsSync(configFile)) {
         const raw = await readFile(configFile, 'utf8')
         currentConfig = { ...currentConfig, ...(JSON.parse(raw) as Partial<Config>) }
+      }
+    } catch {}
+
+    try {
+      if (existsSync(stateFile)) {
+        const raw = JSON.parse(await readFile(stateFile, 'utf8')) as {
+          lastSyncTime?: unknown
+          lastSyncResult?: unknown
+        }
+        if (typeof raw.lastSyncTime === 'number' && Number.isFinite(raw.lastSyncTime)) {
+          lastSyncTime = raw.lastSyncTime
+        }
+        const result = raw.lastSyncResult as Partial<SyncResult> | undefined
+        if (result !== null && typeof result === 'object'
+          && Array.isArray(result.uploaded) && Array.isArray(result.downloaded)
+          && Array.isArray(result.conflicts) && Array.isArray(result.pendingInstalls)
+          && Array.isArray(result.errors) && typeof result.timestamp === 'number') {
+          lastSyncResult = result as SyncResult
+        }
       }
     } catch {}
   }
@@ -159,6 +190,7 @@ export function apply(ctx: Context, config: Config): void {
       // Show the Drive-server time of the newest cloud write so every machine
       // displays the same moment (e.g. the other computer's upload time).
       lastSyncTime = res.lastRemoteChangeMs > 0 ? res.lastRemoteChangeMs : res.timestamp
+      void persistState()
       return res
     } catch (err: unknown) {
       lastError = err instanceof Error ? err.message : String(err)
@@ -182,6 +214,7 @@ export function apply(ctx: Context, config: Config): void {
       ...lastSyncResult,
       conflicts: lastSyncResult.conflicts.filter(conflict => conflict.key !== key),
     }
+    void persistState()
   }
 
   async function resetCloudAndSync(): Promise<SyncResult> {
@@ -200,6 +233,7 @@ export function apply(ctx: Context, config: Config): void {
       const res = await engine.sync({ categories: currentConfig.categories })
       lastSyncResult = res
       lastSyncTime = res.lastRemoteChangeMs > 0 ? res.lastRemoteChangeMs : res.timestamp
+      void persistState()
       return res
     } catch (err: unknown) {
       lastError = err instanceof Error ? err.message : String(err)
