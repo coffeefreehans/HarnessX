@@ -3627,8 +3627,8 @@ __metadata:
 
 "@deepseek-ai/dsh-web-frontend@patch:@deepseek-ai/dsh-web-frontend@npm%3A0.1.1-rc.2#./patches/dsh-web-frontend@0.1.1-rc.2.patch::locator=harnessx-desktop%40workspace%3A.":
   version: 0.1.1-rc.2
-  resolution: "@deepseek-ai/dsh-web-frontend@patch:@deepseek-ai/dsh-web-frontend@npm%3A0.1.1-rc.2#./patches/dsh-web-frontend@0.1.1-rc.2.patch::version=0.1.1-rc.2&hash=07e83e&locator=harnessx-desktop%40workspace%3A."
-  checksum: 10c0/618d788f9e0df2ab7450ab63b077473a73b310fe4f951012264afcc3351c578bbc5ded6ce4539f349dec059899328220140c3212b55ee951aad53cf81b122987
+  resolution: "@deepseek-ai/dsh-web-frontend@patch:@deepseek-ai/dsh-web-frontend@npm%3A0.1.1-rc.2#./patches/dsh-web-frontend@0.1.1-rc.2.patch::version=0.1.1-rc.2&hash=f2dbf0&locator=harnessx-desktop%40workspace%3A."
+  checksum: 10c0/6da95dc555eb86251be02db3d564664217aacb1234d914c74405b544d4361801e67786f0b2292d4c730e2317fd3191d6ccd6fd897f84789aec3652619c71d756
   languageName: node
   linkType: hard
 

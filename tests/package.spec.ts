@@ -301,9 +301,10 @@ describe('published package surface', () => {
     const frontendPatch = readFileSync(new URL('patches/dsh-web-frontend@0.1.1-rc.2.patch', workspaceRoot), 'utf8')
     const workspaceRequire = createRequire(new URL('package.json', packageRoot))
     const frontendManifest = workspaceRequire.resolve('@deepseek-ai/dsh-web-frontend/package.json')
-    const frontendAssets = readdirSync(join(dirname(frontendManifest), 'dist', 'assets'))
-      .filter(name => name.endsWith('.js'))
-      .map(name => readFileSync(join(dirname(frontendManifest), 'dist', 'assets', name), 'utf8'))
+    const frontendAssetsDir = join(dirname(frontendManifest), 'dist', 'assets')
+    const frontendAssetNames = readdirSync(frontendAssetsDir).filter(name => name.endsWith('.js'))
+    const frontendAssets = frontendAssetNames
+      .map(name => readFileSync(join(frontendAssetsDir, name), 'utf8'))
       .join('\n')
 
     expect(workspaceManifest.dependencies).not.toHaveProperty('@deepseek-ai/dsh-client-web')
@@ -313,6 +314,17 @@ describe('published package surface', () => {
     expect(lockfile).toContain('@deepseek-ai/dsh-web-frontend@patch:@deepseek-ai/dsh-web-frontend@npm%3A0.1.1-rc.2#./patches/dsh-web-frontend@0.1.1-rc.2.patch')
     expect(frontendPatch).toContain('disabling failed optional plugin')
     expect(frontendAssets).toContain('disabling failed optional plugin')
+    // The patch rewrites minified bundle code; a malformed edit turns the whole
+    // asset into a parse error and the packaged app boots to a blank window,
+    // so every shipped asset must still parse as an ES module.
+    const parserRequire = createRequire(workspaceRequire.resolve('@babel/parser/package.json'))
+    const { parse } = parserRequire('@babel/parser') as typeof import('@babel/parser')
+    for (const name of frontendAssetNames) {
+      expect(() => parse(readFileSync(join(frontendAssetsDir, name), 'utf8'), {
+        sourceType: 'module',
+        errorRecovery: false,
+      })).not.toThrow()
+    }
   })
 
   it('starts restricted Windows shells with a hidden console show state', () => {
