@@ -1,1 +1,1 @@
-AGENTS.canonical.md
+Nested snapshot instruction.
