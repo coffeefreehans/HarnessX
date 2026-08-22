@@ -172,6 +172,16 @@ export function apply(ctx: Context, config: Config): void {
     return new SyncEngine(dshHome, profileDir, client)
   }
 
+  /** Keep the persisted last-sync result free of already-resolved conflicts. */
+  function dropResolvedConflict(key: string): void {
+    if (!lastSyncResult) return
+    if (!lastSyncResult.conflicts.some(conflict => conflict.key === key)) return
+    lastSyncResult = {
+      ...lastSyncResult,
+      conflicts: lastSyncResult.conflicts.filter(conflict => conflict.key !== key),
+    }
+  }
+
   async function resetCloudAndSync(): Promise<SyncResult> {
     if (syncing) {
       throw new Error('Synchronization is already in progress.')
@@ -365,9 +375,11 @@ export function apply(ctx: Context, config: Config): void {
           }
           if (body.direction === 'upload') {
             await getEngine().uploadOverwrite(conflict)
+            dropResolvedConflict(conflict.key)
             sendJson(res, 200, { ok: true, resolved: conflict.key, direction: 'upload' })
           } else if (body.direction === 'download') {
             await getEngine().downloadOverwrite(conflict)
+            dropResolvedConflict(conflict.key)
             sendJson(res, 200, { ok: true, resolved: conflict.key, direction: 'download' })
           } else {
             sendJson(res, 400, { error: 'direction must be "upload" or "download".' })
