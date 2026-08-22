@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { GoogleDriveClient, GoogleDriveFile } from '../src/google-drive.ts'
 
-const NAME_PREFIX = 'harnessx-v3:'
+const NAME_PREFIX = ''
 
 interface MockRemoteFile {
   id: string
@@ -112,17 +112,16 @@ describe('Google Drive Sync & Auth', () => {
     await rm(home, { recursive: true, force: true })
   })
 
-  it('ignores legacy protocol names without the v3 prefix', async () => {
+  it('ignores foreign names like the legacy manifest and prefixed protocol files', async () => {
     const { home, profileDir } = await makeHome()
-    const legacyName = encodeURIComponent('sessions/--proj--/session-abc/session.jsonl.zstd')
     const remoteFiles = new Map<string, MockRemoteFile>([
-      ['legacy', { id: 'legacy', name: legacyName, content: fakeZstd('old-protocol'), modifiedTime: new Date().toISOString() }],
       ['legacy-manifest', { id: 'legacy-manifest', name: 'manifest.json', content: Buffer.from('{}'), modifiedTime: new Date().toISOString() }],
+      ['prefixed', { id: 'prefixed', name: `harnessx-v3:${encodeURIComponent('sessions/--proj--/session-abc/session.jsonl.zstd')}`, content: fakeZstd('prefixed-layout'), modifiedTime: new Date().toISOString() }],
     ])
     const client = createMockClient(remoteFiles)
     const result = await new SyncEngine(home, profileDir, client).sync({ categories: ['sessions'] })
 
-    // The legacy file is invisible to v3: nothing to download, no conflicts, no errors.
+    // Neither name decodes to a valid sync key: nothing to download, no conflicts, no errors.
     expect(result.downloaded).toEqual([])
     expect(result.conflicts).toEqual([])
     expect(result.errors).toEqual([])

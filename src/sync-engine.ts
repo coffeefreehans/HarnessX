@@ -1,10 +1,11 @@
 /**
- * Cloud sync engine v3.
+ * Cloud sync engine.
  *
  * Drive layout: every sync file in appDataFolder is named
- * `harnessx-v3:<encodeURIComponent(key)>` and carries `sha256` plus `mtimeMs`
- * appProperties, so no shared manifest can be lost or clobbered. Names without
- * the `harnessx-v3:` prefix belong to earlier protocols and are ignored.
+ * `<encodeURIComponent(key)>` (e.g. `sessions%2F--proj--%2Fid%2Fsession.jsonl.zstd`)
+ * and carries `sha256` plus `mtimeMs` appProperties, so no shared manifest can
+ * be lost or clobbered. Foreign names are ignored via the category whitelist
+ * (`sessions/` or `settings/` prefix), which also excludes legacy layouts.
  *
  * Sessions are multi-frame zstd logs (`sessions/<project>/<session-id>/session.jsonl.zstd`)
  * synced as opaque binaries: union across machines, newest mtime wins per file.
@@ -51,7 +52,6 @@ export interface SyncResult {
   timestamp: number
 }
 
-const NAME_PREFIX = 'harnessx-v3:'
 const PROP_HASH = 'sha256'
 const PROP_MTIME = 'mtimeMs'
 const REGISTRY_KEY = 'plugins/registry.json'
@@ -75,14 +75,13 @@ async function writeFileAtomicSafe(filename: string, content: string | Buffer): 
 }
 
 function encodeRemoteName(key: string): string {
-  return `${NAME_PREFIX}${encodeURIComponent(key)}`
+  return encodeURIComponent(key)
 }
 
-/** Decode a Drive name into a sync key; returns undefined for foreign or legacy names. */
+/** Decode a Drive name into a sync key; returns undefined for foreign names. */
 function decodeRemoteName(name: string): string | undefined {
-  if (!name.startsWith(NAME_PREFIX)) return undefined
   try {
-    const key = decodeURIComponent(name.slice(NAME_PREFIX.length))
+    const key = decodeURIComponent(name)
     return isSyncKey(key) ? key : undefined
   } catch {
     return undefined
@@ -310,6 +309,8 @@ export class SyncEngine {
       if (categoryOf(key) === 'sessions') remoteSessionKeys.add(key)
     }
     result.sessionCounts.remote = remoteSessionKeys.size
+    // Downloads land after the scan, so fold them into the local count.
+    result.sessionCounts.local += result.downloaded.filter(key => categoryOf(key) === 'sessions').length
 
     return result
   }
