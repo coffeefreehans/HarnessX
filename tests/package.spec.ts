@@ -181,6 +181,7 @@ describe('published package surface', () => {
       allowToChangeInstallationDirectory: true,
       createDesktopShortcut: true,
       createStartMenuShortcut: true,
+      runAfterFinish: true,
       shortcutName: 'DeepSeek HarnessX',
       artifactName: 'HarnessX-${version}-${arch}-Setup.${ext}',
     })
