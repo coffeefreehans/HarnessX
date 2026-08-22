@@ -1,43 +1,60 @@
-/** Core synchronization engine for Google Drive sync. */
+/**
+ * Cloud sync engine v3.
+ *
+ * Drive layout: every sync file in appDataFolder is named
+ * `harnessx-v3:<encodeURIComponent(key)>` and carries `sha256` plus `mtimeMs`
+ * appProperties, so no shared manifest can be lost or clobbered. Names without
+ * the `harnessx-v3:` prefix belong to earlier protocols and are ignored.
+ *
+ * Sessions are multi-frame zstd logs (`sessions/<project>/<session-id>/session.jsonl.zstd`)
+ * synced as opaque binaries: union across machines, newest mtime wins per file.
+ * Settings conflicts are surfaced for the user to resolve explicitly.
+ * Plugins sync only an install registry; installation goes through the market.
+ */
 
 import { createHash, randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readFile, readdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises'
-import { dirname, join, relative } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import type { GoogleDriveClient, GoogleDriveFile } from './google-drive.ts'
+import { desktopThirdPartyBundles } from './profile.ts'
 
 export type SyncCategory = 'sessions' | 'plugins' | 'settings'
 
 export interface SyncOptions {
   categories: SyncCategory[]
-  conflictStrategy?: 'latest' | 'remote-first' | 'local-first' | undefined
 }
 
-export interface SyncManifestItem {
-  path: string
+export interface SyncConflict {
+  key: string
   category: SyncCategory
-  sha256: string
-  mtimeMs: number
-  size: number
-  driveFileId?: string | undefined
+  localMtimeMs: number
+  remoteMtimeMs: number
+  driveFileId: string
 }
 
-export interface SyncManifest {
-  version: 1
-  lastSyncTime: number
-  items: Record<string, SyncManifestItem>
+export interface SyncPendingInstall {
+  name: string
+  installSpec: string
+  version?: string
 }
 
 export interface SyncResult {
   uploaded: string[]
   downloaded: string[]
-  deleted: string[]
-  conflicts: string[]
+  conflicts: SyncConflict[]
+  pendingInstalls: SyncPendingInstall[]
   errors: Array<{ path: string; error: string }>
+  sessionCounts: { local: number; remote: number }
   timestamp: number
 }
 
-const MANIFEST_FILE_NAME = 'manifest.json'
+const NAME_PREFIX = 'harnessx-v3:'
+const PROP_HASH = 'sha256'
+const PROP_MTIME = 'mtimeMs'
+const REGISTRY_KEY = 'plugins/registry.json'
+const SESSION_SUFFIX = '.jsonl.zstd'
+const SETTINGS_KEY = 'settings/settings.yaml'
 
 function sha256Buffer(buffer: Buffer): string {
   return createHash('sha256').update(buffer).digest('hex')
@@ -55,6 +72,63 @@ async function writeFileAtomicSafe(filename: string, content: string | Buffer): 
   }
 }
 
+function encodeRemoteName(key: string): string {
+  return `${NAME_PREFIX}${encodeURIComponent(key)}`
+}
+
+/** Decode a Drive name into a sync key; returns undefined for foreign or legacy names. */
+function decodeRemoteName(name: string): string | undefined {
+  if (!name.startsWith(NAME_PREFIX)) return undefined
+  try {
+    const key = decodeURIComponent(name.slice(NAME_PREFIX.length))
+    return isSyncKey(key) ? key : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function isSyncKey(key: string): key is string {
+  const slash = key.indexOf('/')
+  if (slash <= 0) return false
+  const category = key.slice(0, slash)
+  if (category !== 'sessions' && category !== 'settings') return false
+  const suffix = key.slice(slash + 1)
+  if (suffix.length === 0 || suffix.includes('\\') || suffix.startsWith('/')) return false
+  const segments = suffix.split('/')
+  return segments.every(segment => segment.length > 0 && segment !== '.' && segment !== '..')
+}
+
+function categoryOf(key: string): SyncCategory {
+  return key.slice(0, key.indexOf('/')) as SyncCategory
+}
+
+function driveMtime(file: GoogleDriveFile): number {
+  const parsed = file.modifiedTime ? new Date(file.modifiedTime).getTime() : 0
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function propHash(file: GoogleDriveFile): string | undefined {
+  const value = file.appProperties?.[PROP_HASH]
+  return typeof value === 'string' && value.length === 64 ? value : undefined
+}
+
+function propMtime(file: GoogleDriveFile): number {
+  const raw = file.appProperties?.[PROP_MTIME]
+  if (raw === undefined) return 0
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function remoteTimeOf(file: GoogleDriveFile): number {
+  return propMtime(file) || driveMtime(file)
+}
+
+export interface LocalSyncFile {
+  fullPath: string
+  mtimeMs: number
+  size: number
+}
+
 export class SyncEngine {
   constructor(
     private readonly dshHome: string,
@@ -62,338 +136,332 @@ export class SyncEngine {
     private readonly driveClient: GoogleDriveClient,
   ) {}
 
-  async scanLocalFiles(categories: SyncCategory[]): Promise<Map<string, { fullPath: string; category: SyncCategory; mtimeMs: number; size: number }>> {
-    const fileMap = new Map<string, { fullPath: string; category: SyncCategory; mtimeMs: number; size: number }>()
+  resolveLocalFullPath(key: string): string {
+    if (!isSyncKey(key)) throw new Error(`Invalid sync key: ${key}`)
+    if (key === SETTINGS_KEY) return join(this.dshHome, 'settings.yaml')
+    const root = resolve(this.dshHome, 'sessions')
+    const destination = resolve(root, key.slice('sessions/'.length))
+    if (destination !== root && !destination.startsWith(`${root}\\`) && !destination.startsWith(`${root}/`)) {
+      throw new Error(`Sync path escapes sessions root: ${key}`)
+    }
+    return destination
+  }
 
-    if (categories.includes('settings')) {
-      const settingsPath = join(this.dshHome, 'settings.yaml')
-      if (existsSync(settingsPath)) {
+  async scanSessions(): Promise<Map<string, LocalSyncFile>> {
+    const files = new Map<string, LocalSyncFile>()
+    const sessionsRoot = join(this.dshHome, 'sessions')
+    if (!existsSync(sessionsRoot)) return files
+    await this.scanSessionDir(sessionsRoot, sessionsRoot, files)
+    return files
+  }
+
+  private async scanSessionDir(rootDir: string, currentDir: string, out: Map<string, LocalSyncFile>): Promise<void> {
+    let entries
+    try {
+      entries = await readdir(currentDir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (entry.name === '.git' || entry.name === 'node_modules') continue
+      const full = join(currentDir, entry.name)
+      if (entry.isDirectory()) {
+        await this.scanSessionDir(rootDir, full, out)
+      } else if (entry.isFile() && entry.name.endsWith(SESSION_SUFFIX) && !entry.name.includes('.bak')) {
         try {
-          const st = await stat(settingsPath)
-          if (st.isFile()) {
-            fileMap.set('settings/settings.yaml', {
-              fullPath: settingsPath,
-              category: 'settings',
-              mtimeMs: st.mtimeMs,
-              size: st.size,
-            })
-          }
+          const st = await stat(full)
+          const rel = relative(rootDir, full).replace(/\\/g, '/')
+          out.set(`sessions/${rel}`, { fullPath: full, mtimeMs: st.mtimeMs, size: st.size })
         } catch {}
       }
     }
-
-    if (categories.includes('plugins')) {
-      // ponytail: covers .dsh-plugin-desktop, .harnessx-desktop, .hernessx-desktop; upgrade to explicit allowlist when plugin dir naming stabilizes
-      const pluginDirs = ['.dsh-plugin-desktop', '.harnessx-desktop', '.hernessx-desktop']
-      for (const dirName of pluginDirs) {
-        const pluginRoot = join(this.profileDir, dirName)
-        if (existsSync(pluginRoot)) {
-          await this.scanPluginDirectoryRecursively(pluginRoot, pluginRoot, fileMap)
-        }
-      }
-
-      const profileConfigs = ['package.json', 'cordis.patch.yml', 'cordis.yml']
-      for (const fileName of profileConfigs) {
-        const filePath = join(this.profileDir, fileName)
-        if (existsSync(filePath)) {
-          try {
-            const st = await stat(filePath)
-            if (st.isFile()) {
-              fileMap.set(`plugins/${fileName}`, {
-                fullPath: filePath,
-                category: 'plugins',
-                mtimeMs: st.mtimeMs,
-                size: st.size,
-              })
-            }
-          } catch {}
-        }
-      }
-    }
-
-    if (categories.includes('sessions')) {
-      const sessionsRoot = join(this.dshHome, 'sessions')
-      if (existsSync(sessionsRoot)) {
-        await this.scanDirectoryRecursively(sessionsRoot, sessionsRoot, 'sessions', fileMap)
-      }
-    }
-
-    return fileMap
   }
 
-  private async scanDirectoryRecursively(
-    rootDir: string,
-    currentDir: string,
-    category: SyncCategory,
-    outMap: Map<string, { fullPath: string; category: SyncCategory; mtimeMs: number; size: number }>,
-  ): Promise<void> {
-    try {
-      const entries = await readdir(currentDir, { withFileTypes: true })
-      for (const entry of entries) {
-        if (entry.name === '.git') continue
-        const full = join(currentDir, entry.name)
-        if (entry.isDirectory()) {
-          await this.scanDirectoryRecursively(rootDir, full, category, outMap)
-        } else if (entry.isFile()) {
-          const rel = relative(rootDir, full).replace(/\\/g, '/')
-          const key = `sessions/${rel}`
-          const st = await stat(full)
-          outMap.set(key, {
-            fullPath: full,
-            category,
-            mtimeMs: st.mtimeMs,
-            size: st.size,
-          })
-        }
-      }
-    } catch {}
-  }
-
-  private async scanPluginDirectoryRecursively(
-    rootDir: string,
-    currentDir: string,
-    outMap: Map<string, { fullPath: string; category: SyncCategory; mtimeMs: number; size: number }>,
-  ): Promise<void> {
-    try {
-      const entries = await readdir(currentDir, { withFileTypes: true })
-      for (const entry of entries) {
-        if (entry.name === 'node_modules' || entry.name === '.git') continue
-        const full = join(currentDir, entry.name)
-        if (entry.isDirectory()) {
-          await this.scanPluginDirectoryRecursively(rootDir, full, outMap)
-        } else if (entry.isFile()) {
-          const rel = relative(this.profileDir, full).replace(/\\/g, '/')
-          const key = `plugins/${rel}`
-          const st = await stat(full)
-          outMap.set(key, {
-            fullPath: full,
-            category: 'plugins',
-            mtimeMs: st.mtimeMs,
-            size: st.size,
-          })
-        }
-      }
-    } catch {}
-  }
-
-  resolveLocalFullPath(relKey: string): string {
-    if (relKey === 'settings/settings.yaml') {
-      return join(this.dshHome, 'settings.yaml')
+  async scanSettings(): Promise<Map<string, LocalSyncFile>> {
+    const files = new Map<string, LocalSyncFile>()
+    const settingsPath = join(this.dshHome, 'settings.yaml')
+    if (existsSync(settingsPath)) {
+      try {
+        const st = await stat(settingsPath)
+        if (st.isFile()) files.set(SETTINGS_KEY, { fullPath: settingsPath, mtimeMs: st.mtimeMs, size: st.size })
+      } catch {}
     }
-    if (relKey.startsWith('plugins/')) {
-      const pluginSub = relKey.slice('plugins/'.length)
-      return join(this.profileDir, pluginSub)
-    }
-    if (relKey.startsWith('sessions/')) {
-      const sessionSub = relKey.slice('sessions/'.length)
-      return join(this.dshHome, 'sessions', sessionSub)
-    }
-    throw new Error(`Unknown sync file key: ${relKey}`)
+    return files
   }
 
   async sync(options: SyncOptions): Promise<SyncResult> {
     const result: SyncResult = {
       uploaded: [],
       downloaded: [],
-      deleted: [],
       conflicts: [],
+      pendingInstalls: [],
       errors: [],
+      sessionCounts: { local: 0, remote: 0 },
       timestamp: Date.now(),
     }
 
+    let remoteFiles: GoogleDriveFile[]
     try {
-      const remoteFiles = await this.driveClient.listAppDataFiles()
-      const remoteByName = new Map<string, GoogleDriveFile>()
-      for (const f of remoteFiles) {
-        remoteByName.set(f.name, f)
-      }
+      remoteFiles = await this.driveClient.listAppDataFiles()
+    } catch (error) {
+      result.errors.push({ path: 'global', error: error instanceof Error ? error.message : String(error) })
+      return result
+    }
 
-      let remoteManifest: SyncManifest = { version: 1, lastSyncTime: 0, items: {} }
-      const remoteManifestFile = remoteByName.get(MANIFEST_FILE_NAME)
-      if (remoteManifestFile) {
-        try {
-          const manifestBuf = await this.driveClient.downloadFile(remoteManifestFile.id)
-          remoteManifest = JSON.parse(manifestBuf.toString('utf8')) as SyncManifest
-        } catch {}
-      }
+    const remoteByKey = new Map<string, GoogleDriveFile>()
+    for (const file of remoteFiles) {
+      const key = decodeRemoteName(file.name)
+      if (!key) continue
+      const existing = remoteByKey.get(key)
+      if (!existing || remoteTimeOf(file) >= remoteTimeOf(existing)) remoteByKey.set(key, file)
+    }
 
-      const localFiles = await this.scanLocalFiles(options.categories)
+    const localFiles = new Map<string, LocalSyncFile>()
+    if (options.categories.includes('sessions')) {
+      for (const [key, file] of await this.scanSessions()) localFiles.set(key, file)
+    }
+    if (options.categories.includes('settings')) {
+      for (const [key, file] of await this.scanSettings()) localFiles.set(key, file)
+    }
+    result.sessionCounts.local = [...localFiles.keys()].filter(key => categoryOf(key) === 'sessions').length
+    result.sessionCounts.remote = [...remoteByKey.keys()].filter(key => categoryOf(key) === 'sessions').length
 
-      for (const [key, local] of localFiles.entries()) {
-        try {
+    const keys = new Set<string>([...localFiles.keys(), ...remoteByKey.keys()])
+    for (const key of keys) {
+      const category = categoryOf(key)
+      if (!options.categories.includes(category)) continue
+      const local = localFiles.get(key)
+      const remote = remoteByKey.get(key)
+      try {
+        if (local && remote) {
           const localContent = await readFile(local.fullPath)
           const localHash = sha256Buffer(localContent)
-          const remoteMeta = remoteManifest.items[key]
-          const encodedKey = encodeURIComponent(key)
-          const remoteDriveFile = remoteByName.get(encodedKey)
-
-          if (!remoteDriveFile) {
-            const uploaded = await this.driveClient.uploadAppDataFile(
-              encodedKey,
-              localContent,
-              'application/octet-stream',
-            )
-            remoteManifest.items[key] = {
-              path: key,
-              category: local.category,
-              sha256: localHash,
-              mtimeMs: local.mtimeMs,
-              size: local.size,
-              driveFileId: uploaded.id,
+          const storedHash = propHash(remote)
+          if (storedHash === localHash) continue
+          let remoteHash = storedHash
+          if (remoteHash === undefined) {
+            const remoteContent = await this.driveClient.downloadFile(remote.id)
+            remoteHash = sha256Buffer(remoteContent)
+            if (remoteHash === localHash) {
+              await this.stampProperties(remote.id, localHash, local.mtimeMs)
+              continue
             }
-            result.uploaded.push(key)
-          } else if (remoteMeta && remoteMeta.sha256 === localHash) {
-            // Local hash matches manifest. But check if remote file was updated by another machine
-            // since our last sync (remote mtime > manifest mtime means another machine uploaded newer content)
-            const remoteMtime = remoteDriveFile.modifiedTime ? new Date(remoteDriveFile.modifiedTime).getTime() : 0
-            if (remoteMtime > remoteMeta.mtimeMs) {
-              // Remote was updated after our manifest was written -> download and verify
-              const remoteContent = await this.driveClient.downloadFile(remoteDriveFile.id)
-              const remoteHash = sha256Buffer(remoteContent)
-              if (remoteHash !== localHash) {
-                // Content actually differs -> accept remote
-                const dest = this.resolveLocalFullPath(key)
-                await writeFileAtomicSafe(dest, remoteContent)
-                await utimes(dest, new Date(remoteMtime), new Date(remoteMtime)).catch(() => {})
-                remoteManifest.items[key] = {
-                  path: key,
-                  category: local.category,
-                  sha256: remoteHash,
-                  mtimeMs: remoteMtime,
-                  size: remoteContent.length,
-                  driveFileId: remoteDriveFile.id,
-                }
-                result.downloaded.push(key)
-              } else {
-                // Hash same despite mtime change -> just update manifest mtime
-                remoteManifest.items[key] = { ...remoteMeta, mtimeMs: remoteMtime }
-              }
-            } else if (remoteMeta.mtimeMs !== local.mtimeMs) {
-              remoteManifest.items[key] = { ...remoteMeta, mtimeMs: local.mtimeMs }
-            }
-          } else if (remoteMeta && remoteMeta.sha256 !== localHash) {
-            if (local.mtimeMs > remoteMeta.mtimeMs) {
-              await this.driveClient.uploadAppDataFile(
-                encodedKey,
-                localContent,
-                'application/octet-stream',
-                remoteDriveFile.id,
-              )
-              remoteManifest.items[key] = {
-                path: key,
-                category: local.category,
-                sha256: localHash,
-                mtimeMs: local.mtimeMs,
-                size: local.size,
-                driveFileId: remoteDriveFile.id,
-              }
+          }
+          if (category === 'sessions') {
+            if (local.mtimeMs > remoteTimeOf(remote)) {
+              await this.uploadLocal(key, localContent, local.mtimeMs, remote.id)
               result.uploaded.push(key)
             } else {
-              const content = await this.driveClient.downloadFile(remoteDriveFile.id)
-              const dest = this.resolveLocalFullPath(key)
-              await writeFileAtomicSafe(dest, content)
-              const remoteMtime = remoteMeta.mtimeMs
-              await utimes(dest, new Date(remoteMtime), new Date(remoteMtime)).catch(() => {})
-              remoteManifest.items[key] = {
-                path: key,
-                category: local.category,
-                sha256: sha256Buffer(content),
-                mtimeMs: remoteMtime,
-                size: content.length,
-                driveFileId: remoteDriveFile.id,
-              }
+              await this.downloadRemote(key, remote.id, remoteTimeOf(remote))
               result.downloaded.push(key)
             }
           } else {
-            // Remote file exists on Drive but no manifest entry
-            const remoteContent = await this.driveClient.downloadFile(remoteDriveFile.id)
-            const remoteHash = sha256Buffer(remoteContent)
-            if (remoteHash === localHash) {
-              remoteManifest.items[key] = {
-                path: key,
-                category: local.category,
-                sha256: localHash,
-                mtimeMs: local.mtimeMs,
-                size: local.size,
-                driveFileId: remoteDriveFile.id,
-              }
-            } else if (local.mtimeMs > (remoteDriveFile.modifiedTime ? new Date(remoteDriveFile.modifiedTime).getTime() : 0)) {
-              await this.driveClient.uploadAppDataFile(
-                encodedKey,
-                localContent,
-                'application/octet-stream',
-                remoteDriveFile.id,
-              )
-              remoteManifest.items[key] = {
-                path: key,
-                category: local.category,
-                sha256: localHash,
-                mtimeMs: local.mtimeMs,
-                size: local.size,
-                driveFileId: remoteDriveFile.id,
-              }
-              result.uploaded.push(key)
-            } else {
-              const dest = this.resolveLocalFullPath(key)
-              await writeFileAtomicSafe(dest, remoteContent)
-              const remoteMtime = remoteDriveFile.modifiedTime ? new Date(remoteDriveFile.modifiedTime).getTime() : Date.now()
-              await utimes(dest, new Date(remoteMtime), new Date(remoteMtime)).catch(() => {})
-              remoteManifest.items[key] = {
-                path: key,
-                category: local.category,
-                sha256: remoteHash,
-                mtimeMs: remoteMtime,
-                size: remoteContent.length,
-                driveFileId: remoteDriveFile.id,
-              }
-              result.downloaded.push(key)
-            }
+            result.conflicts.push({
+              key,
+              category,
+              localMtimeMs: local.mtimeMs,
+              remoteMtimeMs: remoteTimeOf(remote),
+              driveFileId: remote.id,
+            })
           }
-        } catch (err: unknown) {
-          result.errors.push({ path: key, error: err instanceof Error ? err.message : String(err) })
-        }
-      }
-
-      for (const [key, item] of Object.entries(remoteManifest.items)) {
-        if (!options.categories.includes(item.category)) continue
-        if (localFiles.has(key)) continue
-        const encodedKey = encodeURIComponent(key)
-        const remoteDriveFile = item.driveFileId
-          ? { id: item.driveFileId }
-          : remoteByName.get(encodedKey)
-        if (!remoteDriveFile) continue
-        try {
-          const content = await this.driveClient.downloadFile(remoteDriveFile.id)
-          const dest = this.resolveLocalFullPath(key)
-          await writeFileAtomicSafe(dest, content)
-          const remoteMtime = item.mtimeMs
-          await utimes(dest, new Date(remoteMtime), new Date(remoteMtime)).catch(() => {})
-          remoteManifest.items[key] = {
-            path: key,
-            category: item.category,
-            sha256: sha256Buffer(content),
-            mtimeMs: remoteMtime,
-            size: content.length,
-            driveFileId: remoteDriveFile.id,
-          }
+        } else if (local) {
+          const content = await readFile(local.fullPath)
+          await this.uploadLocal(key, content, local.mtimeMs)
+          result.uploaded.push(key)
+        } else if (category === 'sessions') {
+          await this.downloadRemote(key, remote!.id, remoteTimeOf(remote!))
           result.downloaded.push(key)
-        } catch (err: unknown) {
-          result.errors.push({ path: key, error: err instanceof Error ? err.message : String(err) })
+        } else {
+          result.conflicts.push({
+            key,
+            category,
+            localMtimeMs: 0,
+            remoteMtimeMs: remoteTimeOf(remote!),
+            driveFileId: remote!.id,
+          })
         }
+      } catch (error) {
+        result.errors.push({ path: key, error: error instanceof Error ? error.message : String(error) })
       }
-
-      remoteManifest.lastSyncTime = Date.now()
-      const manifestJson = JSON.stringify(remoteManifest, null, 2)
-      await this.driveClient.uploadAppDataFile(
-        MANIFEST_FILE_NAME,
-        manifestJson,
-        'application/json',
-        remoteManifestFile?.id,
-      )
-    } catch (err: unknown) {
-      result.errors.push({ path: 'global', error: err instanceof Error ? err.message : String(err) })
     }
+
+    if (options.categories.includes('plugins')) {
+      try {
+        result.pendingInstalls = await this.syncPluginRegistry(remoteFiles)
+      } catch (error) {
+        result.errors.push({ path: REGISTRY_KEY, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+
+    // Post-sync remote session view: whatever Drive held plus this run's uploads.
+    const remoteSessionKeys = new Set(
+      [...remoteByKey.keys()].filter(key => categoryOf(key) === 'sessions'),
+    )
+    for (const key of result.uploaded) {
+      if (categoryOf(key) === 'sessions') remoteSessionKeys.add(key)
+    }
+    result.sessionCounts.remote = remoteSessionKeys.size
 
     return result
   }
+
+  /** Resolve a settings conflict by pushing the local file over the Drive copy. */
+  async uploadOverwrite(conflict: SyncConflict): Promise<string> {
+    const localPath = this.resolveLocalFullPath(conflict.key)
+    const content = await readFile(localPath)
+    const st = await stat(localPath)
+    await this.uploadLocal(conflict.key, content, st.mtimeMs, conflict.driveFileId)
+    return conflict.key
+  }
+
+  /** Resolve a settings conflict by taking the Drive copy into the local tree. */
+  async downloadOverwrite(conflict: SyncConflict): Promise<string> {
+    await this.downloadRemote(conflict.key, conflict.driveFileId, conflict.remoteMtimeMs)
+    return conflict.key
+  }
+
+  /** Delete every file in appDataFolder so a fresh sync republishes cleanly. */
+  async resetCloud(): Promise<number> {
+    const files = await this.driveClient.listAppDataFiles()
+    let deleted = 0
+    for (const file of files) {
+      await this.driveClient.deleteFile(file.id)
+      deleted += 1
+    }
+    return deleted
+  }
+
+  private async uploadLocal(key: string, content: Buffer, mtimeMs: number, existingFileId?: string): Promise<void> {
+    await this.driveClient.uploadAppDataFile(
+      encodeRemoteName(key),
+      content,
+      'application/octet-stream',
+      existingFileId,
+      {
+        [PROP_HASH]: sha256Buffer(content),
+        [PROP_MTIME]: String(Math.round(mtimeMs)),
+      },
+    )
+  }
+
+  private async downloadRemote(key: string, driveFileId: string, mtimeMs: number): Promise<void> {
+    const content = await this.driveClient.downloadFile(driveFileId)
+    const dest = this.resolveLocalFullPath(key)
+    await writeFileAtomicSafe(dest, content)
+    await utimes(dest, new Date(mtimeMs || Date.now()), new Date(mtimeMs || Date.now())).catch(() => {})
+    await this.stampProperties(driveFileId, sha256Buffer(content), mtimeMs)
+  }
+
+  private async stampProperties(driveFileId: string, hash: string, mtimeMs: number): Promise<void> {
+    await this.driveClient.patchAppProperties(driveFileId, {
+      [PROP_HASH]: hash,
+      [PROP_MTIME]: String(Math.round(mtimeMs)),
+    })
+  }
+
+  /**
+   * Merge the remote install registry with locally installed plugins.
+   * Returns the remote-but-not-local records for the UI install list.
+   */
+  private async syncPluginRegistry(remoteFiles: GoogleDriveFile[]): Promise<SyncPendingInstall[]> {
+    const registryFile = remoteFiles.find(file => file.name === encodeRemoteName(REGISTRY_KEY))
+    let remoteRecords: PluginRegistryRecord[] = []
+    if (registryFile) {
+      try {
+        const parsed: unknown = JSON.parse((await this.driveClient.downloadFile(registryFile.id)).toString('utf8'))
+        if (Array.isArray(parsed)) {
+          remoteRecords = parsed.filter(isRegistryRecord)
+        }
+      } catch {
+        remoteRecords = []
+      }
+    }
+    const installed = await this.listInstalledPlugins()
+    const installedNames = new Set(installed.map(plugin => plugin.name))
+    const pending: SyncPendingInstall[] = []
+    for (const record of remoteRecords) {
+      if (installedNames.has(record.name)) continue
+      pending.push({ name: record.name, installSpec: record.installSpec, ...(record.version !== undefined ? { version: record.version } : {}) })
+    }
+    const union = new Map<string, PluginRegistryRecord>()
+    for (const record of remoteRecords) {
+      const existing = union.get(record.name)
+      if (!existing || record.installedAt >= existing.installedAt) union.set(record.name, record)
+    }
+    for (const plugin of installed) {
+      const existing = union.get(plugin.name)
+      if (!existing || Date.now() >= existing.installedAt) {
+        union.set(plugin.name, {
+          name: plugin.name,
+          installSpec: plugin.installSpec,
+          ...(plugin.version !== undefined ? { version: plugin.version } : {}),
+          installedAt: Date.now(),
+        })
+      }
+    }
+    await this.driveClient.uploadAppDataFile(
+      encodeRemoteName(REGISTRY_KEY),
+      JSON.stringify([...union.values()], null, 2),
+      'application/json',
+      registryFile?.id,
+      { [PROP_HASH]: sha256Buffer(Buffer.from(JSON.stringify([...union.values()], null, 2), 'utf8')), [PROP_MTIME]: String(Date.now()) },
+    )
+    return pending
+  }
+
+  /** Read third-party plugins from the profile manifest, mirroring the market view. */
+  async listInstalledPlugins(): Promise<Array<{ name: string; installSpec: string; version?: string }>> {
+    const manifestPath = join(this.profileDir, 'package.json')
+    let manifest: Record<string, unknown>
+    try {
+      manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>
+    } catch {
+      return []
+    }
+    const dsh = typeof manifest.dsh === 'object' && manifest.dsh !== null ? manifest.dsh as Record<string, unknown> : {}
+    const profile = typeof dsh.profile === 'object' && dsh.profile !== null ? dsh.profile as Record<string, unknown> : {}
+    const bundles = Array.isArray(profile.bundles) ? profile.bundles.filter((b): b is string => typeof b === 'string') : []
+    const dependencies = typeof manifest.dependencies === 'object' && manifest.dependencies !== null ? manifest.dependencies as Record<string, unknown> : {}
+    const result: Array<{ name: string; installSpec: string; version?: string }> = []
+    for (const name of desktopThirdPartyBundles(bundles)) {
+      // First-party desktop bundles (host plugins mounted under the desktop package) are not user plugins.
+      if (name === 'harnessx-desktop' || name.startsWith('harnessx-desktop/')) continue
+      const requested = typeof dependencies[name] === 'string' ? dependencies[name] as string : undefined
+      const version = await this.installedVersion(name)
+      result.push({ name, installSpec: deriveInstallSpec(name, requested, version), ...(version !== undefined ? { version } : {}) })
+    }
+    return result
+  }
+
+  private async installedVersion(name: string): Promise<string | undefined> {
+    try {
+      const value: unknown = JSON.parse(await readFile(join(this.profileDir, 'node_modules', ...name.split('/'), 'package.json'), 'utf8'))
+      if (value !== null && typeof value === 'object' && typeof (value as Record<string, unknown>).version === 'string') {
+        return (value as Record<string, unknown>).version as string
+      }
+    } catch {}
+    return undefined
+  }
+}
+
+interface PluginRegistryRecord {
+  name: string
+  installSpec: string
+  version?: string
+  installedAt: number
+}
+
+function isRegistryRecord(value: unknown): value is PluginRegistryRecord {
+  if (value === null || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  return typeof record.name === 'string' && typeof record.installSpec === 'string' && Number.isFinite(record.installedAt)
+}
+
+/** Derive a portable install spec from the profile dependency declaration. */
+function deriveInstallSpec(name: string, requested: string | undefined, version: string | undefined): string {
+  if (requested === undefined) return version !== undefined ? `${name}@${version}` : name
+  if (requested.startsWith('github:')) return requested
+  if (/^[\^~]?\d/.test(requested)) return version !== undefined ? `${name}@${version}` : `${name}@${requested.replace(/^[\^~]/u, '')}`
+  if (requested.startsWith('file:')) return version !== undefined ? `${name}@${version}` : name
+  return requested
 }

@@ -240,22 +240,29 @@ export class GoogleDriveClient {
 
   async listAppDataFiles(): Promise<GoogleDriveFile[]> {
     const token = await this.ensureFreshToken()
-    const url = new URL(`${GOOGLE_DRIVE_API_BASE}/files`)
-    url.searchParams.set('spaces', 'appDataFolder')
-    url.searchParams.set('pageSize', '1000')
-    url.searchParams.set('fields', 'nextPageToken, files(id, name, modifiedTime, md5Checksum, size, appProperties)')
+    const files: GoogleDriveFile[] = []
+    let pageToken: string | undefined
+    do {
+      const url = new URL(`${GOOGLE_DRIVE_API_BASE}/files`)
+      url.searchParams.set('spaces', 'appDataFolder')
+      url.searchParams.set('pageSize', '1000')
+      url.searchParams.set('fields', 'nextPageToken, files(id, name, modifiedTime, md5Checksum, size, appProperties)')
+      if (pageToken) url.searchParams.set('pageToken', pageToken)
 
-    const res = await fetch(url.href, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
+      const res = await fetch(url.href, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
 
-    if (!res.ok) {
-      const errText = await res.text()
-      throw new Error(`Failed to list appDataFolder files (${res.status}): ${errText}`)
-    }
+      if (!res.ok) {
+        const errText = await res.text()
+        throw new Error(`Failed to list appDataFolder files (${res.status}): ${errText}`)
+      }
 
-    const data = (await res.json()) as { files?: GoogleDriveFile[] }
-    return data.files ?? []
+      const data = (await res.json()) as { nextPageToken?: string; files?: GoogleDriveFile[] }
+      files.push(...(data.files ?? []))
+      pageToken = data.nextPageToken
+    } while (pageToken)
+    return files
   }
 
   async uploadAppDataFile(
@@ -263,6 +270,7 @@ export class GoogleDriveClient {
     content: string | Buffer,
     mimeType = 'application/octet-stream',
     existingFileId?: string,
+    appProperties?: Record<string, string>,
   ): Promise<GoogleDriveFile> {
     const token = await this.ensureFreshToken()
     const boundary = `-------HarnessXSync${Date.now()}`
@@ -272,6 +280,9 @@ export class GoogleDriveClient {
     const metadata: Record<string, unknown> = { name }
     if (!existingFileId) {
       metadata.parents = ['appDataFolder']
+    }
+    if (appProperties) {
+      metadata.appProperties = appProperties
     }
 
     const payloadBuffer = typeof content === 'string' ? Buffer.from(content, 'utf8') : content
@@ -319,6 +330,24 @@ export class GoogleDriveClient {
     }
     const arrayBuffer = await res.arrayBuffer()
     return Buffer.from(arrayBuffer)
+  }
+
+  async patchAppProperties(fileId: string, properties: Record<string, string>): Promise<void> {
+    const token = await this.ensureFreshToken()
+    const url = new URL(`${GOOGLE_DRIVE_API_BASE}/files/${fileId}`)
+    url.searchParams.set('fields', 'appProperties')
+    const res = await fetch(url.href, {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ appProperties: properties }),
+    })
+    if (!res.ok) {
+      const err = await res.text()
+      throw new Error(`Failed to patch appProperties for ${fileId} (${res.status}): ${err}`)
+    }
   }
 
   async deleteFile(fileId: string): Promise<void> {

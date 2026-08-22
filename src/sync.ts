@@ -21,7 +21,7 @@ import {
 } from './google-drive.ts'
 import type {} from './profile-service.ts'
 import type {} from './runtime.ts'
-import { SyncEngine, type SyncCategory, type SyncResult } from './sync-engine.ts'
+import { SyncEngine, type SyncCategory, type SyncConflict as SyncConflictPayload, type SyncResult } from './sync-engine.ts'
 
 export const name = 'desktop-sync'
 export const inject = ['webServer', 'desktopProfiles', 'desktopRuntime']
@@ -134,7 +134,7 @@ export function apply(ctx: Context, config: Config): void {
       clearInterval(autoSyncTimer)
       autoSyncTimer = undefined
     }
-    if (currentConfig.autoSync && tokens) {
+    if (currentConfig.enabled && currentConfig.autoSync && tokens) {
       const ms = Math.max(5, currentConfig.intervalMinutes) * 60 * 1000
       autoSyncTimer = setInterval(() => {
         void triggerSync()
@@ -143,6 +143,9 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   async function triggerSync(): Promise<SyncResult> {
+    if (!currentConfig.enabled) {
+      throw new Error('Cloud sync is disabled. Enable sync before running it.')
+    }
     if (syncing) {
       throw new Error('Synchronization is already in progress.')
     }
@@ -155,6 +158,37 @@ export function apply(ctx: Context, config: Config): void {
     lastError = undefined
     try {
       const engine = new SyncEngine(dshHome, profileDir, client)
+      const res = await engine.sync({ categories: currentConfig.categories })
+      lastSyncResult = res
+      lastSyncTime = res.timestamp
+      return res
+    } catch (err: unknown) {
+      lastError = err instanceof Error ? err.message : String(err)
+      throw err
+    } finally {
+      syncing = false
+    }
+  }
+
+  function getEngine(): SyncEngine {
+    const client = getDriveClient()
+    if (!client) throw new Error('Google Drive is not authenticated.')
+    return new SyncEngine(dshHome, profileDir, client)
+  }
+
+  async function resetCloudAndSync(): Promise<SyncResult> {
+    if (syncing) {
+      throw new Error('Synchronization is already in progress.')
+    }
+    const client = getDriveClient()
+    if (!client) {
+      throw new Error('Google Drive is not authenticated.')
+    }
+    syncing = true
+    lastError = undefined
+    try {
+      const engine = new SyncEngine(dshHome, profileDir, client)
+      await engine.resetCloud()
       const res = await engine.sync({ categories: currentConfig.categories })
       lastSyncResult = res
       lastSyncTime = res.timestamp
@@ -314,12 +348,69 @@ export function apply(ctx: Context, config: Config): void {
       },
     })
 
+    const disposeResolveConflict = ctx.webServer.register({
+      kind: 'exact',
+      path: `${SYNC_ROUTE_PREFIX}/conflict/resolve`,
+      handler: async (req, res) => {
+        if (!ctx.desktopRuntime.authorizeLocalApiRequest(req)) {
+          sendJson(res, 401, { error: 'unauthorized' })
+          return
+        }
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { error: 'Method Not Allowed' })
+          return
+        }
+        try {
+          const body = await readJsonBody(req) as { direction?: string; conflict?: SyncConflictPayload }
+          const conflict = body.conflict
+          if (!conflict || typeof conflict.key !== 'string' || typeof conflict.driveFileId !== 'string') {
+            sendJson(res, 400, { error: 'Missing conflict payload.' })
+            return
+          }
+          if (body.direction === 'upload') {
+            await getEngine().uploadOverwrite(conflict)
+            sendJson(res, 200, { ok: true, resolved: conflict.key, direction: 'upload' })
+          } else if (body.direction === 'download') {
+            await getEngine().downloadOverwrite(conflict)
+            sendJson(res, 200, { ok: true, resolved: conflict.key, direction: 'download' })
+          } else {
+            sendJson(res, 400, { error: 'direction must be "upload" or "download".' })
+          }
+        } catch (err: unknown) {
+          sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) })
+        }
+      },
+    })
+
+    const disposeReset = ctx.webServer.register({
+      kind: 'exact',
+      path: `${SYNC_ROUTE_PREFIX}/reset`,
+      handler: async (req, res) => {
+        if (!ctx.desktopRuntime.authorizeLocalApiRequest(req)) {
+          sendJson(res, 401, { error: 'unauthorized' })
+          return
+        }
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { error: 'Method Not Allowed' })
+          return
+        }
+        try {
+          const result = await resetCloudAndSync()
+          sendJson(res, 200, { ok: true, result })
+        } catch (err: unknown) {
+          sendJson(res, 500, { error: err instanceof Error ? err.message : String(err) })
+        }
+      },
+    })
+
     return () => {
       disposeStatus()
       disposeAuthStart()
       disposeAuthLogout()
       disposeConfig()
       disposeTrigger()
+      disposeResolveConflict()
+      disposeReset()
       if (activeAuthFlow) {
         activeAuthFlow.close()
         activeAuthFlow = undefined
