@@ -49,10 +49,6 @@
       "types": "./lib/types/profile-service.d.ts",
       "default": "./lib/profile-service.js"
     },
-    "./profiles": {
-      "types": "./lib/types/profiles.d.ts",
-      "default": "./lib/profiles.js"
-    },
     "./credentials": {
       "types": "./lib/types/credentials.d.ts",
       "default": "./lib/credentials.js"

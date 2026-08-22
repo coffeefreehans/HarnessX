@@ -65,10 +65,7 @@ describe('published package surface', () => {
       types: './lib/types/profile-service.d.ts',
       default: './lib/profile-service.js',
     })
-    expect(manifest.exports).toHaveProperty('./profiles', {
-      types: './lib/types/profiles.d.ts',
-      default: './lib/profiles.js',
-    })
+    expect(manifest.exports).not.toHaveProperty('./profiles')
     expect(manifest.exports).toHaveProperty('./credentials', {
       types: './lib/types/credentials.d.ts',
       default: './lib/credentials.js',
@@ -95,7 +92,7 @@ describe('published package surface', () => {
     expect(readFileSync(new URL('cordis.patch.yml', packageRoot), 'utf8')).toContain('name: harnessx-desktop')
     expect(readFileSync(new URL('cordis.patch.yml', packageRoot), 'utf8')).toContain('name: harnessx-desktop/terminal')
     expect(readFileSync(new URL('cordis.patch.yml', packageRoot), 'utf8')).toContain('name: harnessx-desktop/pnpm')
-    expect(readFileSync(new URL('cordis.patch.yml', packageRoot), 'utf8')).toContain('name: harnessx-desktop/profiles')
+    expect(readFileSync(new URL('cordis.patch.yml', packageRoot), 'utf8')).not.toContain('name: harnessx-desktop/profiles')
     expect(readFileSync(new URL('cordis.patch.yml', packageRoot), 'utf8')).toContain('name: harnessx-desktop/updates')
   })
 
@@ -115,7 +112,7 @@ describe('published package surface', () => {
     expect(config).toContain("'profile-manager': 'src/profile-manager.ts'")
     expect(config).toContain("'profile-service': 'src/profile-service.ts'")
     expect(config).toContain("pnpm: 'src/pnpm.ts'")
-    expect(config).toContain("profiles: 'src/profiles.ts'")
+    expect(config).not.toContain("profiles: 'src/profiles.ts'")
     expect(config).toContain("credentials: 'src/credentials.ts'")
     expect(config).toContain("terminal: 'src/terminal.ts'")
     expect(config).toContain("'update-download': 'src/update-download.ts'")

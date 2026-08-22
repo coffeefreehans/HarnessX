@@ -146,9 +146,7 @@ describe('desktop profile composition', () => {
     expect(rows.find(row => row.id === 'desktop-updates')).toEqual(expect.objectContaining({
       name: 'harnessx-desktop/updates',
     }))
-    expect(rows.find(row => row.id === 'desktop-profiles')).toEqual(expect.objectContaining({
-      name: 'harnessx-desktop/profiles',
-    }))
+    expect(rows.map(row => row.id)).not.toContain('desktop-profiles')
   })
 
   it('boots a selected Web profile without overriding its compatibility UI rows', () => {

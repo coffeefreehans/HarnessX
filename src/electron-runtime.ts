@@ -47,19 +47,6 @@ export function nextDesktopShellMode(mode: DesktopShellSpec['mode']): DesktopShe
   return mode === 'compatibility' ? 'advanced' : 'compatibility'
 }
 
-/** Return the tray command describing the mode that will be activated. */
-export function modeToggleLabel(mode: DesktopShellSpec['mode']): string {
-  const isZh = (app.getLocale?.() ?? 'zh').toLowerCase().startsWith('zh')
-  if (isZh) {
-    return mode === 'compatibility'
-      ? '切换至高级模式'
-      : '切换至兼容模式'
-  }
-  return mode === 'compatibility'
-    ? 'Switch to Advanced Mode'
-    : 'Switch to Compatibility Mode'
-}
-
 /**
  * Read the desktop package version instead of Electron's development-app version.
  * @param moduleUrl - module below the package's `src` or `lib` directory.
@@ -475,17 +462,9 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
     if (tools.length > 0) template.push({ type: 'separator' }, ...tools)
     if (profiles.length > 0) template.push({ type: 'separator' }, ...profiles)
     if (status.length > 0) template.push({ type: 'separator' }, ...status)
+    // The compatibility/advanced mode toggle stays out of the tray menu until
+    // the desktop-owned advanced presentation ships a visible difference.
     template.push(
-      { type: 'separator' },
-      {
-        label: modeToggleLabel(spec.mode),
-        enabled: this.platform !== 'linux',
-        click: () => {
-          void spec.requestModeChange(nextDesktopShellMode(spec.mode)).catch((cause: unknown) => {
-            process.stderr.write(`harnessx-desktop: failed to change shell mode: ${cause instanceof Error ? cause.message : String(cause)}\n`)
-          })
-        },
-      },
       { type: 'separator' },
       { label: isZh ? '退出' : 'Quit', click: () => { spec.requestQuit(0) } },
     )

@@ -195,9 +195,11 @@ try {
     && !trayItems.some(item => item.label() === (isZh ? '打开 DSH 终端' : 'Open DSH Terminal'))) {
     throw new Error('assembled desktop profile is missing the terminal tray command')
   }
-  const profileMenu = trayItems.find(item => item.label() === (isZh ? '配置方案: desktop' : 'Profile: desktop'))
-  if (profileMenu?.submenu?.()[0]?.label() !== 'desktop') {
-    throw new Error('assembled desktop profile is missing the active profile tray submenu')
+  if (trayItems.some(item => {
+    const label = item.label()
+    return label.includes('配置方案') || label.includes('Profile:')
+  })) {
+    throw new Error('assembled desktop profile unexpectedly exposes the profile selector tray item')
   }
   const response = await fetch(expectedUrl)
   const html = await response.text()

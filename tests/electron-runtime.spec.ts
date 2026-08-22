@@ -296,7 +296,7 @@ describe('Electron compatibility runtime', () => {
     expect(electron.templateIcon.setTemplateImage).toHaveBeenCalledWith(true)
     expect(electron.trays[0]?.image).toBe(electron.templateIcon)
     expect(electron.menuTemplates[0]).toEqual(expect.arrayContaining([
-      expect.objectContaining({ label: 'Switch to Advanced Mode', enabled: true }),
+      expect.objectContaining({ label: 'Open HarnessX' }),
     ]))
 
     const titleListener = electron.browserWindowOn.mock.calls.find(([event]) => event === 'page-title-updated')?.[1]
@@ -370,7 +370,7 @@ describe('Electron compatibility runtime', () => {
     await release()
   })
 
-  it('persists the opposite mode when its tray command is clicked', async () => {
+  it('keeps the mode toggle out of the tray menu until advanced presents a visible difference', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
     const { ElectronDesktopRuntime } = await import('../src/electron-runtime.ts')
     const requestModeChange = vi.fn(async () => {})
@@ -378,11 +378,10 @@ describe('Electron compatibility runtime', () => {
     const release = runtime.schedule({ ...spec, requestModeChange })
 
     await runtime.mountScheduled()
-    const item = (electron.menuTemplates[0] as Array<{ label?: string, click?: () => void }>)
-      .find(candidate => candidate.label === 'Switch to Advanced Mode')
-    expect(item).toBeDefined()
-    item?.click?.()
-    await vi.waitFor(() => { expect(requestModeChange).toHaveBeenCalledWith('advanced') })
+    const labels = (electron.menuTemplates[0] as Array<{ label?: string }>).map(item => item.label)
+    expect(labels).not.toContain('Switch to Advanced Mode')
+    expect(labels).not.toContain('切换至高级模式')
+    expect(requestModeChange).not.toHaveBeenCalled()
 
     await release()
   })
@@ -420,7 +419,6 @@ describe('Electron compatibility runtime', () => {
       'Open HarnessX', undefined,
       'Earlier Tool', 'Later Tool', undefined,
       'Check for Updates…', undefined,
-      'Switch to Advanced Mode', undefined,
       'Quit',
     ])
     expect(electron.menuTemplates.at(-1)).toEqual(expect.arrayContaining([
@@ -739,7 +737,7 @@ describe('Electron compatibility runtime', () => {
       vibrancy: 'sidebar',
     }))
     expect(electron.menuTemplates[0]).toEqual(expect.arrayContaining([
-      expect.objectContaining({ label: 'Switch to Compatibility Mode', enabled: true }),
+      expect.objectContaining({ label: 'Quit' }),
     ]))
 
     runtime.setThemeSource('system')

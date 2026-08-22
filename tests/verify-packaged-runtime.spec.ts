@@ -112,7 +112,7 @@ describe('packaged desktop runtime verification', () => {
     const runtimeContext = context('/build', 'win32')
     const unpackedRoot = resolvePackagedUnpackedRoot(runtimeContext)
     const resolvePackage = vi.fn<PackageResolver>((specifier) => {
-      if (specifier === 'harnessx-desktop/profiles') {
+      if (specifier === 'harnessx-desktop/updates') {
         throw new Error('missing export')
       }
       return completePackageResolver(unpackedRoot)(specifier)
@@ -124,7 +124,7 @@ describe('packaged desktop runtime verification', () => {
       () => true,
       resolvePackage,
     )).toThrow(
-      `packaged runtime at ${unpackedRoot} cannot resolve required package export harnessx-desktop/profiles`,
+      `packaged runtime at ${unpackedRoot} cannot resolve required package export harnessx-desktop/updates`,
     )
   })
 

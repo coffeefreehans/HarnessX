@@ -9,7 +9,9 @@ import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import z from '@deepseek-ai/schemastery'
-import { shell } from 'electron'
+// Default import: the Host loader also imports this module outside the
+// Electron main process, where named exports of the CJS electron stub break.
+import electron from 'electron'
 import {
   DEFAULT_GOOGLE_CLIENT_ID,
   DEFAULT_GOOGLE_CLIENT_SECRET,
@@ -259,7 +261,7 @@ export function apply(ctx: Context, config: Config): void {
           const authUrl = flow.buildAuthUrl(getOAuthConfig(), redirectUri, pkce.challenge, state)
 
           // Open user's default browser
-          void shell.openExternal(authUrl)
+          void electron.shell.openExternal(authUrl)
 
           // Background wait for callback
           void waitForCode.then(async ({ code }) => {

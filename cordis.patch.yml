@@ -12,8 +12,6 @@
       name: harnessx-desktop/pnpm
     - id: desktop-market
       name: harnessx-desktop/market
-    - id: desktop-profiles
-      name: harnessx-desktop/profiles
     - id: desktop-updates
       name: harnessx-desktop/updates
     - id: desktop-sync
