@@ -383,12 +383,10 @@ export function apply(ctx: Context): void {
           const label = parseOptionalJobLabel(body.label) ?? installLabel(install)
           ensureProfilePackage(profileDir, profileName)
           await ensureProfilePnpmWorkspace(profileDir)
-          const githubPluginDir = install.startsWith('github:')
+          const githubPlan = install.startsWith('github:')
             ? await prepareGithubInstall(install, profileDir)
             : undefined
-          const installSpec = githubPluginDir === undefined
-            ? install
-            : pathToFileURL(githubPluginDir).href
+          const installSpec = githubPlan === undefined ? install : githubPlan.installSpec
           const job = enqueueJob(jobs, {
             action: 'install',
             label,
@@ -1097,12 +1095,9 @@ function parseAwesomePlugin(value: unknown): MarketManifestPlugin | undefined {
   if (name === undefined) return undefined
   const owner = optionalString(value.owner)
   const repository = optionalString(value.url)
-  const npmPackage = optionalString(value.npm)
-  const install = npmPackage ?? deriveGithubInstall({
-    owner,
-    name,
-    url: repository,
-  })
+  // Source-only checkouts cannot load under `--ignore-scripts`; only rows
+  // naming a published npm package are installable, so filter the rest out.
+  const install = optionalString(value.npm)
   if (install === undefined) return undefined
   const id = owner === undefined ? name : `${owner}/${name}`
   return {
@@ -1138,11 +1133,15 @@ function parseRegistryPlugin(value: unknown): MarketManifestPlugin | undefined {
     ?? optionalString(value.repo)
     ?? fullName.split('/').at(-1)
     ?? fullName
-  const installValue = installRecord === undefined ? undefined : optionalString(installRecord.spec)
-  const install = installValue ?? deriveGithubInstall({
-    fullName,
-    url: optionalString(value.htmlUrl),
-  })
+  // Only npm-backed rows are installable: published releases carry built
+  // artifacts, while source checkouts under `--ignore-scripts` do not and
+  // cannot load, so source-only rows are filtered out of the catalog.
+  const packageName = optionalString(value.packageName)
+  if (packageName === undefined) return undefined
+  const installRecordSpec = installRecord === undefined ? undefined : optionalString(installRecord.spec)
+  const install = installRecordSpec !== undefined && !installRecordSpec.startsWith('github:')
+    ? installRecordSpec
+    : packageName
   if (install === undefined) return undefined
   return {
     id: fullName,
@@ -1172,14 +1171,9 @@ function parseMarketplaceEntry(value: unknown): MarketManifestPlugin | undefined
   if (fullName === undefined) return undefined
   const packageName = optionalString(pkg.name)
   const name = packageName ?? fullName.split('/').at(-1) ?? fullName
-  const source = isRecord(value.source) ? value.source : undefined
-  const install = source?.kind === 'npm' && packageName !== undefined
-    ? packageName
-    : deriveGithubInstall({
-        fullName,
-        url: optionalString(repository.url),
-      })
-  if (install === undefined) return undefined
+  // Only npm-backed rows are installable; source-only checkouts are filtered.
+  if (packageName === undefined) return undefined
+  const install = packageName
   return {
     id: fullName,
     name,
@@ -1203,15 +1197,14 @@ function parseRepoPlugin(value: unknown): MarketManifestPlugin | undefined {
   if (value.installable === 'non-plugin' || value.installable === 'manual') return undefined
   const fullName = optionalString(value.full_name)
   if (fullName === undefined) return undefined
-  const name = optionalString(value.pkg_name)
+  // Only npm-backed rows are installable; source-only checkouts are filtered.
+  const packageName = optionalString(value.pkg_name)
+  if (packageName === undefined) return undefined
+  const name = packageName
     ?? optionalString(value.name)
     ?? fullName.split('/').at(-1)
     ?? fullName
-  const install = deriveGithubInstall({
-    fullName,
-    url: optionalString(value.html_url),
-  })
-  if (install === undefined) return undefined
+  const install = packageName
   return {
     id: fullName,
     name,
@@ -1248,28 +1241,6 @@ function parseMany(
     throw new Error(`${label} contains no valid plugin entries`)
   }
   return plugins
-}
-
-/** Derive a `github:owner/repo` install specification from common source fields. */
-function deriveGithubInstall(value: Record<string, unknown>): string | undefined {
-  const url = optionalString(value.url)
-  if (url !== undefined) {
-    try {
-      return `github:${parseGitHubRepository(url)}`
-    } catch {
-      // Fall through to the structured owner/repository fields.
-    }
-  }
-  const fullName = optionalString(value.fullName)
-  if (fullName !== undefined && /^[\w.-]+\/[\w.-]+$/u.test(fullName)) {
-    return `github:${fullName}`
-  }
-  const owner = optionalString(value.owner)
-  const name = optionalString(value.name)
-  if (owner !== undefined && name !== undefined && /^[\w.-]+$/u.test(owner) && /^[\w.-]+$/u.test(name)) {
-    return `github:${owner}/${name}`
-  }
-  return undefined
 }
 
 /** Return the most useful description from either a string or localized object. */
@@ -1488,8 +1459,21 @@ function runGitCloneProcess(args: readonly string[], cwd: string): Promise<void>
   })
 }
 
-/** Clone a GitHub plugin into a stable profile-owned directory for `file:` installation. */
-async function prepareGithubInstall(install: string, profileDir: string): Promise<string> {
+/** Resolved installation plan for a `github:` spec. */
+interface GithubInstallPlan {
+  /** Spec handed to pnpm: a local `file:` URL or an npm `name@version`. */
+  installSpec: string
+  /** True when the source checkout had no built entry and npm publishes one. */
+  fallbackToNpm: boolean
+}
+
+/**
+ * Clone a GitHub plugin into a stable profile-owned directory.
+ * Source-only repositories (no built entry file, since `--ignore-scripts`
+ * never runs their build) transparently fall back to the author's published
+ * npm package, which carries the built artifacts.
+ */
+async function prepareGithubInstall(install: string, profileDir: string): Promise<GithubInstallPlan> {
   const { owner, repo, ref } = parseGithubInstallSpec(install)
   const cloneUrl = `https://github.com/${owner}/${repo}.git`
   const pluginsDir = join(profileDir, '.harnessx-desktop', 'plugins')
@@ -1504,13 +1488,65 @@ async function prepareGithubInstall(install: string, profileDir: string): Promis
       await runGitCloneProcess(['-C', stagingTarget, 'checkout', '--detach', ref], stagingTarget)
     }
     await assertDshPluginDirectory(stagingTarget)
+    const manifest = JSON.parse(await readFile(join(stagingTarget, 'package.json'), 'utf8')) as {
+      name?: unknown
+      version?: unknown
+      main?: unknown
+    }
+    const entry = typeof manifest.main === 'string' && manifest.main.length > 0 ? manifest.main : 'index.js'
+    const hasBuiltEntry = existsSync(join(stagingTarget, entry))
+    let installSpec: string
+    if (hasBuiltEntry) {
+      installSpec = ''
+    } else {
+      const name = typeof manifest.name === 'string' ? manifest.name : ''
+      if (name.length === 0) {
+        throw new Error('github plugin ships no built entry file and declares no package name for an npm fallback')
+      }
+      installSpec = await resolveNpmFallbackSpec(
+        name,
+        typeof manifest.version === 'string' ? manifest.version : undefined,
+      )
+    }
     await rm(finalTarget, { recursive: true, force: true })
     await rename(stagingTarget, finalTarget)
-    return finalTarget
+    return {
+      installSpec: hasBuiltEntry ? pathToFileURL(finalTarget).href : installSpec,
+      fallbackToNpm: !hasBuiltEntry,
+    }
   } catch (cause) {
     await rm(stagingTarget, { recursive: true, force: true }).catch(() => undefined)
     throw cause
   }
+}
+
+/** Find the author's published npm release for a source-only GitHub checkout. */
+async function resolveNpmFallbackSpec(name: string, version: string | undefined): Promise<string> {
+  const url = new URL(`https://registry.npmjs.org/${encodeURIComponent(name)}`)
+  let body: unknown
+  try {
+    body = await fetchJson(url, AbortSignal.timeout(15_000))
+  } catch {
+    throw new Error(
+      `github repository ships no built entry file and ${name} could not be resolved on npm; `
+      + 'install the npm release instead',
+    )
+  }
+  if (!isRecord(body)) {
+    throw new Error(`npm registry returned an unexpected document for ${name}`)
+  }
+  const versions = isRecord(body.versions) ? body.versions : {}
+  const distTags = isRecord(body['dist-tags']) ? body['dist-tags'] : {}
+  const requested = version !== undefined && versions[version] !== undefined ? version : undefined
+  const latest = typeof distTags.latest === 'string' ? distTags.latest : undefined
+  const chosen = requested ?? latest ?? Object.keys(versions).at(-1)
+  if (chosen === undefined) {
+    throw new Error(
+      `github repository ships no built entry file and ${name} has no npm releases; `
+      + 'the plugin needs a prebuilt release before it can be installed',
+    )
+  }
+  return `${name}@${chosen}`
 }
 
 /** Reject a repository that does not declare a loadable DeepSeek Harness bundle. */

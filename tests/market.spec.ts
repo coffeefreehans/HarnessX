@@ -53,17 +53,23 @@ describe('market manifest validation', () => {
       plugins: [{ name: 'example-plugin', owner: 'owner', url: 'https://github.com/owner/example-plugin', npm: 'example-plugin' }],
     }).plugins[0]).toMatchObject({ id: 'owner/example-plugin', install: 'example-plugin' })
 
-    expect(parseMarketManifest({
-      plugins: [{ fullName: 'owner/example-plugin', repo: 'example-plugin', install: { mode: 'automatic', spec: 'github:owner/example-plugin' } }],
-    }).plugins[0]).toMatchObject({ id: 'owner/example-plugin', install: 'github:owner/example-plugin' })
+    // Registry rows install from their npm package; source-only github rows are filtered out.
+    const registry = parseMarketManifest({
+      plugins: [
+        { fullName: 'owner/example-plugin', packageName: 'example-plugin', repo: 'example-plugin', install: { mode: 'automatic', spec: 'github:owner/example-plugin' } },
+        { fullName: 'owner/source-only', repo: 'source-only', install: { mode: 'automatic', spec: 'github:owner/source-only' } },
+      ],
+    })
+    expect(registry.plugins).toHaveLength(1)
+    expect(registry.plugins[0]).toMatchObject({ id: 'owner/example-plugin', install: 'example-plugin' })
 
     expect(parseMarketManifest({
       entries: [{ repository: { fullName: 'owner/example-plugin', url: 'https://github.com/owner/example-plugin' }, package: { name: 'example-plugin', version: '1.0.0' } }],
-    }).plugins[0]).toMatchObject({ id: 'owner/example-plugin', install: 'github:owner/example-plugin' })
+    }).plugins[0]).toMatchObject({ id: 'owner/example-plugin', install: 'example-plugin' })
 
     expect(parseMarketManifest({
-      repos: [{ full_name: 'owner/example-plugin', name: 'example-plugin', html_url: 'https://github.com/owner/example-plugin' }],
-    }).plugins[0]).toMatchObject({ id: 'owner/example-plugin', install: 'github:owner/example-plugin' })
+      repos: [{ full_name: 'owner/example-plugin', pkg_name: 'example-plugin', name: 'example-plugin', html_url: 'https://github.com/owner/example-plugin' }],
+    }).plugins[0]).toMatchObject({ id: 'owner/example-plugin', install: 'example-plugin' })
   })
 
   it('rejects malformed manifests and malformed plugin entries', () => {
