@@ -25,7 +25,7 @@ import { desktopInstallAnchor, desktopThirdPartyBundles } from './profile.ts'
 const BIN_NAME = 'harnessx-desktop'
 const MARKET_ROUTE = '/api/desktop/market'
 const MAX_JSON_BODY_BYTES = 256 * 1024
-const MAX_FETCH_BODY_BYTES = 8 * 1024 * 1024
+const MAX_FETCH_BODY_BYTES = 64 * 1024 * 1024
 const MAX_JOB_OUTPUT_LINES = 200
 const DEFAULT_NPM_QUERY = 'deepseek-harness'
 const REQUEST_TIMEOUT_MS = 30_000
