@@ -154,7 +154,9 @@ export function apply(ctx: Context, config: Config): void {
       const engine = new SyncEngine(dshHome, profileDir, client)
       const res = await engine.sync({ categories: currentConfig.categories })
       lastSyncResult = res
-      lastSyncTime = res.timestamp
+      // Show the Drive-server time of the newest cloud write so every machine
+      // displays the same moment (e.g. the other computer's upload time).
+      lastSyncTime = res.lastRemoteChangeMs > 0 ? res.lastRemoteChangeMs : res.timestamp
       return res
     } catch (err: unknown) {
       lastError = err instanceof Error ? err.message : String(err)
@@ -185,7 +187,7 @@ export function apply(ctx: Context, config: Config): void {
       await engine.resetCloud()
       const res = await engine.sync({ categories: currentConfig.categories })
       lastSyncResult = res
-      lastSyncTime = res.timestamp
+      lastSyncTime = res.lastRemoteChangeMs > 0 ? res.lastRemoteChangeMs : res.timestamp
       return res
     } catch (err: unknown) {
       lastError = err instanceof Error ? err.message : String(err)

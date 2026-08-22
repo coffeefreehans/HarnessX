@@ -171,6 +171,8 @@ describe('Google Drive Sync & Auth', () => {
     expect(await readFile(remoteNewerPath)).toEqual(remoteNewerContent)
     // And Drive holds the locally-continued bytes exactly.
     expect(remoteFiles.get('f-new')?.content).toEqual(localNewer)
+    // The shared "last sync" time is the newest Drive write, not this machine's clock.
+    expect(result.lastRemoteChangeMs).toBeGreaterThanOrEqual(now + 60_000)
     expect(result.errors).toEqual([])
     await rm(home, { recursive: true, force: true })
   })

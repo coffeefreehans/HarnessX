@@ -46,6 +46,8 @@ export interface SyncResult {
   pendingInstalls: SyncPendingInstall[]
   errors: Array<{ path: string; error: string }>
   sessionCounts: { local: number; remote: number }
+  /** Drive-server time of the newest cloud write across all sync files, shared by every machine. */
+  lastRemoteChangeMs: number
   timestamp: number
 }
 
@@ -197,7 +199,11 @@ export class SyncEngine {
       pendingInstalls: [],
       errors: [],
       sessionCounts: { local: 0, remote: 0 },
+      lastRemoteChangeMs: 0,
       timestamp: Date.now(),
+    }
+    const foldChangeTime = (ms: number): void => {
+      if (ms > result.lastRemoteChangeMs) result.lastRemoteChangeMs = ms
     }
 
     let remoteFiles: GoogleDriveFile[]
@@ -212,6 +218,7 @@ export class SyncEngine {
     for (const file of remoteFiles) {
       const key = decodeRemoteName(file.name)
       if (!key) continue
+      foldChangeTime(driveMtime(file))
       const existing = remoteByKey.get(key)
       if (!existing || remoteTimeOf(file) >= remoteTimeOf(existing)) remoteByKey.set(key, file)
     }
@@ -249,7 +256,8 @@ export class SyncEngine {
           }
           if (category === 'sessions') {
             if (local.mtimeMs > remoteTimeOf(remote)) {
-              await this.uploadLocal(key, localContent, local.mtimeMs, remote.id)
+              const uploaded = await this.uploadLocal(key, localContent, local.mtimeMs, remote.id)
+              foldChangeTime(driveMtime(uploaded))
               result.uploaded.push(key)
             } else {
               await this.downloadRemote(key, remote.id, remoteTimeOf(remote))
@@ -266,7 +274,8 @@ export class SyncEngine {
           }
         } else if (local) {
           const content = await readFile(local.fullPath)
-          await this.uploadLocal(key, content, local.mtimeMs)
+          const uploaded = await this.uploadLocal(key, content, local.mtimeMs)
+          foldChangeTime(driveMtime(uploaded))
           result.uploaded.push(key)
         } else if (category === 'sessions') {
           await this.downloadRemote(key, remote!.id, remoteTimeOf(remote!))
@@ -331,8 +340,8 @@ export class SyncEngine {
     return deleted
   }
 
-  private async uploadLocal(key: string, content: Buffer, mtimeMs: number, existingFileId?: string): Promise<void> {
-    await this.driveClient.uploadAppDataFile(
+  private async uploadLocal(key: string, content: Buffer, mtimeMs: number, existingFileId?: string): Promise<GoogleDriveFile> {
+    return await this.driveClient.uploadAppDataFile(
       encodeRemoteName(key),
       content,
       'application/octet-stream',
