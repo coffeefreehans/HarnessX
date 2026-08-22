@@ -213,7 +213,9 @@ try {
     || !marketBody.sources.some(source => source.id === 'npm-registry' && source.kind === 'npm')) {
     throw new Error('assembled desktop profile is missing the plugin market source route')
   }
-  const bootMatch = html.match(/window\.__DSH_BOOT__ = (\{.*?\})<\/script>/u)
+  // Kernels before rc.2 emitted `window.__DSH_BOOT__ = {...}`; rc.2 renders
+  // the same graph as a structured global: `globalThis["__DSH_BOOT__"] = {...}`.
+  const bootMatch = html.match(/(?:window\.__DSH_BOOT__|globalThis\[["']?__DSH_BOOT__["']?\]) = (\{.*?\})<\/script>/u)
   if (bootMatch?.[1] === undefined) {
     throw new Error('assembled Web root is missing window.__DSH_BOOT__')
   }
