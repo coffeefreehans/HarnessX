@@ -156,7 +156,19 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
     const window = this.window
     if (window === undefined || window.isDestroyed()) return
     if (window.isMinimized()) window.restore()
-    window.show()
+    // A process launched by the installer finish page has no foreground
+    // activation rights, so a plain focus() is denied and the window can stay
+    // minimized or behind everything. A brief always-on-top flash forces it
+    // to the front regardless of those rights.
+    const wasAlwaysOnTop = window.isAlwaysOnTop()
+    if (!wasAlwaysOnTop) {
+      window.setAlwaysOnTop(true)
+      window.show()
+      window.setAlwaysOnTop(false)
+    } else {
+      window.show()
+    }
+    window.moveTop()
     window.focus()
   }
 
