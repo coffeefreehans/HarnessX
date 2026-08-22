@@ -2,7 +2,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isAbsolute, join } from 'node:path'
@@ -706,6 +706,22 @@ function exportsProfilePatch(packageName: string, profileDir: string): boolean {
 }
 
 /**
+ * Whether the installed package actually exposes its declared entry file.
+ * Source-only GitHub checkouts installed with `--ignore-scripts` declare
+ * `main: lib/index.js` but never build it; loading such a bundle breaks boot.
+ */
+function exportsLoadableEntry(packageName: string, profileDir: string): boolean {
+  try {
+    const directory = resolveBundleDir(BIN_NAME, packageName, desktopInstallAnchor(), profileDir)
+    const raw = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8')) as { main?: unknown }
+    const entry = typeof raw.main === 'string' && raw.main.length > 0 ? raw.main : 'index.js'
+    return existsSync(join(directory, entry))
+  } catch {
+    return false
+  }
+}
+
+/**
  * Reconcile `dsh.profile.bundles` after pnpm changes profile dependencies.
  * This mirrors the upstream `dsh plugin` reconciliation without spawning it
  * through a Windows shell, so no visible `cmd.exe` window is created.
@@ -721,10 +737,16 @@ function reconcileProfileBundles(before: ReturnType<typeof readProfileManifest>,
   let changed = false
   for (const packageName of dependencies) {
     const isBundle = exportsProfilePatch(packageName, profileDir)
-    if (isBundle && !bundles.includes(packageName)) {
-      bundles.push(packageName)
-      changed = true
+    if (!isBundle) continue
+    if (bundles.includes(packageName)) continue
+    if (!exportsLoadableEntry(packageName, profileDir)) {
+      throw new Error(
+        `plugin ${packageName} has no built entry file (its main is missing under the profile); `
+        + 'it was not enabled. The plugin likely needs a prebuilt release instead of a source checkout.',
+      )
     }
+    bundles.push(packageName)
+    changed = true
   }
   const dependencySet = new Set(dependencies)
   for (let index = bundles.length - 1; index >= 0; index -= 1) {
