@@ -470,6 +470,14 @@ const MARKET_STYLES = `
 .dshMarketButtonGhost:hover { border-color: var(--dsw-alias-accent, #2563eb); color: var(--dsw-alias-accent, #2563eb); }
 .dshMarketError { margin: 0; padding: 12px 14px; border: 1px solid rgb(220 38 38 / 28%); border-radius: 12px; background: rgb(254 226 226 / 65%); color: #b42318; font-size: 13px; line-height: 1.6; }
 .dshMarketNotice { margin: 0 0 8px; padding: 10px 12px; border-radius: 10px; background: var(--dsw-alias-bg-subtle, #f4f4f5); color: var(--dsw-alias-text-secondary, #6e6e7a); font-size: 13px; line-height: 1.5; }
+.dshMarketSourceStatusRow { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
+.dshMarketSourceChip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 1px solid var(--dsw-alias-border-l1, #ececf1); border-radius: 999px; background: var(--dsw-alias-bg-subtle, #f4f4f5); color: var(--dsw-alias-text-secondary, #6e6e7a); font-size: 12px; }
+.dshMarketSourceChipError { border-color: rgb(220 38 38 / 30%); background: rgb(254 242 242 / 75%); color: #b42318; }
+.dshMarketSourceDot { width: 6px; height: 6px; border-radius: 50%; background: #9ca3af; flex-shrink: 0; }
+.dshMarketSourceDotLoading { background: var(--dsw-alias-accent, #2563eb); animation: dshMarketPulse 1s ease-in-out infinite; }
+.dshMarketSourceDotDone { background: #16a34a; }
+.dshMarketSourceDotError { background: #dc2626; }
+@keyframes dshMarketPulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
 .dshMarketNoticeInfo { border: 1px solid var(--dsw-alias-border-l1, #ececf1); background: var(--dsw-alias-bg-subtle, #f4f4f5); color: var(--dsw-alias-text, #17171c); }
 .dshMarketNoticeSuccess { border: 1px solid rgb(22 163 74 / 24%); background: rgb(240 253 244 / 70%); color: #15803d; }
 .dshMarketNoticeError { border: 1px solid rgb(220 38 38 / 22%); background: rgb(254 242 242 / 75%); color: #b42318; }
@@ -711,40 +719,79 @@ function CatalogPanel(props: {
   const { t } = props
   const [query, setQuery] = useState('')
   const [items, setItems] = useState<MarketPlugin[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(false)
+  const [sourceProgress, setSourceProgress] = useState<Record<string, 'loading' | 'done' | 'error'>>({})
+  const [loadedBySource, setLoadedBySource] = useState<Record<string, number>>({})
+  const [totalBySource, setTotalBySource] = useState<Record<string, number>>({})
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | undefined>()
   const [sourceErrors, setSourceErrors] = useState<MarketSourceError[]>([])
   const [selectedPlugin, setSelectedPlugin] = useState<MarketPlugin | undefined>()
   const [preparingInstalls, setPreparingInstalls] = useState<Set<string>>(() => new Set())
   const preparingInstallsRef = useRef(new Set<string>())
+  const requestGeneration = useRef(0)
 
-  const loadPage = async (search: string, offset: number, append: boolean): Promise<void> => {
-    if (append) setLoadingMore(true)
-    else setLoading(true)
-    setError(undefined)
+  const targetSources = useMemo(() => (
+    props.sourceId !== undefined
+      ? props.sources.filter(source => source.id === props.sourceId)
+      : props.sources.filter(source => source.enabled)
+  ), [props.sourceId, props.sources])
+
+  /** Fetch one page of one source and merge it into the list as soon as it lands. */
+  const fetchSourcePage = async (sourceId: string, search: string, offset: number, generation: number, append: boolean): Promise<void> => {
     try {
       const params = new URLSearchParams({
         query: search,
         limit: '120',
         offset: String(offset),
+        sourceId,
       })
-      if (props.sourceId !== undefined) params.set('sourceId', props.sourceId)
       const result = await requestJson<CatalogResponse>(`/api/desktop/market/catalog?${params}`)
-      setItems(current => append ? [...current, ...result.plugins] : result.plugins)
-      setTotal(result.total)
-      setSourceErrors(result.errors)
+      if (generation !== requestGeneration.current) return
+      setSourceProgress(current => ({ ...current, [sourceId]: 'done' }))
+      setLoadedBySource(current => ({ ...current, [sourceId]: (current[sourceId] ?? 0) + result.plugins.length }))
+      setTotalBySource(current => ({ ...current, [sourceId]: result.total }))
+      setItems(current => {
+        if (!append) return result.plugins
+        const seen = new Set(current.map(plugin => plugin.install))
+        return [...current, ...result.plugins.filter(plugin => !seen.has(plugin.install))]
+      })
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setLoading(false)
-      setLoadingMore(false)
+      if (generation !== requestGeneration.current) return
+      const message = cause instanceof Error ? cause.message : String(cause)
+      setSourceProgress(current => ({ ...current, [sourceId]: 'error' }))
+      setSourceErrors(current => [...current, { sourceId, sourceName: sourceId, message }])
     }
   }
 
+  /** Load every target source in parallel; each renders independently as it arrives. */
+  const loadAll = async (search: string): Promise<void> => {
+    requestGeneration.current += 1
+    const generation = requestGeneration.current
+    setItems([])
+    setSourceErrors([])
+    setError(undefined)
+    setLoadedBySource({})
+    setTotalBySource({})
+    setSourceProgress(Object.fromEntries(targetSources.map(source => [source.id, 'loading' as const])))
+    await Promise.all(targetSources.map(source => fetchSourcePage(source.id, search, 0, generation, false)))
+  }
+
+  /** Pull the next page from every source that still has more results. */
+  const loadMore = async (): Promise<void> => {
+    const search = query
+    requestGeneration.current += 1
+    const generation = requestGeneration.current
+    setLoadingMore(true)
+    setError(undefined)
+    const pending = targetSources.filter(source =>
+      sourceProgress[source.id] === 'done' && (loadedBySource[source.id] ?? 0) < (totalBySource[source.id] ?? 0))
+    await Promise.all(pending.map(source =>
+      fetchSourcePage(source.id, search, loadedBySource[source.id] ?? 0, generation, true)))
+    setLoadingMore(false)
+  }
+
   useEffect(() => {
-    void loadPage('', 0, false)
+    void loadAll('')
   }, [props.sourceId])
 
   const runInstall = async (plugin: MarketPlugin): Promise<void> => {
@@ -774,9 +821,17 @@ function CatalogPanel(props: {
       const leftInstalled = isPluginInstalled(left, props.installedNames)
       const rightInstalled = isPluginInstalled(right, props.installedNames)
       if (leftInstalled !== rightInstalled) return leftInstalled ? -1 : 1
-      return 0
+      const stars = (right.stars ?? 0) - (left.stars ?? 0)
+      if (stars !== 0) return stars
+      return left.name.localeCompare(right.name)
     })
   ), [items, props.installedNames])
+
+  const anyLoading = targetSources.some(source => sourceProgress[source.id] === 'loading')
+  const totalKnown = Object.values(totalBySource).reduce((sum, value) => sum + value, 0)
+  const hasMore = targetSources.some(source =>
+    sourceProgress[source.id] === 'done' && (loadedBySource[source.id] ?? 0) < (totalBySource[source.id] ?? 0))
+  const sourceNameById = new Map(props.sources.map(source => [source.id, source.name]))
 
   if (selectedPlugin !== undefined) {
     const job = pluginJob(selectedPlugin, props.jobs)
@@ -811,7 +866,7 @@ function CatalogPanel(props: {
         </label>
         <form className="dshMarketRow" onSubmit={(event) => {
           event.preventDefault()
-          void loadPage(query, 0, false)
+          void loadAll(query)
         }}>
           <input
             className="dshMarketInput"
@@ -819,8 +874,8 @@ function CatalogPanel(props: {
             onChange={(event) => { setQuery(event.target.value) }}
             placeholder={t('searchPlaceholder')}
           />
-          <button className="dshMarketButtonPrimary" type="submit" disabled={loading}>
-            {loading ? t('loading') : t('search')}
+          <button className="dshMarketButtonPrimary" type="submit" disabled={anyLoading}>
+            {anyLoading ? t('loading') : t('search')}
           </button>
         </form>
       </div>
@@ -828,12 +883,29 @@ function CatalogPanel(props: {
       {sourceErrors.length > 0 && (
         <div className="dshMarketError">
           {sourceErrors.map(sourceError => (
-            <div key={sourceError.sourceId}>{sourceError.sourceName}: {sourceError.message}</div>
+            <div key={sourceError.sourceId}>{sourceNameById.get(sourceError.sourceId) ?? sourceError.sourceName}: {sourceError.message}</div>
           ))}
         </div>
       )}
-      <p className="dshMarketNotice">{t('pluginCount', { total, count: items.length })}</p>
-      {items.length === 0 && !loading && <p className="dshMarketEmpty">{t('noPluginsFound')}</p>}
+      {targetSources.length > 0 && (
+        <div className="dshMarketSourceStatusRow">
+          {targetSources.map(source => {
+            const state = sourceProgress[source.id]
+            return (
+              <span
+                key={source.id}
+                className={`dshMarketSourceChip ${state === 'error' ? 'dshMarketSourceChipError' : ''}`}
+                title={state === 'error' ? sourceErrors.find(item => item.sourceId === source.id)?.message : undefined}
+              >
+                <span className={`dshMarketSourceDot ${state === 'loading' ? 'dshMarketSourceDotLoading' : state === 'error' ? 'dshMarketSourceDotError' : 'dshMarketSourceDotDone'}`} />
+                {source.name}
+              </span>
+            )
+          })}
+        </div>
+      )}
+      <p className="dshMarketNotice">{t('pluginCount', { total: totalKnown, count: items.length })}</p>
+      {items.length === 0 && !anyLoading && <p className="dshMarketEmpty">{t('noPluginsFound')}</p>}
       <div className="dshMarketList">
         {sortedItems.map(plugin => {
           const job = pluginJob(plugin, props.jobs)
@@ -851,14 +923,14 @@ function CatalogPanel(props: {
           )
         })}
       </div>
-      {items.length < total && (
+      {hasMore && (
         <button
           className="dshMarketButtonGhost"
           type="button"
           disabled={loadingMore}
-          onClick={() => { void loadPage(query, items.length, true) }}
+          onClick={() => { void loadMore() }}
         >
-          {loadingMore ? t('loadingMore') : t('loadingMore')}
+          {t('loadingMore')}
         </button>
       )}
     </div>
