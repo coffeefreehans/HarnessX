@@ -75,14 +75,53 @@ describe('client notifications and sound', () => {
     try {
       expect(isWindowUnfocused()).toBe(true)
 
+      const onOpen = vi.fn()
       notifySessionCompleted({
         sessionId: 'test-session-1' as SessionId,
         title: 'Fix Bug',
+        workspace: 'HernessX',
+        onOpen,
       })
 
-      expect(notificationConstructor).toHaveBeenCalledWith('DeepSeek HarnessX', {
-        body: '“Fix Bug” 已完成',
+      expect(notificationConstructor).toHaveBeenCalledWith('Fix Bug', {
+        body: '任务完成 · HernessX',
         tag: 'session-complete-test-session-1',
+      })
+
+      const instance = notificationConstructor.mock.results.at(-1)?.value as { onclick?: () => void }
+      instance.onclick?.()
+      expect(onOpen).toHaveBeenCalledOnce()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('notifies with the approval body when the agent stops for the user', () => {
+    const notificationConstructor = vi.fn(function (this: unknown, title: string, options?: NotificationOptions) {
+      return { title, options, close: vi.fn() }
+    })
+
+    vi.stubGlobal('Notification', Object.assign(notificationConstructor, {
+      permission: 'granted',
+      requestPermission: vi.fn(async () => 'granted'),
+    }))
+
+    vi.stubGlobal('document', {
+      hidden: true,
+      hasFocus: () => false,
+    })
+
+    try {
+      notifySessionCompleted({
+        sessionId: 'test-session-9' as SessionId,
+        title: 'Review plan',
+        workspace: 'website',
+        kind: 'approval',
+      })
+
+      expect(notificationConstructor).toHaveBeenCalledWith('Review plan', {
+        body: '等待你的批准 · website',
+        tag: 'session-approval-test-session-9',
       })
     } finally {
       vi.unstubAllGlobals()
@@ -179,8 +218,8 @@ describe('client notifications and sound', () => {
       }
       listListener?.()
 
-      expect(notificationConstructor).toHaveBeenCalledWith('DeepSeek HarnessX', {
-        body: '“Session 1” 已完成',
+      expect(notificationConstructor).toHaveBeenCalledWith('Session 1', {
+        body: '任务完成',
         tag: 'session-complete-s1',
       })
     } finally {

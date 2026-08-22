@@ -11,11 +11,12 @@ import { applyUpdates } from './updates.tsx'
 import { applySessionNotifications } from './session-notifications.ts'
 import { applyNotificationSettings } from './notification-settings.tsx'
 import { applySync } from './sync.tsx'
+import { primeCompletionAudio } from './sound.ts'
 
 export { applyAdvancedShell } from './advanced-shell.ts'
 export { parseDesktopClientEnvironment } from './environment.ts'
 export type { DesktopClientEnvironment, DesktopClientMode, DesktopClientPlatform } from './environment.ts'
-export { playCompletionSound } from './sound.ts'
+export { playCompletionSound, primeCompletionAudio } from './sound.ts'
 export {
   getNotificationSettingsStore,
   notifySessionCompleted,
@@ -35,6 +36,9 @@ export const inject = [
 export function apply(ctx: ClientContext): void {
   const environment = parseDesktopClientEnvironment(window.location.search)
   if (environment.mode === 'advanced') applyAdvancedShell(ctx, environment)
+  // Warm the AudioContext on the first real gesture so blurred-window
+  // completion chimes are not silenced by autoplay policy.
+  primeCompletionAudio()
   applyMarket(ctx)
   applyUpdates(ctx)
   applySessionNotifications(ctx)

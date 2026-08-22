@@ -99,11 +99,17 @@ export async function requestNotificationPermission(): Promise<boolean> {
 
 export interface NotifyCompletionOptions {
   sessionId: string
+  /** Session display title used as the notification heading. */
   title: string
-  error?: boolean
+  /** Project basename shown in the body for context. */
+  workspace?: string | undefined
+  /** What happened: turn finished, or the agent stopped to wait for the user. */
+  kind?: 'complete' | 'approval'
+  /** Jump to the session when the notification is clicked. */
+  onOpen?: () => void
 }
 
-/** Trigger sound and/or OS notification for completed session turn. */
+/** Trigger sound and/or OS notification for a session turn outcome. */
 export function notifySessionCompleted(opts: NotifyCompletionOptions): void {
   const settings = getNotificationSettingsStore().getSnapshot()
   const unfocused = isWindowUnfocused()
@@ -119,16 +125,17 @@ export function notifySessionCompleted(opts: NotifyCompletionOptions): void {
   if (settings.systemNotification && typeof Notification !== 'undefined') {
     if (Notification.permission === 'granted') {
       try {
-        const bodyText = opts.error
-          ? (opts.title ? `“${opts.title}” 发生错误` : '任务执行出错')
-          : (opts.title ? `“${opts.title}” 已完成` : '任务已完成')
+        const kind = opts.kind ?? 'complete'
+        const suffix = opts.workspace !== undefined && opts.workspace.length > 0 ? ` · ${opts.workspace}` : ''
+        const bodyText = kind === 'approval' ? `等待你的批准${suffix}` : `任务完成${suffix}`
 
-        const notification = new Notification('DeepSeek HarnessX', {
+        const notification = new Notification(opts.title || 'DeepSeek HarnessX', {
           body: bodyText,
-          tag: `session-complete-${opts.sessionId}`,
+          tag: `session-${kind}-${opts.sessionId}`,
         })
         notification.onclick = () => {
-          window.focus?.()
+          if (typeof window !== 'undefined') window.focus?.()
+          opts.onOpen?.()
           notification.close()
         }
       } catch {
