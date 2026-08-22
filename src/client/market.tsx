@@ -833,6 +833,33 @@ function CatalogPanel(props: {
     sourceProgress[source.id] === 'done' && (loadedBySource[source.id] ?? 0) < (totalBySource[source.id] ?? 0))
   const sourceNameById = new Map(props.sources.map(source => [source.id, source.name]))
 
+  const listRef = useRef<HTMLDivElement | null>(null)
+  const savedScrollTop = useRef(0)
+
+  /** Scrollable content pane hosting the catalog (kept stable across detail views). */
+  const scrollContainer = (): HTMLElement | null => {
+    const node = listRef.current
+    if (node === null) return null
+    return node.closest('.dshMarketContent') as HTMLElement | null
+  }
+
+  const openDetail = (plugin: MarketPlugin): void => {
+    const container = scrollContainer()
+    if (container !== null) savedScrollTop.current = container.scrollTop
+    setSelectedPlugin(plugin)
+  }
+
+  const closeDetail = (): void => {
+    setSelectedPlugin(undefined)
+    // Restore the browsing position once the list has remounted.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const container = scrollContainer()
+        if (container !== null) container.scrollTop = savedScrollTop.current
+      })
+    })
+  }
+
   if (selectedPlugin !== undefined) {
     const job = pluginJob(selectedPlugin, props.jobs)
     return (
@@ -842,14 +869,14 @@ function CatalogPanel(props: {
         installed={isPluginInstalled(selectedPlugin, props.installedNames)}
         status={job?.status}
         preparing={preparingInstalls.has(selectedPlugin.install)}
-        onBack={() => { setSelectedPlugin(undefined) }}
+        onBack={closeDetail}
         onInstall={() => { void runInstall(selectedPlugin) }}
       />
     )
   }
 
   return (
-    <div className="dshMarketCatalog">
+    <div className="dshMarketCatalog" ref={listRef}>
       <div className="dshMarketToolbar">
         <label className="dshMarketSourceFilter">
           <span className="dshMarketFieldLabel">{t('sourceFilter')}</span>
@@ -917,7 +944,7 @@ function CatalogPanel(props: {
               installed={isPluginInstalled(plugin, props.installedNames)}
               status={job?.status}
               preparing={preparingInstalls.has(plugin.install)}
-              onOpen={() => { setSelectedPlugin(plugin) }}
+              onOpen={() => { openDetail(plugin) }}
               onInstall={() => { void runInstall(plugin) }}
             />
           )
