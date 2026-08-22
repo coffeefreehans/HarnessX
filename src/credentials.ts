@@ -3,7 +3,7 @@
 import { mkdir, readFile, unlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import { CredentialProvider, type CredentialInfo, type CredentialRef, type ResolvedCredential } from '@deepseek-ai/dsh-credentials'
+import { CredentialProvider, parseCredentialKey, type CredentialInfo, type CredentialKey, type CredentialRecord, type CredentialRecordEntry, type CredentialRecordInfo, type CredentialRef, type ResolvedCredential } from '@deepseek-ai/dsh-credentials'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { launchEnvironmentOf } from '@deepseek-ai/dsh-launch-environment'
@@ -30,7 +30,10 @@ export const Config: z<Config> = z.object({
   path: z.string().default(''),
 }).default({ dshHome: '', path: '' })
 
-/** Versioned envelope stored on disk without plaintext credential values. */
+/** Versioned envelope stored on disk without plaintext credential values.
+ * The envelope stays at version 1 forever; the decrypted plaintext carries its
+ * own layout version (2 = reference map plus record map, unversioned =
+ * legacy reference-only flat mapping). */
 export interface EncryptedCredentialsDocument {
   /** Encrypted document schema version. */
   readonly version: 1
@@ -61,7 +64,8 @@ export class DesktopCredentialProvider extends CredentialProvider {
   private readonly environment: ReturnType<typeof launchEnvironmentOf>
   private readonly ready: Promise<void>
   private values = new Map<string, string>()
-  private operations: Promise<void> = Promise.resolve()
+  private records = new Map<string, CredentialRecord>()
+  private operations: Promise<unknown> = Promise.resolve()
 
   constructor(ctx: Context, config: Config = {}) {
     super(ctx)
@@ -102,7 +106,7 @@ export class DesktopCredentialProvider extends CredentialProvider {
       this.assertWritable(ref)
       const next = new Map(this.values)
       next.set(ref, value)
-      await this.persist(next)
+      await this.persist(next, this.records)
       this.values = next
       this.notifyUpdated(ref)
     })
@@ -115,17 +119,75 @@ export class DesktopCredentialProvider extends CredentialProvider {
       if (!this.values.has(ref)) return
       const next = new Map(this.values)
       next.delete(ref)
-      await this.persist(next)
+      await this.persist(next, this.records)
       this.values = next
       this.notifyUpdated(ref)
     })
   }
 
-  private async enqueue(operation: () => Promise<void>): Promise<void> {
+  /** Read one stored plugin-owned record. */
+  async readRecord(key: CredentialKey): Promise<CredentialRecord | undefined> {
     await this.ready
-    const next = this.operations.then(operation, operation)
+    return this.records.get(key)
+  }
+
+  /** Describe one record for configuration surfaces without exposing its value. */
+  async describeRecord(key: CredentialKey): Promise<CredentialRecordInfo> {
+    await this.ready
+    const record = this.records.get(key)
+    return {
+      configured: record !== undefined,
+      ...(record === undefined ? {} : { kind: record.kind }),
+      writable: true,
+    }
+  }
+
+  /** Enumerate every stored record's address and tag. */
+  async listRecords(): Promise<readonly CredentialRecordEntry[]> {
+    await this.ready
+    return [...this.records.entries()]
+      .map(([key, record]) => ({ key: parseCredentialKey(key), kind: record.kind }))
+      .sort((left, right) => left.key.localeCompare(right.key))
+  }
+
+  /** Serialized read-modify-write over one record — the only record write path. */
+  async modifyRecord(
+    key: CredentialKey,
+    mutate: (current: CredentialRecord | undefined) => Promise<CredentialRecord | undefined>,
+  ): Promise<CredentialRecord | undefined> {
+    return this.enqueue(async () => {
+      const current = this.records.get(key)
+      const next = await mutate(current)
+      if (next === undefined) return this.records.get(key)
+      const records = new Map(this.records)
+      records.set(key, next)
+      await this.persist(this.values, records)
+      this.records = records
+      this.notifyRecordUpdated(key)
+      return next
+    })
+  }
+
+  /** Remove one record; removing an absent record is a no-op. */
+  async deleteRecord(key: CredentialKey): Promise<void> {
+    await this.enqueue(async () => {
+      if (!this.records.has(key)) return
+      const records = new Map(this.records)
+      records.delete(key)
+      await this.persist(this.values, records)
+      this.records = records
+      this.notifyRecordUpdated(key)
+    })
+  }
+
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async (): Promise<T> => {
+      await this.ready
+      return await operation()
+    }
+    const next = this.operations.then(run, run)
     this.operations = next.catch(() => {})
-    await next
+    return next
   }
 
   private assertWritable(ref: CredentialRef): void {
@@ -138,7 +200,9 @@ export class DesktopCredentialProvider extends CredentialProvider {
     assertSecureStorageAvailable()
     try {
       const document = parseEncryptedCredentialsDocument(await readFile(this.filename, 'utf8'))
-      this.values = decryptValues(document)
+      const store = decryptStore(document)
+      this.values = store.credentials
+      this.records = store.records
       await this.finishInterruptedMigration()
       return
     } catch (cause) {
@@ -153,7 +217,7 @@ export class DesktopCredentialProvider extends CredentialProvider {
       throw cause
     }
     const migrated = parseLegacyCredentials(legacyText)
-    await this.persist(migrated)
+    await this.persist(migrated, new Map())
     await unlink(this.legacyFilename)
     this.values = migrated
   }
@@ -173,8 +237,12 @@ export class DesktopCredentialProvider extends CredentialProvider {
     await unlink(this.legacyFilename)
   }
 
-  private async persist(values: ReadonlyMap<string, string>): Promise<void> {
-    const plaintext = JSON.stringify(Object.fromEntries([...values].sort(([left], [right]) => left.localeCompare(right))))
+  private async persist(values: ReadonlyMap<string, string>, records: ReadonlyMap<string, CredentialRecord>): Promise<void> {
+    const plaintext = JSON.stringify({
+      version: 2,
+      credentials: sortedEntries(values),
+      records: sortedEntries(records),
+    })
     const document: EncryptedCredentialsDocument = {
       version: 1,
       ciphertext: safeStorage.encryptString(plaintext).toString('base64'),
@@ -197,9 +265,55 @@ function assertSecureStorageAvailable(): void {
   }
 }
 
-function decryptValues(document: EncryptedCredentialsDocument): Map<string, string> {
+function decryptStore(document: EncryptedCredentialsDocument): { credentials: Map<string, string>; records: Map<string, CredentialRecord> } {
   const plaintext = safeStorage.decryptString(Buffer.from(document.ciphertext, 'base64'))
-  return parseCredentialRecord(JSON.parse(plaintext))
+  return parseDecryptedStore(JSON.parse(plaintext))
+}
+
+/** Interpret the decrypted plaintext: version 2 carries both key spaces, the
+ * unversioned legacy layout is a flat reference-to-value mapping. */
+function parseDecryptedStore(value: unknown): { credentials: Map<string, string>; records: Map<string, CredentialRecord> } {
+  if (!isRecord(value)) throw new Error('credential store must be a mapping')
+  if (value.version === 2) {
+    return {
+      credentials: parseCredentialRecord(value.credentials),
+      records: parseCredentialRecords(value.records),
+    }
+  }
+  if (value.version === undefined) {
+    return { credentials: parseCredentialRecord(value), records: new Map() }
+  }
+  throw new Error(`unsupported credential store version: ${String(value.version)}`)
+}
+
+function parseCredentialRecords(value: unknown): Map<string, CredentialRecord> {
+  if (value === undefined) return new Map()
+  if (!isRecord(value)) throw new Error('credential records must be a mapping')
+  const result = new Map<string, CredentialRecord>()
+  for (const [key, record] of Object.entries(value)) {
+    parseCredentialKey(key)
+    if (!isCredentialRecord(record)) {
+      throw new Error(`invalid credential record: ${key}`)
+    }
+    result.set(key, record)
+  }
+  return result
+}
+
+function isCredentialRecord(value: unknown): value is CredentialRecord {
+  if (!isRecord(value)) return false
+  if (value.kind === 'api-key') {
+    if (value.key !== undefined && (typeof value.key !== 'string' || value.key.length === 0)) return false
+    if (value.env === undefined) return true
+    if (!isRecord(value.env)) return false
+    return Object.entries(value.env).every(([name, envValue]) => CREDENTIAL_PATTERN.test(name) && typeof envValue === 'string')
+  }
+  if (value.kind === 'grant') return 'payload' in value
+  return false
+}
+
+function sortedEntries<T>(values: ReadonlyMap<string, T>): Record<string, T> {
+  return Object.fromEntries([...values].sort(([left], [right]) => left.localeCompare(right)))
 }
 
 function parseLegacyCredentials(text: string): Map<string, string> {
