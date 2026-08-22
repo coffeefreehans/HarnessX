@@ -30,7 +30,6 @@ const SYNC_ROUTE_PREFIX = '/api/desktop/sync'
 const MAX_BODY_BYTES = 128 * 1024
 
 export interface Config {
-  enabled: boolean
   autoSync: boolean
   intervalMinutes: number
   customClientId?: string
@@ -50,7 +49,6 @@ export interface SyncStatusSnapshot {
 }
 
 export const Config: z<Config> = z.object({
-  enabled: z.boolean().default(false),
   autoSync: z.boolean().default(false),
   intervalMinutes: z.number().default(30),
   customClientId: z.string().default(''),
@@ -66,7 +64,6 @@ export function apply(ctx: Context, config: Config): void {
   const configFile = join(syncStateDir, 'config.json')
 
   let currentConfig: Config = {
-    enabled: config.enabled ?? false,
     autoSync: config.autoSync ?? false,
     intervalMinutes: config.intervalMinutes ?? 30,
     customClientId: config.customClientId ?? '',
@@ -134,7 +131,7 @@ export function apply(ctx: Context, config: Config): void {
       clearInterval(autoSyncTimer)
       autoSyncTimer = undefined
     }
-    if (currentConfig.enabled && currentConfig.autoSync && tokens) {
+    if (currentConfig.autoSync && tokens) {
       const ms = Math.max(5, currentConfig.intervalMinutes) * 60 * 1000
       autoSyncTimer = setInterval(() => {
         void triggerSync()
@@ -143,9 +140,6 @@ export function apply(ctx: Context, config: Config): void {
   }
 
   async function triggerSync(): Promise<SyncResult> {
-    if (!currentConfig.enabled) {
-      throw new Error('Cloud sync is disabled. Enable sync before running it.')
-    }
     if (syncing) {
       throw new Error('Synchronization is already in progress.')
     }

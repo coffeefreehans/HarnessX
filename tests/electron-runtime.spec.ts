@@ -502,7 +502,7 @@ describe('Electron compatibility runtime', () => {
         pnpmBinPath: expect.stringMatching(/[\\/]node_modules[\\/]pnpm[\\/]bin[\\/]pnpm\.mjs$/u),
         electronVersion: '43.4.0',
         profileName: 'desktop',
-        productVersion: '0.1.2',
+        productVersion: '0.1.3',
         profileDir: '/tmp/dsh-home/profiles/desktop',
         homeDir: '/tmp/dsh-home',
         stateDir: expect.stringMatching(/^[\\/]tmp[\\/]dsh-desktop-user-data[\\/]cli[\\/][a-f0-9]{64}$/u),
@@ -569,7 +569,7 @@ describe('Electron compatibility runtime', () => {
     expect(runtime.updates).toMatchObject({
       isPackaged: false,
       canDownload: false,
-      currentVersion: '0.1.2',
+      currentVersion: '0.1.3',
       statePath: expect.stringMatching(/[\\/]tmp[\\/]dsh-desktop-user-data[\\/]updates[\\/]state\.json$/u),
     })
     electron.app.isPackaged = true

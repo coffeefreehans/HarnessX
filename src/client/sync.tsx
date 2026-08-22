@@ -1,4 +1,4 @@
-/** Browser-side HarnessX Google Drive sync settings page (v3 rewrite). */
+/** Browser-side HarnessX Google Drive sync settings page (v3 UI). */
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
@@ -24,7 +24,6 @@ export type SyncKey =
   | 'never'
   | 'account'
   | 'notAuthenticated'
-  | 'enabled'
   | 'autoSync'
   | 'interval'
   | 'minutes'
@@ -34,7 +33,7 @@ export type SyncKey =
   | 'settings'
   | 'customClientId'
   | 'customClientSecret'
-  | 'saveConfig'
+  | 'autoSaveHint'
   | 'statusOk'
   | 'statusError'
   | 'summary'
@@ -51,6 +50,8 @@ export type SyncKey =
   | 'sessionStats'
   | 'sessionLocal'
   | 'sessionRemote'
+  | 'uploadedCount'
+  | 'downloadedCount'
   | 'resetCloud'
   | 'resetConfirm'
   | 'resetting'
@@ -58,43 +59,44 @@ export type SyncKey =
 
 const zh: Record<SyncKey, string> = {
   nav: '云同步',
-  title: 'Google Drive 云同步',
+  title: '云同步',
   loading: '加载同步状态…',
   connect: '连接 Google 账号',
-  disconnect: '断开连接',
+  disconnect: '断开',
   syncNow: '立即同步',
   syncing: '同步中…',
   lastSync: '上次同步',
   never: '从未',
   account: '账号',
   notAuthenticated: '未认证',
-  enabled: '启用同步',
   autoSync: '自动同步',
-  interval: '同步间隔',
+  interval: '间隔',
   minutes: '分钟',
   categories: '同步内容',
-  sessions: '会话（双端并集，新者胜）',
-  plugins: '插件（仅安装记录）',
-  settings: '设置（冲突需手动选择）',
+  sessions: '会话',
+  plugins: '插件记录',
+  settings: '设置',
   customClientId: '自定义 Client ID',
   customClientSecret: '自定义 Client Secret',
-  saveConfig: '保存配置',
-  statusOk: '就绪',
-  statusError: '错误',
-  summary: '同步结果',
-  uploadOverwrite: '上传覆盖线上',
-  downloadOverwrite: '下载到本地',
+  autoSaveHint: '修改后自动保存',
+  statusOk: '已就绪',
+  statusError: '出错',
+  summary: '结果',
+  uploadOverwrite: '本机覆盖线上',
+  downloadOverwrite: '线上覆盖本机',
   conflictList: '设置冲突',
-  noConflicts: '无冲突',
-  pendingInstalls: '线上已装但本机未装',
-  noPendingInstalls: '所有线上插件本机均已安装',
+  noConflicts: '没有冲突',
+  pendingInstalls: '线上已装 · 本机未装',
+  noPendingInstalls: '线上插件本机均已安装',
   installAction: '安装',
   installing: '安装中…',
-  installDone: '安装成功',
-  installFailed: '安装失败',
-  sessionStats: '会话统计',
-  sessionLocal: '本机会话',
-  sessionRemote: '云端会话',
+  installDone: '已装好',
+  installFailed: '失败，点击重试',
+  sessionStats: '会话',
+  sessionLocal: '本机',
+  sessionRemote: '云端',
+  uploadedCount: '上次上传',
+  downloadedCount: '上次下载',
   resetCloud: '重置云端数据',
   resetConfirm: '将删除 Google Drive 中全部同步数据，并以本机数据重新上传。确定继续？',
   resetting: '重置中…',
@@ -103,43 +105,44 @@ const zh: Record<SyncKey, string> = {
 
 const en: Record<SyncKey, string> = {
   nav: 'Cloud Sync',
-  title: 'Google Drive Cloud Sync',
+  title: 'Cloud Sync',
   loading: 'Loading sync status…',
   connect: 'Connect Google Account',
   disconnect: 'Disconnect',
   syncNow: 'Sync Now',
   syncing: 'Syncing…',
-  lastSync: 'Last Sync',
+  lastSync: 'Last sync',
   never: 'Never',
   account: 'Account',
   notAuthenticated: 'Not authenticated',
-  enabled: 'Enable Sync',
-  autoSync: 'Auto Sync',
-  interval: 'Interval',
+  autoSync: 'Auto sync',
+  interval: 'Every',
   minutes: 'minutes',
-  categories: 'Sync Categories',
-  sessions: 'Sessions (union, newest wins)',
-  plugins: 'Plugins (install records only)',
-  settings: 'Settings (manual conflict choice)',
+  categories: 'Sync content',
+  sessions: 'Sessions',
+  plugins: 'Plugin records',
+  settings: 'Settings',
   customClientId: 'Custom Client ID',
   customClientSecret: 'Custom Client Secret',
-  saveConfig: 'Save Config',
+  autoSaveHint: 'Saves automatically',
   statusOk: 'Ready',
   statusError: 'Error',
-  summary: 'Sync result',
-  uploadOverwrite: 'Upload overwrites cloud',
-  downloadOverwrite: 'Download to local',
+  summary: 'Result',
+  uploadOverwrite: 'Local wins',
+  downloadOverwrite: 'Cloud wins',
   conflictList: 'Settings conflicts',
   noConflicts: 'No conflicts',
-  pendingInstalls: 'Installed remotely but not locally',
-  noPendingInstalls: 'All remote plugins are installed locally',
+  pendingInstalls: 'Remote only',
+  noPendingInstalls: 'All remote plugins installed',
   installAction: 'Install',
   installing: 'Installing…',
   installDone: 'Installed',
-  installFailed: 'Install failed',
-  sessionStats: 'Session stats',
-  sessionLocal: 'Local sessions',
-  sessionRemote: 'Remote sessions',
+  installFailed: 'Failed — retry',
+  sessionStats: 'Sessions',
+  sessionLocal: 'Local',
+  sessionRemote: 'Cloud',
+  uploadedCount: 'Uploaded',
+  downloadedCount: 'Downloaded',
   resetCloud: 'Reset cloud data',
   resetConfirm: 'This deletes ALL synced data in Google Drive and re-uploads from this machine. Continue?',
   resetting: 'Resetting…',
@@ -162,6 +165,14 @@ export interface SyncPendingInstall {
   version?: string
 }
 
+interface SyncConfig {
+  autoSync: boolean
+  intervalMinutes: number
+  categories: string[]
+  customClientId: string
+  customClientSecret: string
+}
+
 interface SyncStatus {
   configured: boolean
   authenticated: boolean
@@ -176,63 +187,96 @@ interface SyncStatus {
     sessionCounts: { local: number; remote: number }
   }
   syncing: boolean
-  config: {
-    enabled: boolean
-    autoSync: boolean
-    intervalMinutes: number
-    categories: string[]
-    customClientId?: string
-    customClientSecret?: string
-  }
+  config?: Partial<SyncConfig>
   error?: string
 }
 
 type InstallState = 'idle' | 'installing' | 'done' | 'failed'
 
+const DEFAULT_CONFIG: SyncConfig = {
+  autoSync: false,
+  intervalMinutes: 30,
+  categories: ['sessions', 'plugins', 'settings'],
+  customClientId: '',
+  customClientSecret: '',
+}
+
 const SYNC_STYLES = `
-.harnessxSync { width: 100%; min-height: 100%; box-sizing: border-box; padding: 24px; color: var(--dsw-alias-text, #17171c); background: var(--dsw-alias-bg-base, #fff); }
-.harnessxSyncHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 18px; border-bottom: 1px solid var(--dsw-alias-border-l1, #ececf1); }
-.harnessxSyncTitle { margin: 0; font-size: 20px; line-height: 1.35; font-weight: 700; letter-spacing: 0; }
-.harnessxSyncStatus { margin: 5px 0 0; color: var(--dsw-alias-text-secondary, #686875); font-size: 13px; line-height: 1.5; }
-.harnessxSyncActions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
-.harnessxSyncButton { min-height: 36px; padding: 8px 13px; border: 1px solid var(--dsw-alias-border-l2, #d7d7df); border-radius: 6px; background: transparent; color: inherit; cursor: pointer; font-size: 13px; }
-.harnessxSyncButton:hover { border-color: var(--dsw-alias-accent, #2563eb); color: var(--dsw-alias-accent, #2563eb); }
-.harnessxSyncButtonPrimary { border-color: var(--dsw-alias-accent, #2563eb); background: var(--dsw-alias-accent, #2563eb); color: #fff; }
-.harnessxSyncButtonPrimary:hover { color: #fff; filter: brightness(.96); }
-.harnessxSyncButtonDanger { border-color: #dc2626; color: #dc2626; }
-.harnessxSyncButtonDanger:hover { background: rgb(254 242 242); color: #b42318; }
-.harnessxSyncButton:disabled { opacity: .5; cursor: not-allowed; }
-.harnessxSyncGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; margin-top: 20px; border-top: 1px solid var(--dsw-alias-border-l1, #ececf1); border-left: 1px solid var(--dsw-alias-border-l1, #ececf1); }
-.harnessxSyncField { min-width: 0; padding: 14px 16px; border-right: 1px solid var(--dsw-alias-border-l1, #ececf1); border-bottom: 1px solid var(--dsw-alias-border-l1, #ececf1); }
-.harnessxSyncField dt { margin: 0 0 5px; color: var(--dsw-alias-text-secondary, #686875); font-size: 12px; }
-.harnessxSyncField dd { margin: 0; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
-.harnessxSyncStats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; margin-top: 20px; border-top: 1px solid var(--dsw-alias-border-l1, #ececf1); border-left: 1px solid var(--dsw-alias-border-l1, #ececf1); }
-.harnessxSyncConfig { margin-top: 24px; display: flex; flex-direction: column; gap: 16px; }
-.harnessxSyncConfigRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
-.harnessxSyncConfigRow label { font-size: 13px; }
-.harnessxSyncConfigRow input[type="checkbox"] { width: 16px; height: 16px; }
-.harnessxSyncConfigRow input[type="number"] { width: 80px; padding: 4px 6px; }
-.harnessxSyncConfigRow input[type="text"] { flex: 1; min-width: 200px; padding: 4px 6px; }
-.harnessxSyncSection { margin-top: 28px; }
-.harnessxSyncSectionTitle { margin: 0 0 10px; font-size: 15px; font-weight: 600; }
-.harnessxSyncList { margin: 0; padding: 0; list-style: none; border: 1px solid var(--dsw-alias-border-l1, #ececf1); border-radius: 6px; overflow: hidden; }
-.harnessxSyncListItem { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; font-size: 13px; border-bottom: 1px solid var(--dsw-alias-border-l1, #ececf1); }
-.harnessxSyncListItem:last-child { border-bottom: none; }
-.harnessxSyncListItemPath { min-width: 0; overflow-wrap: anywhere; }
-.harnessxSyncListItemMeta { color: var(--dsw-alias-text-secondary, #686875); font-size: 12px; white-space: nowrap; }
-.harnessxSyncListItemActions { display: flex; gap: 6px; flex-shrink: 0; }
-.harnessxSyncEmpty { margin: 0; padding: 14px; color: var(--dsw-alias-text-secondary, #686875); font-size: 13px; text-align: center; border: 1px dashed var(--dsw-alias-border-l1, #ececf1); border-radius: 6px; }
-.harnessxSyncError { margin: 16px 0 0; padding: 10px 12px; border-left: 3px solid #dc2626; background: rgb(254 242 242 / 75%); color: #b42318; font-size: 13px; line-height: 1.5; }
-.harnessxSyncSuccess { margin: 16px 0 0; padding: 10px 12px; border-left: 3px solid #16a34a; background: rgb(240 253 244 / 75%); color: #15803d; font-size: 13px; line-height: 1.5; }
-.harnessxSyncErrorList { margin: 8px 0 0; padding-left: 16px; }
-.harnessxSyncErrorList li { overflow-wrap: anywhere; }
-.harnessxSyncDangerZone { margin-top: 32px; padding: 14px 16px; border: 1px solid #fecaca; border-radius: 6px; background: rgb(254 242 242 / 40%); }
-.harnessxSyncDangerTitle { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: #b42318; }
+.harnessxSync { display: flex; flex-direction: column; gap: 18px; width: 100%; min-height: 100%; box-sizing: border-box; max-width: 780px; padding: 28px; color: var(--dsw-alias-text, #17171c); background: var(--dsw-alias-bg-base, #fff); font-size: 14px; }
+.harnessxSync *, .harnessxSync *::before, .harnessxSync *::after { box-sizing: border-box; }
+
+.harnessxSyncHero { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 22px 24px; border: 1px solid rgb(37 99 235 / 14%); border-radius: 16px; background: linear-gradient(135deg, rgb(37 99 235 / 7%), rgb(37 99 235 / 2%)); }
+.harnessxSyncHeroLeft { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.harnessxSyncHeroTitle { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 18px; font-weight: 700; letter-spacing: 0; }
+.harnessxSyncDot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.harnessxSyncDotOk { background: #16a34a; box-shadow: 0 0 0 4px rgb(22 163 74 / 16%); }
+.harnessxSyncDotErr { background: #dc2626; box-shadow: 0 0 0 4px rgb(220 38 38 / 16%); }
+.harnessxSyncDotOff { background: #9ca3af; box-shadow: 0 0 0 4px rgb(156 163 175 / 18%); }
+.harnessxSyncHeroMeta { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--dsw-alias-text-secondary, #686875); font-size: 12.5px; }
+.harnessxSyncHeroActions { display: flex; flex-shrink: 0; gap: 8px; }
+
+.harnessxSyncBtn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 8px 16px; border: 1px solid var(--dsw-alias-border-l2, #d7d7df); border-radius: 10px; background: #fff; color: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: border-color .15s, background .15s, color .15s, transform .05s; }
+.harnessxSyncBtn:hover { border-color: var(--dsw-alias-accent, #2563eb); color: var(--dsw-alias-accent, #2563eb); }
+.harnessxSyncBtn:active { transform: scale(.98); }
+.harnessxSyncBtn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+.harnessxSyncBtnPrimary { border: none; background: var(--dsw-alias-accent, #2563eb); color: #fff; box-shadow: 0 1px 2px rgb(37 99 235 / 30%); }
+.harnessxSyncBtnPrimary:hover { color: #fff; filter: brightness(1.05); }
+.harnessxSyncBtnDanger { border-color: rgb(220 38 38 / 35%); color: #dc2626; background: #fff; }
+.harnessxSyncBtnDanger:hover { background: rgb(254 242 242); border-color: #dc2626; color: #b42318; }
+
+.harnessxSyncStats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.harnessxSyncStat { padding: 14px 16px; border: 1px solid var(--dsw-alias-border-l1, #ececf1); border-radius: 12px; background: var(--dsw-alias-bg-base, #fff); }
+.harnessxSyncStatValue { font-size: 22px; font-weight: 700; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.harnessxSyncStatLabel { margin-top: 3px; color: var(--dsw-alias-text-secondary, #686875); font-size: 12px; }
+
+.harnessxSyncCard { padding: 4px 20px 20px; border: 1px solid var(--dsw-alias-border-l1, #ececf1); border-radius: 14px; }
+.harnessxSyncCardHead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 15px 0 12px; border-bottom: 1px solid var(--dsw-alias-border-l1, #ececf1); margin-bottom: 14px; }
+.harnessxSyncCardTitle { margin: 0; font-size: 14.5px; font-weight: 650; }
+.harnessxSyncCardCount { color: var(--dsw-alias-text-secondary, #686875); font-size: 12.5px; }
+
+.harnessxSyncRow { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 11px 0; }
+.harnessxSyncRow + .harnessxSyncRow { border-top: 1px solid var(--dsw-alias-border-l1, #ececf1); }
+.harnessxSyncRowLabel { font-size: 13.5px; font-weight: 500; }
+.harnessxSyncRowHint { margin-top: 2px; color: var(--dsw-alias-text-secondary, #686875); font-size: 12px; }
+.harnessxSyncRowControl { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+.harnessxSyncSwitch { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; }
+.harnessxSyncSwitch input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; z-index: 1; }
+.harnessxSyncSwitch span { position: absolute; inset: 0; border-radius: 999px; background: #d7d7df; transition: background .18s; pointer-events: none; }
+.harnessxSyncSwitch span::after { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / 25%); transition: transform .18s; }
+.harnessxSyncSwitch input:checked + span { background: var(--dsw-alias-accent, #2563eb); }
+.harnessxSyncSwitch input:checked + span::after { transform: translateX(18px); }
+
+.harnessxSyncNum, .harnessxSyncText { padding: 7px 10px; border: 1px solid var(--dsw-alias-border-l2, #d7d7df); border-radius: 8px; background: #fff; color: inherit; font-size: 13px; transition: border-color .15s, box-shadow .15s; }
+.harnessxSyncNum { width: 76px; text-align: center; }
+.harnessxSyncText { width: 100%; max-width: 340px; }
+.harnessxSyncNum:focus, .harnessxSyncText:focus { outline: none; border-color: var(--dsw-alias-accent, #2563eb); box-shadow: 0 0 0 3px rgb(37 99 235 / 15%); }
+
+.harnessxSyncItem { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid var(--dsw-alias-border-l1, #ececf1); border-radius: 12px; }
+.harnessxSyncItem + .harnessxSyncItem { margin-top: 10px; }
+.harnessxSyncItemWarn { border-color: rgb(217 119 6 / 35%); background: rgb(254 243 199 / 25%); }
+.harnessxSyncItemMain { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.harnessxSyncItemName { font-size: 13.5px; font-weight: 550; overflow-wrap: anywhere; }
+.harnessxSyncItemMeta { color: var(--dsw-alias-text-secondary, #686875); font-size: 12px; overflow-wrap: anywhere; }
+.harnessxSyncItemActions { display: flex; gap: 8px; flex-shrink: 0; }
+.harnessxSyncEmpty { padding: 18px; border: 1px dashed var(--dsw-alias-border-l2, #d7d7df); border-radius: 12px; color: var(--dsw-alias-text-secondary, #686875); font-size: 13px; text-align: center; }
+
+.harnessxSyncAlert { padding: 12px 14px; border-radius: 12px; font-size: 13px; line-height: 1.55; }
+.harnessxSyncAlertOk { background: rgb(240 253 244); border: 1px solid rgb(22 163 74 / 30%); color: #15803d; }
+.harnessxSyncAlertErr { background: rgb(254 242 242); border: 1px solid rgb(220 38 38 / 30%); color: #b42318; }
+.harnessxSyncErrList { margin: 8px 0 0; padding-left: 18px; }
+.harnessxSyncErrList li { overflow-wrap: anywhere; }
+
+.harnessxSyncDanger { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 16px; border: 1px solid rgb(220 38 38 / 25%); border-radius: 12px; background: rgb(254 242 242 / 45%); }
+.harnessxSyncDangerText { font-size: 13px; color: #b42318; font-weight: 500; }
+
 @media (max-width: 720px) {
   .harnessxSync { padding: 18px; }
-  .harnessxSyncHeader { flex-direction: column; }
-  .harnessxSyncActions { justify-content: flex-start; }
-  .harnessxSyncGrid, .harnessxSyncStats { grid-template-columns: minmax(0, 1fr); }
+  .harnessxSyncHero { flex-direction: column; align-items: stretch; }
+  .harnessxSyncHeroActions { justify-content: stretch; }
+  .harnessxSyncHeroActions .harnessxSyncBtn { flex: 1; }
+  .harnessxSyncStats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .harnessxSyncItem { flex-direction: column; align-items: stretch; }
 }
 `
 
@@ -253,27 +297,15 @@ function SyncSettingsSection(props: PropsRuntime<'settings.section'> & PropsLoca
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string>()
   const [action, setAction] = useState<string>()
-  const [syncSummary, setSyncSummary] = useState<string>()
+  const [summary, setSummary] = useState<string>()
   const [summaryHasErrors, setSummaryHasErrors] = useState(false)
   const [conflicts, setConflicts] = useState<SyncConflict[]>([])
   const [pendingInstalls, setPendingInstalls] = useState<SyncPendingInstall[]>([])
   const [installStates, setInstallStates] = useState<Record<string, InstallState>>({})
-  const [config, setConfig] = useState<{
-    enabled: boolean
-    autoSync: boolean
-    intervalMinutes: number
-    categories: string[]
-    customClientId: string
-    customClientSecret: string
-  }>({
-    enabled: false,
-    autoSync: false,
-    intervalMinutes: 30,
-    categories: ['sessions', 'plugins', 'settings'],
-    customClientId: '',
-    customClientSecret: '',
-  })
+  const [config, setConfig] = useState<SyncConfig>(DEFAULT_CONFIG)
+  const savedConfig = useRef(JSON.stringify(DEFAULT_CONFIG))
   const mounted = useRef(true)
+
   useEffect(() => {
     mounted.current = true
     return () => { mounted.current = false }
@@ -285,29 +317,29 @@ function SyncSettingsSection(props: PropsRuntime<'settings.section'> & PropsLoca
     style.dataset.pluginCss = 'harnessx-desktop/sync'
     style.textContent = SYNC_STYLES
     document.head.appendChild(style)
-    void fetchStatus().then(s => {
-      setStatus(s)
-      applyStatus(s)
-    }).catch(cause => setError(errorMessage(cause)))
+    void fetchStatus().then(applyStatus).catch(cause => setError(errorMessage(cause)))
       .finally(() => setLoading(false))
     return () => { style.remove() }
   }, [])
 
-  const applyStatus = (s: SyncStatus) => {
-    if (s.config) {
-      setConfig({
-        enabled: s.config.enabled ?? false,
-        autoSync: s.config.autoSync ?? false,
-        intervalMinutes: s.config.intervalMinutes ?? 30,
-        categories: s.config.categories?.length ? s.config.categories : ['sessions', 'plugins', 'settings'],
-        customClientId: s.config.customClientId || '',
-        customClientSecret: s.config.customClientSecret || '',
-      })
-    }
-    if (s.lastSyncResult) {
-      setConflicts(s.lastSyncResult.conflicts)
-      setPendingInstalls(s.lastSyncResult.pendingInstalls)
-    }
+  // Auto-save: every config change posts after a short debounce, no save button.
+  useEffect(() => {
+    if (loading) return
+    const next = JSON.stringify(config)
+    if (next === savedConfig.current) return
+    const timer = setTimeout(() => {
+      savedConfig.current = next
+      void fetch('/api/desktop/sync/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: next,
+      }).catch(cause => { if (mounted.current) setError(errorMessage(cause)) })
+    }, 500)
+    return () => { clearTimeout(timer) }
+  }, [config, loading])
+
+  const patchConfig = (patch: Partial<SyncConfig>) => {
+    setConfig(previous => ({ ...previous, ...patch }))
   }
 
   const fetchStatus = async (): Promise<SyncStatus> => {
@@ -316,13 +348,31 @@ function SyncSettingsSection(props: PropsRuntime<'settings.section'> & PropsLoca
     return res.json()
   }
 
+  const applyStatus = (s: SyncStatus) => {
+    setStatus(s)
+    if (s.config) {
+      const next: SyncConfig = {
+        autoSync: s.config.autoSync ?? DEFAULT_CONFIG.autoSync,
+        intervalMinutes: s.config.intervalMinutes ?? DEFAULT_CONFIG.intervalMinutes,
+        categories: s.config.categories?.length ? s.config.categories : DEFAULT_CONFIG.categories,
+        customClientId: s.config.customClientId || '',
+        customClientSecret: s.config.customClientSecret || '',
+      }
+      setConfig(next)
+      savedConfig.current = JSON.stringify(next)
+    }
+    if (s.lastSyncResult) {
+      setConflicts(s.lastSyncResult.conflicts)
+      setPendingInstalls(s.lastSyncResult.pendingInstalls)
+    }
+  }
+
   const pollUntilAuthenticated = async (timeoutMs = 60000): Promise<void> => {
     const start = Date.now()
     while (Date.now() - start < timeoutMs) {
       await new Promise(r => setTimeout(r, 1500))
       try {
         const s = await fetchStatus()
-        setStatus(s)
         applyStatus(s)
         if (s.authenticated) return
         if (s.error) {
@@ -334,12 +384,6 @@ function SyncSettingsSection(props: PropsRuntime<'settings.section'> & PropsLoca
       }
     }
     setError('Authorization timed out. Please try again.')
-  }
-
-  const refreshStatus = async () => {
-    const s = await fetchStatus()
-    setStatus(s)
-    applyStatus(s)
   }
 
   const doAction = async (endpoint: string, method = 'POST', body?: unknown) => {
@@ -361,20 +405,20 @@ function SyncSettingsSection(props: PropsRuntime<'settings.section'> & PropsLoca
         const data = await res.json().catch(() => ({})) as { result?: NonNullable<SyncStatus['lastSyncResult']> }
         const r = data.result
         if (r) {
-          setSyncSummary(formatSyncSummary(r, t))
+          setSummary(formatSyncSummary(r, t))
           setSummaryHasErrors(r.errors.length > 0)
           setConflicts(r.conflicts)
           setPendingInstalls(r.pendingInstalls)
           setInstallStates({})
         }
-        await refreshStatus()
+        applyStatus(await fetchStatus())
       } else if (endpoint === 'conflict/resolve') {
         const data = await res.json().catch(() => ({})) as { resolved?: string }
         if (data.resolved) {
           setConflicts(previous => previous.filter(item => item.key !== data.resolved))
         }
       } else {
-        await refreshStatus()
+        applyStatus(await fetchStatus())
       }
     } catch (cause) {
       setError(errorMessage(cause))
@@ -418,17 +462,6 @@ function SyncSettingsSection(props: PropsRuntime<'settings.section'> & PropsLoca
     }
   }
 
-  const saveConfig = () => {
-    void doAction('config', 'POST', {
-      enabled: config.enabled,
-      autoSync: config.autoSync,
-      intervalMinutes: config.intervalMinutes,
-      categories: config.categories,
-      customClientId: config.customClientId || undefined,
-      customClientSecret: config.customClientSecret || undefined,
-    })
-  }
-
   const resetCloud = () => {
     if (!window.confirm(t('resetConfirm'))) return
     void doAction('reset')
@@ -436,170 +469,172 @@ function SyncSettingsSection(props: PropsRuntime<'settings.section'> & PropsLoca
 
   const busy = action !== undefined || status?.syncing === true
   const authenticated = status?.authenticated === true
-  const accountEmail = status?.accountEmail
   const lastResult = status?.lastSyncResult
   const errors = lastResult?.errors ?? []
+  const dotClass = status?.syncing ? 'harnessxSyncDotOk' : status?.error || errors.length ? 'harnessxSyncDotErr' : authenticated ? 'harnessxSyncDotOk' : 'harnessxSyncDotOff'
 
   return (
     <section className="harnessxSync">
-      <header className="harnessxSyncHeader">
-        <div>
-          <h2 className="harnessxSyncTitle">{t('title')}</h2>
-          <p className="harnessxSyncStatus">{loading ? t('loading') : statusLabel(status, t)}</p>
+      <div className="harnessxSyncHero">
+        <div className="harnessxSyncHeroLeft">
+          <h2 className="harnessxSyncHeroTitle">
+            <span className={`harnessxSyncDot ${dotClass}`} />
+            {loading ? t('loading') : statusLabel(status, t)}
+          </h2>
+          <div className="harnessxSyncHeroMeta">
+            <span>{t('account')}：{authenticated ? (status?.accountEmail || '—') : t('notAuthenticated')}</span>
+            <span>{t('lastSync')}：{status?.lastSyncTime ? new Date(status.lastSyncTime).toLocaleString() : t('never')}</span>
+          </div>
         </div>
-        <div className="harnessxSyncActions">
+        <div className="harnessxSyncHeroActions">
           {authenticated ? (
             <>
-              <button
-                className="harnessxSyncButton harnessxSyncButtonPrimary"
-                type="button"
-                disabled={busy || !config.enabled}
-                onClick={() => { void doAction('trigger') }}
-              >
-                {busy ? t('syncing') : t('syncNow')}
+              <button className="harnessxSyncBtn harnessxSyncBtnPrimary" type="button" disabled={busy} onClick={() => { void doAction('trigger') }}>
+                {busy && action !== 'reset' ? t('syncing') : t('syncNow')}
               </button>
-              <button
-                className="harnessxSyncButton"
-                type="button"
-                disabled={busy}
-                onClick={() => { void doAction('auth/logout') }}
-              >
+              <button className="harnessxSyncBtn" type="button" disabled={busy} onClick={() => { void doAction('auth/logout') }}>
                 {t('disconnect')}
               </button>
             </>
           ) : (
-            <button
-              className="harnessxSyncButton harnessxSyncButtonPrimary"
-              type="button"
-              disabled={busy}
-              onClick={() => { void doAction('auth/start') }}
-            >
+            <button className="harnessxSyncBtn harnessxSyncBtnPrimary" type="button" disabled={busy} onClick={() => { void doAction('auth/start') }}>
               {t('connect')}
             </button>
           )}
         </div>
-      </header>
+      </div>
 
-      <dl className="harnessxSyncGrid">
-        <div className="harnessxSyncField"><dt>{t('account')}</dt><dd>{authenticated ? (accountEmail || '—') : t('notAuthenticated')}</dd></div>
-        <div className="harnessxSyncField"><dt>{t('lastSync')}</dt><dd>{status?.lastSyncTime ? new Date(status.lastSyncTime).toLocaleString() : t('never')}</dd></div>
-      </dl>
+      {summary !== undefined && (
+        <div className={`harnessxSyncAlert ${summaryHasErrors ? 'harnessxSyncAlertErr' : 'harnessxSyncAlertOk'}`}>{summary}</div>
+      )}
 
       {lastResult && (
-        <dl className="harnessxSyncStats">
-          <div className="harnessxSyncField"><dt>{t('sessionLocal')}</dt><dd>{lastResult.sessionCounts?.local ?? 0}</dd></div>
-          <div className="harnessxSyncField"><dt>{t('sessionRemote')}</dt><dd>{lastResult.sessionCounts?.remote ?? 0}</dd></div>
-          <div className="harnessxSyncField"><dt>{t('summary')}</dt><dd>{formatSyncSummary(lastResult, t)}</dd></div>
-        </dl>
+        <div className="harnessxSyncStats">
+          <div className="harnessxSyncStat"><div className="harnessxSyncStatValue">{lastResult.sessionCounts?.local ?? 0}</div><div className="harnessxSyncStatLabel">{t('sessionLocal')}</div></div>
+          <div className="harnessxSyncStat"><div className="harnessxSyncStatValue">{lastResult.sessionCounts?.remote ?? 0}</div><div className="harnessxSyncStatLabel">{t('sessionRemote')}</div></div>
+          <div className="harnessxSyncStat"><div className="harnessxSyncStatValue">{lastResult.uploaded.length}</div><div className="harnessxSyncStatLabel">{t('uploadedCount')}</div></div>
+          <div className="harnessxSyncStat"><div className="harnessxSyncStatValue">{lastResult.downloaded.length}</div><div className="harnessxSyncStatLabel">{t('downloadedCount')}</div></div>
+        </div>
       )}
 
-      {syncSummary !== undefined && (
-        <p className={summaryHasErrors ? 'harnessxSyncError' : 'harnessxSyncSuccess'}>{syncSummary}</p>
-      )}
-
-      <div className="harnessxSyncSection">
-        <h3 className="harnessxSyncSectionTitle">{t('conflictList')} ({conflicts.length})</h3>
+      <div className="harnessxSyncCard">
+        <div className="harnessxSyncCardHead">
+          <h3 className="harnessxSyncCardTitle">{t('conflictList')}</h3>
+          <span className="harnessxSyncCardCount">{conflicts.length}</span>
+        </div>
         {conflicts.length === 0 ? (
           <p className="harnessxSyncEmpty">{t('noConflicts')}</p>
-        ) : (
-          <ul className="harnessxSyncList">
-            {conflicts.map(conflict => (
-              <li key={conflict.key} className="harnessxSyncListItem">
-                <div className="harnessxSyncListItemPath">
-                  {conflict.key}
-                  <div className="harnessxSyncListItemMeta">
-                    {t('sessionLocal')} {conflict.localMtimeMs ? new Date(conflict.localMtimeMs).toLocaleString() : '—'} · {t('sessionRemote')} {new Date(conflict.remoteMtimeMs).toLocaleString()}
-                  </div>
-                </div>
-                <div className="harnessxSyncListItemActions">
-                  <button className="harnessxSyncButton" type="button" disabled={busy} onClick={() => { void doAction('conflict/resolve', 'POST', { conflict, direction: 'upload' }) }}>
-                    {t('uploadOverwrite')}
-                  </button>
-                  <button className="harnessxSyncButton" type="button" disabled={busy} onClick={() => { void doAction('conflict/resolve', 'POST', { conflict, direction: 'download' }) }}>
-                    {t('downloadOverwrite')}
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
+        ) : conflicts.map(conflict => (
+          <div key={conflict.key} className={`harnessxSyncItem harnessxSyncItemWarn`}>
+            <div className="harnessxSyncItemMain">
+              <span className="harnessxSyncItemName">{conflict.key}</span>
+              <span className="harnessxSyncItemMeta">
+                {t('sessionLocal')} {conflict.localMtimeMs ? new Date(conflict.localMtimeMs).toLocaleString() : '—'} · {t('sessionRemote')} {new Date(conflict.remoteMtimeMs).toLocaleString()}
+              </span>
+            </div>
+            <div className="harnessxSyncItemActions">
+              <button className="harnessxSyncBtn" type="button" disabled={busy} onClick={() => { void doAction('conflict/resolve', 'POST', { conflict, direction: 'upload' }) }}>{t('uploadOverwrite')}</button>
+              <button className="harnessxSyncBtn harnessxSyncBtnPrimary" type="button" disabled={busy} onClick={() => { void doAction('conflict/resolve', 'POST', { conflict, direction: 'download' }) }}>{t('downloadOverwrite')}</button>
+            </div>
+          </div>
+        ))}
       </div>
 
       {config.categories.includes('plugins') && (
-        <div className="harnessxSyncSection">
-          <h3 className="harnessxSyncSectionTitle">{t('pendingInstalls')} ({pendingInstalls.length})</h3>
+        <div className="harnessxSyncCard">
+          <div className="harnessxSyncCardHead">
+            <h3 className="harnessxSyncCardTitle">{t('pendingInstalls')}</h3>
+            <span className="harnessxSyncCardCount">{pendingInstalls.length}</span>
+          </div>
           {pendingInstalls.length === 0 ? (
             <p className="harnessxSyncEmpty">{t('noPendingInstalls')}</p>
-          ) : (
-            <ul className="harnessxSyncList">
-              {pendingInstalls.map(plugin => {
-                const state = installStates[plugin.name] ?? 'idle'
-                return (
-                  <li key={plugin.name} className="harnessxSyncListItem">
-                    <div className="harnessxSyncListItemPath">
-                      {plugin.name}
-                      {plugin.version && <span className="harnessxSyncListItemMeta"> v{plugin.version}</span>}
-                      <div className="harnessxSyncListItemMeta">{plugin.installSpec}</div>
-                    </div>
-                    <div className="harnessxSyncListItemActions">
-                      {state === 'done' ? (
-                        <span className="harnessxSyncListItemMeta">{t('installDone')}</span>
-                      ) : state === 'failed' ? (
-                        <>
-                          <span className="harnessxSyncListItemMeta">{t('installFailed')}</span>
-                          <button className="harnessxSyncButton" type="button" onClick={() => { void installViaMarket(plugin) }}>{t('installAction')}</button>
-                        </>
-                      ) : (
-                        <button className="harnessxSyncButton harnessxSyncButtonPrimary" type="button" disabled={state === 'installing'} onClick={() => { void installViaMarket(plugin) }}>
-                          {state === 'installing' ? t('installing') : t('installAction')}
-                        </button>
-                      )}
-                    </div>
-                  </li>
-                )
-              })}
-            </ul>
-          )}
+          ) : pendingInstalls.map(plugin => {
+            const state = installStates[plugin.name] ?? 'idle'
+            return (
+              <div key={plugin.name} className="harnessxSyncItem">
+                <div className="harnessxSyncItemMain">
+                  <span className="harnessxSyncItemName">{plugin.name}{plugin.version ? ` · v${plugin.version}` : ''}</span>
+                  <span className="harnessxSyncItemMeta">{plugin.installSpec}</span>
+                </div>
+                <div className="harnessxSyncItemActions">
+                  {state === 'done' ? (
+                    <span className="harnessxSyncItemMeta">{t('installDone')}</span>
+                  ) : state === 'failed' ? (
+                    <button className="harnessxSyncBtn harnessxSyncBtnDanger" type="button" onClick={() => { void installViaMarket(plugin) }}>{t('installFailed')}</button>
+                  ) : (
+                    <button className="harnessxSyncBtn harnessxSyncBtnPrimary" type="button" disabled={state === 'installing'} onClick={() => { void installViaMarket(plugin) }}>
+                      {state === 'installing' ? t('installing') : t('installAction')}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
 
-      <div className="harnessxSyncConfig">
-        <div className="harnessxSyncConfigRow">
-          <label><input type="checkbox" checked={config.enabled} onChange={e => setConfig({ ...config, enabled: e.target.checked })} /> {t('enabled')}</label>
-          <label><input type="checkbox" checked={config.autoSync} onChange={e => setConfig({ ...config, autoSync: e.target.checked })} /> {t('autoSync')}</label>
-          <label>{t('interval')} <input type="number" value={config.intervalMinutes} onChange={e => setConfig({ ...config, intervalMinutes: Number(e.target.value) || 5 })} min={1} /> {t('minutes')}</label>
+      <div className="harnessxSyncCard">
+        <div className="harnessxSyncCardHead">
+          <h3 className="harnessxSyncCardTitle">{t('categories')}</h3>
+          <span className="harnessxSyncCardCount">{t('autoSaveHint')}</span>
         </div>
-        <div className="harnessxSyncConfigRow">
-          <label><input type="checkbox" checked={config.categories.includes('sessions')} onChange={e => {
-            const v = e.target.checked ? [...config.categories, 'sessions'] : config.categories.filter(c => c !== 'sessions')
-            setConfig({ ...config, categories: v })
-          }} /> {t('sessions')}</label>
-          <label><input type="checkbox" checked={config.categories.includes('plugins')} onChange={e => {
-            const v = e.target.checked ? [...config.categories, 'plugins'] : config.categories.filter(c => c !== 'plugins')
-            setConfig({ ...config, categories: v })
-          }} /> {t('plugins')}</label>
-          <label><input type="checkbox" checked={config.categories.includes('settings')} onChange={e => {
-            const v = e.target.checked ? [...config.categories, 'settings'] : config.categories.filter(c => c !== 'settings')
-            setConfig({ ...config, categories: v })
-          }} /> {t('settings')}</label>
+        <div className="harnessxSyncRow">
+          <div>
+            <div className="harnessxSyncRowLabel">{t('sessions')}</div>
+            <div className="harnessxSyncRowHint">sessions/</div>
+          </div>
+          <label className="harnessxSyncSwitch">
+            <input type="checkbox" checked={config.categories.includes('sessions')} onChange={e => patchConfig({ categories: toggleCategory(config.categories, 'sessions', e.target.checked) })} />
+            <span />
+          </label>
         </div>
-        <div className="harnessxSyncConfigRow">
-          <label>{t('customClientId')} <input type="text" value={config.customClientId} onChange={e => setConfig({ ...config, customClientId: e.target.value })} placeholder="optional" /></label>
+        <div className="harnessxSyncRow">
+          <div>
+            <div className="harnessxSyncRowLabel">{t('settings')}</div>
+            <div className="harnessxSyncRowHint">settings.yaml</div>
+          </div>
+          <label className="harnessxSyncSwitch">
+            <input type="checkbox" checked={config.categories.includes('settings')} onChange={e => patchConfig({ categories: toggleCategory(config.categories, 'settings', e.target.checked) })} />
+            <span />
+          </label>
         </div>
-        <div className="harnessxSyncConfigRow">
-          <label>{t('customClientSecret')} <input type="text" value={config.customClientSecret} onChange={e => setConfig({ ...config, customClientSecret: e.target.value })} placeholder="optional" /></label>
+        <div className="harnessxSyncRow">
+          <div>
+            <div className="harnessxSyncRowLabel">{t('plugins')}</div>
+            <div className="harnessxSyncRowHint">registry.json</div>
+          </div>
+          <label className="harnessxSyncSwitch">
+            <input type="checkbox" checked={config.categories.includes('plugins')} onChange={e => patchConfig({ categories: toggleCategory(config.categories, 'plugins', e.target.checked) })} />
+            <span />
+          </label>
         </div>
-        <div className="harnessxSyncConfigRow">
-          <button className="harnessxSyncButton harnessxSyncButtonPrimary" type="button" disabled={busy} onClick={saveConfig}>
-            {action === 'config' ? t('syncing') : t('saveConfig')}
-          </button>
+        <div className="harnessxSyncRow">
+          <div className="harnessxSyncRowLabel">{t('autoSync')}</div>
+          <div className="harnessxSyncRowControl">
+            {config.autoSync && <input className="harnessxSyncNum" type="number" min={1} value={config.intervalMinutes} onChange={e => patchConfig({ intervalMinutes: Number(e.target.value) || 5 })} />}
+            {config.autoSync && <span className="harnessxSyncRowHint">{t('minutes')}</span>}
+            <label className="harnessxSyncSwitch">
+              <input type="checkbox" checked={config.autoSync} onChange={e => patchConfig({ autoSync: e.target.checked })} />
+              <span />
+            </label>
+          </div>
+        </div>
+        <div className="harnessxSyncRow">
+          <div>
+            <div className="harnessxSyncRowLabel">{t('customClientId')}</div>
+            <div className="harnessxSyncRowHint">{t('customClientSecret')}</div>
+          </div>
+          <div className="harnessxSyncRowControl" style={{ flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+            <input className="harnessxSyncText" type="text" value={config.customClientId} placeholder="Client ID" onChange={e => patchConfig({ customClientId: e.target.value })} />
+            <input className="harnessxSyncText" type="password" value={config.customClientSecret} placeholder="Client Secret" onChange={e => patchConfig({ customClientSecret: e.target.value })} />
+          </div>
         </div>
       </div>
 
       {errors.length > 0 && (
-        <div className="harnessxSyncError">
+        <div className="harnessxSyncAlert harnessxSyncAlertErr">
           {t('errorDetails')}:
-          <ul className="harnessxSyncErrorList">
+          <ul className="harnessxSyncErrList">
             {errors.slice(0, 10).map((item, index) => (
               <li key={`${item.path}-${index}`}>{item.path}: {item.error}</li>
             ))}
@@ -607,13 +642,13 @@ function SyncSettingsSection(props: PropsRuntime<'settings.section'> & PropsLoca
         </div>
       )}
       {(error ?? status?.error) !== undefined && (
-        <p className="harnessxSyncError">{error ?? status?.error}</p>
+        <div className="harnessxSyncAlert harnessxSyncAlertErr">{error ?? status?.error}</div>
       )}
 
       {authenticated && (
-        <div className="harnessxSyncDangerZone">
-          <p className="harnessxSyncDangerTitle">{t('resetCloud')}</p>
-          <button className="harnessxSyncButton harnessxSyncButtonDanger" type="button" disabled={busy} onClick={resetCloud}>
+        <div className="harnessxSyncDanger">
+          <span className="harnessxSyncDangerText">{t('resetCloud')}</span>
+          <button className="harnessxSyncBtn harnessxSyncBtnDanger" type="button" disabled={busy} onClick={resetCloud}>
             {action === 'reset' ? t('resetting') : t('resetCloud')}
           </button>
         </div>
@@ -622,13 +657,17 @@ function SyncSettingsSection(props: PropsRuntime<'settings.section'> & PropsLoca
   )
 }
 
+function toggleCategory(categories: string[], name: string, on: boolean): string[] {
+  return on ? [...new Set([...categories, name])] : categories.filter(c => c !== name)
+}
+
 function formatSyncSummary(result: NonNullable<SyncStatus['lastSyncResult']>, t: (key: SyncKey) => string): string {
   const parts: string[] = []
-  if (result.uploaded.length) parts.push(`↑ ${result.uploaded.length}`)
-  if (result.downloaded.length) parts.push(`↓ ${result.downloaded.length}`)
-  if (result.conflicts.length) parts.push(`⚠ ${result.conflicts.length}`)
-  if (result.pendingInstalls.length) parts.push(`☰ ${result.pendingInstalls.length}`)
-  if (result.errors.length) parts.push(`✕ ${result.errors.length}`)
+  if (result.uploaded.length) parts.push(`${t('uploadedCount')} ${result.uploaded.length}`)
+  if (result.downloaded.length) parts.push(`${t('downloadedCount')} ${result.downloaded.length}`)
+  if (result.conflicts.length) parts.push(`${t('conflictList')} ${result.conflicts.length}`)
+  if (result.pendingInstalls.length) parts.push(`${t('pendingInstalls')} ${result.pendingInstalls.length}`)
+  if (result.errors.length) parts.push(`${t('errorDetails')} ${result.errors.length}`)
   return parts.length ? parts.join(' · ') : `${t('summary')}：无变更`
 }
 
@@ -636,7 +675,11 @@ function statusLabel(status: SyncStatus | undefined, t: (key: SyncKey) => string
   if (!status) return t('loading')
   if (status.syncing) return t('syncing')
   if (status.error) return t('statusError')
-  return t('statusOk')
+  return authenticatedLabel(status, t)
+}
+
+function authenticatedLabel(status: SyncStatus, t: (key: SyncKey) => string): string {
+  return status.authenticated ? t('statusOk') : t('notAuthenticated')
 }
 
 function errorMessage(cause: unknown): string {
