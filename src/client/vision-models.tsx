@@ -17,6 +17,7 @@ import {
   buildToggleOp,
   extractVisionGroups,
   getVisionFallbackStore,
+  isCaptionCompatible,
   type ProviderRouteRow,
   type VisionProviderGroup,
 } from './vision-models-state.ts'
@@ -48,6 +49,7 @@ export type VisionModelsKey =
   | 'notWritable'
   | 'saveFailed'
   | 'modelsSuffix'
+  | 'universalOnlyOpenai'
 
 const zh: Record<VisionModelsKey, string> = {
   nav: '多模态模型',
@@ -67,6 +69,7 @@ const zh: Record<VisionModelsKey, string> = {
   notWritable: '设置为只读,无法修改',
   saveFailed: '保存失败',
   modelsSuffix: '个模型',
+  universalOnlyOpenai: '通用识图模型仅支持 openai-completions 协议的自定义接口',
 }
 
 const en: Record<VisionModelsKey, string> = {
@@ -87,6 +90,7 @@ const en: Record<VisionModelsKey, string> = {
   notWritable: 'Settings are read-only',
   saveFailed: 'Save failed',
   modelsSuffix: 'models',
+  universalOnlyOpenai: 'The universal vision model requires an openai-completions custom endpoint',
 }
 
 const NS = 'settings.visionModels'
@@ -264,6 +268,12 @@ export function VisionModelsSection(
     fallbackStore.set({ ...fallback, provider, model })
   }
 
+  // The caption bridge only speaks openai-completions, so the universal model
+  // picker must list compatible endpoints only; otherwise a user could select
+  // a model the host would reject and the send would silently lose the image.
+  const captionGroups = state.groups.filter(isCaptionCompatible)
+  const hasCaptionEndpoint = captionGroups.length > 0 || state.groups.length === 0
+
   if (state.status === 'loading') {
     return <div className="dshVisionSection"><div className="dshVisionNotice">{t('loading')}</div></div>
   }
@@ -296,10 +306,11 @@ export function VisionModelsSection(
             className="dshVisionSelect"
             aria-label={t('universal')}
             value={universalValue}
+            disabled={state.groups.length > 0 && !hasCaptionEndpoint}
             onChange={e => { onUniversalChange(e.target.value) }}
           >
             <option value="">{t('universalPlaceholder')}</option>
-            {state.groups.map(group => group.models.map(model => {
+            {captionGroups.map(group => group.models.map(model => {
               const value = `${group.provider}\u0000${model.id}`
               return <option key={value} value={value}>{`${group.displayName} · ${model.id}`}</option>
             }))}
@@ -317,6 +328,10 @@ export function VisionModelsSection(
           />
         </div>
       </div>
+
+      {state.groups.length > 0 && !hasCaptionEndpoint
+        ? <div className="dshVisionNotice">{t('universalOnlyOpenai')}</div>
+        : null}
 
       {saveError === undefined ? null : <div className="dshVisionError">{saveError}</div>}
       {state.writable ? null : <div className="dshVisionNotice">{t('notWritable')}</div>}
@@ -396,10 +411,10 @@ export function VisionModelsSection(
   )
 }
 
-/** When false the Multimodal Models settings surface is hidden from the panel,
- *  but every supporting piece (fallback send interception, host caption route,
- *  preference hydration) stays wired, so re-showing is a one-line flip. */
-const VISION_MODELS_UI_ENABLED = false
+/** Master switch for the Multimodal Models settings surface. Every supporting
+ *  piece (fallback send interception, host caption route, preference hydration)
+ *  stays wired regardless, so this only gates the panel entry. */
+const VISION_MODELS_UI_ENABLED = true
 
 /** Register the desktop-owned Multimodal Models section in the settings panel. */
 export function applyVisionModels(ctx: ClientContext): void {

@@ -39,6 +39,9 @@ export interface VisionProviderGroup {
   displayName: string
   modelsPath: string[]
   models: VisionModelRow[]
+  /** Wire protocol the bridge can caption through; only `openai-completions`
+   *  routes are served by the host caption endpoint. */
+  api: string | undefined
 }
 
 /** Walk a JSON value by path segments (objects and array indices). */
@@ -85,11 +88,13 @@ export function extractVisionGroups(
         imageEnabled: isImageEnabled(entry),
       })
     }
+    const profileApi = (profile as { api?: unknown }).api
     groups.push({
       provider: row.provider,
       displayName: row.displayName,
       modelsPath: [...row.settingsPath, 'models'],
       models,
+      api: typeof profileApi === 'string' && profileApi.length > 0 ? profileApi : undefined,
     })
   }
   return groups
@@ -143,6 +148,15 @@ export function buildBulkOps(
 /** Whether a prompt carries at least one image part. */
 export function hasImagePart(content: readonly PromptContentPart[]): boolean {
   return content.some(part => part.type === 'image')
+}
+
+/** Wire protocol the host caption bridge speaks. Only `openai-completions`
+ *  custom endpoints can be used as the universal vision model. */
+export const CAPTION_SUPPORTED_API = 'openai-completions'
+
+/** Whether a provider group can serve the universal caption model. */
+export function isCaptionCompatible(group: VisionProviderGroup): boolean {
+  return group.api === CAPTION_SUPPORTED_API
 }
 
 /**

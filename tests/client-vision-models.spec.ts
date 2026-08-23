@@ -5,6 +5,7 @@ import {
   extractVisionGroups,
   getVisionFallbackStore,
   hasImagePart,
+  isCaptionCompatible,
   transformContentHybrid,
   transformContentWithCaptions,
   walkPath,
@@ -49,11 +50,34 @@ describe('vision model state', () => {
     expect(group.provider).toBe('router')
     expect(group.displayName).toBe('9router')
     expect(group.modelsPath).toEqual(['providers', 'router', 'models'])
+    expect(group.api).toBe('openai-completions')
     expect(group.models.map(model => [model.id, model.imageEnabled])).toEqual([
       ['plain-text', false],
       ['cbcn/glm-5v-turbo', true],
       ['bzl/gpt-5.5', false],
     ])
+  })
+
+  it('carries each provider api and flags caption compatibility', () => {
+    const mixed = {
+      providers: {
+        vision: { api: 'openai-completions', models: [{ id: 'v1' }] },
+        other: { api: 'anthropic', models: [{ id: 'a1' }] },
+        none: { models: [{ id: 'n1' }] },
+      },
+    }
+    const mixedRows: ProviderRouteRow[] = [
+      { provider: 'vision', displayName: 'Vision', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'vision'] },
+      { provider: 'other', displayName: 'Other', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'other'] },
+      { provider: 'none', displayName: 'None', settingsNs: 'llm-pi-ai', settingsPath: ['providers', 'none'] },
+    ]
+    const groups = extractVisionGroups(mixed, mixedRows)
+    expect(groups.map(group => [group.provider, group.api])).toEqual([
+      ['vision', 'openai-completions'],
+      ['other', 'anthropic'],
+      ['none', undefined],
+    ])
+    expect(groups.filter(isCaptionCompatible).map(group => group.provider)).toEqual(['vision'])
   })
 
   it('ignores providers without a settings path or model list', () => {
