@@ -2,15 +2,17 @@
  *
  * Wraps the shared client API's `sessions.prompt` method (the one call every
  * composer send lands on). When a prompt carries images and the session's
- * model does not admit them, the session is switched to the configured
- * universal vision model BEFORE the send — so that model reads the images
- * natively and answers directly. The outgoing request itself is never
- * modified: no caption text is injected into the user's message, and any
- * failure here leaves the send exactly as the kernel issued it.
+ * model does not admit them, the images are first described by the configured
+ * universal vision model through the desktop caption bridge, and each caption
+ * is appended after its image as labelled text — so the ORIGINAL model stays
+ * selected and answers using the recognition, while the user's message keeps
+ * its images verbatim. Any failure here falls back to the untouched original
+ * call.
  */
 
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import {
+  appendImageCaptions,
   extractVisionGroups,
   getVisionFallbackStore,
   hasImagePart,
@@ -18,15 +20,13 @@ import {
   type PromptContentPart,
 } from './vision-models-state.ts'
 
+const VISION_DESCRIBE_URL = '/api/desktop/vision/describe'
+
 /** Minimal wire faces the interceptor needs (structural, fixture-compatible). */
 interface WireSessions {
   prompt: (request: unknown, signal?: unknown) => Promise<unknown>
   models: (request: unknown) => Promise<{
     result: { ok: true; value: { current: { provider: string; model: string } } }
-    | { ok: false; error: { message: string } }
-  }>
-  selectModel: (request: unknown) => Promise<{
-    result: { ok: true; value: { selected: { provider: string; model: string } } }
     | { ok: false; error: { message: string } }
   }>
 }
@@ -86,29 +86,43 @@ async function ensureSupportMap(api: WireApi): Promise<Map<string, boolean>> {
   return supportMapLoading
 }
 
+interface ImagePart { type: 'image'; mediaType: string; data: string; name?: string }
+
 /**
- * Switch the session to the universal vision model when the current model
- * cannot take images. Any failure (not configured, directory unreadable,
- * selection rejected) returns quietly: the send then proceeds exactly as
- * the kernel issued it, on the unchanged current model.
+ * Describe the images of one prompt through the caption bridge, when the
+ * current model cannot take them. Returns the content with each caption
+ * appended after its image (originals kept), or undefined to send unchanged.
+ * The session's model is never switched: the ORIGINAL model answers, using
+ * the recognition the vision model produced.
  */
-async function switchToVisionModelIfNeeded(api: WireApi, sessionId: string): Promise<void> {
+async function captionImagesIfNeeded(
+  api: WireApi,
+  sessionId: string,
+  content: readonly PromptContentPart[],
+): Promise<PromptContentPart[] | undefined> {
   const config = getVisionFallbackStore().getSnapshot()
-  if (!config.enabled || config.provider === undefined || config.model === undefined) return
+  if (!config.enabled || config.provider === undefined || config.model === undefined) return undefined
   const modelsResponse = await api.sessions.models({ sessionId })
-  if (!modelsResponse.result.ok) return
+  if (!modelsResponse.result.ok) return undefined
   const current = modelsResponse.result.value.current
-  if (current.provider === config.provider && current.model === config.model) return
+  if (current.provider === config.provider && current.model === config.model) return undefined
   const map = await ensureSupportMap(api)
-  // Declared image-capable models (official catalog entries, or custom routes
-  // whose toggle the user set) read the originals themselves; only text-only
-  // selections are rerouted to the universal vision model.
-  if (map.get(supportKey(current.provider, current.model)) === true) return
-  await api.sessions.selectModel({
-    sessionId,
-    provider: config.provider,
-    model: config.model,
+  // Declared image-capable models read the originals themselves; only
+  // text-only selections need the caption bridge.
+  if (map.get(supportKey(current.provider, current.model)) === true) return undefined
+  const images = content.filter((part): part is ImagePart => part.type === 'image')
+  const response = await fetch(VISION_DESCRIBE_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider: config.provider, model: config.model, images }),
   })
+  if (!response.ok) return undefined
+  const value = await response.json() as { captions?: unknown }
+  if (!Array.isArray(value.captions) || value.captions.length !== images.length) return undefined
+  for (const caption of value.captions) {
+    if (typeof caption !== 'string') return undefined
+  }
+  return appendImageCaptions(content, value.captions)
 }
 
 let installed = false
@@ -120,7 +134,7 @@ let installed = false
  * @param ctx - browser Cordis context carrying the connection service.
  */
 export function installVisionFallback(ctx: ClientContext): void {
-  if (installed) return
+  if (installed || typeof fetch !== 'function') return
   try {
     const connection = ctx.get('connection') as { api: WireApi }
     const api = connection?.api
@@ -132,13 +146,16 @@ export function installVisionFallback(ctx: ClientContext): void {
       try {
         // The kernel's Session class sends a flat { sessionId, mode, content,
         // clientTimeZone } request with an optional AbortSignal second
-        // argument. Only the session's model may change here; the request
-        // itself always goes out byte-identical to what the kernel issued.
+        // argument. Only content may gain appended caption parts; everything
+        // else (and the signal) forwards exactly as the kernel issued it.
         const request = args[0] as { sessionId?: unknown; content?: unknown } | undefined
         const content = request?.content
         if (typeof request?.sessionId === 'string' && Array.isArray(content)) {
           if (hasImagePart(content as PromptContentPart[])) {
-            await switchToVisionModelIfNeeded(api, request.sessionId)
+            const replacement = await captionImagesIfNeeded(api, request.sessionId, content as PromptContentPart[])
+            if (replacement !== undefined) {
+              return original({ ...(request as object), content: replacement }, args[1])
+            }
           }
         }
       } catch {

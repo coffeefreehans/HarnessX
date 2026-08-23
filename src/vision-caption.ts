@@ -17,7 +17,7 @@ import type {} from './runtime.ts'
 
 const VISION_ROUTE = '/api/desktop/vision/describe'
 const MAX_JSON_BODY_BYTES = 32 * 1024 * 1024
-const CAPTION_TIMEOUT_MS = 120_000
+const CAPTION_TIMEOUT_MS = 60_000
 const PI_AI_SETTINGS = settingsNamespace('llm-pi-ai')
 const CAPTION_PROMPT = [
   '请详细描述这张图片的内容。',

@@ -54,9 +54,9 @@ export type VisionModelsKey =
 const zh: Record<VisionModelsKey, string> = {
   nav: '多模态模型',
   title: '多模态模型',
-  desc: '为自定义接口的模型声明图片输入。当前模型不支持图片时,发送图片会自动把会话切换到下方通用识图模型,由它直接读图作答;消息原样发送,不会插入任何识图文字。',
+  desc: '为自定义接口的模型声明图片输入。当前模型不支持图片时,发送图片会自动用下方通用识图模型识别图片,识别结果随消息一并发给当前模型作答;会话模型不变,消息里的图片原样保留。',
   universal: '通用识图模型',
-  universalDesc: '当前模型不支持图片时,发送图片自动切换到这个模型;之后可在会话中手动切回',
+  universalDesc: '当前模型不支持图片时,由这个模型识别图片并把结果告诉当前模型',
   universalPlaceholder: '选择识图模型',
   searchPlaceholder: '搜索模型…',
   loading: '加载中…',
@@ -75,9 +75,9 @@ const zh: Record<VisionModelsKey, string> = {
 const en: Record<VisionModelsKey, string> = {
   nav: 'Multimodal Models',
   title: 'Multimodal Models',
-  desc: 'Declare image input per custom-endpoint model. When the current model cannot take images, sending an image switches the session to the universal vision model below, which reads it directly; your message is sent verbatim with no caption text injected.',
+  desc: 'Declare image input per custom-endpoint model. When the current model cannot take images, sending an image has the universal vision model below recognize it, and the recognition rides along with the message for the current model to answer from. The session model stays; your images stay in the message.',
   universal: 'Universal Vision Model',
-  universalDesc: 'Sending an image with a text-only model switches to this one; switch back in the session anytime',
+  universalDesc: 'Recognizes images for text-only models and tells them what the images contain',
   universalPlaceholder: 'Choose a caption model',
   searchPlaceholder: 'Search models…',
   loading: 'Loading…',

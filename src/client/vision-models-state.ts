@@ -150,6 +150,33 @@ export function hasImagePart(content: readonly PromptContentPart[]): boolean {
   return content.some(part => part.type === 'image')
 }
 
+/**
+ * Append each image's caption as a labelled text part right after the image
+ * part, keeping every original part untouched — the user's bubble still shows
+ * their image, and a text-only model receives the visual content as text it
+ * can answer from. Captions are labelled so the model knows they are machine
+ * recognition output, not the user's own words.
+ */
+export function appendImageCaptions(
+  content: readonly PromptContentPart[],
+  captions: readonly string[],
+): PromptContentPart[] {
+  const out: PromptContentPart[] = []
+  let imageIndex = 0
+  for (const part of content) {
+    out.push(part)
+    if (part.type !== 'image') continue
+    const ordinal = imageIndex + 1
+    const caption = captions[imageIndex]?.trim()
+    imageIndex += 1
+    out.push({
+      type: 'text',
+      text: `\n\n[图片 ${String(ordinal)} 识别结果]\n${caption !== undefined && caption.length > 0 ? caption : '(图片识别未返回内容)'}`,
+    })
+  }
+  return out
+}
+
 /** Wire protocol the host caption bridge speaks. Only `openai-completions`
  *  custom endpoints can be used as the universal vision model. */
 export const CAPTION_SUPPORTED_API = 'openai-completions'
