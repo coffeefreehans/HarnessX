@@ -11,18 +11,18 @@
 
 HarnessX is an independently maintained desktop client for DeepSeek Harness. It owns the Electron window, system tray, local runtime, terminal, profile switching, and plugin management while composing the agents, sessions, tools, and Web UI from a pinned DeepSeek Harness source snapshot.
 
-Release `v0.1` is available from the independent public repository with x64 and ARM64 installers for Windows and macOS. Portable archives remain local test artifacts and are not uploaded to the public Release.
+Release `v0.1.5` is available from the independent public repository with x64 and ARM64 installers for Windows and macOS. Portable archives remain local test artifacts and are not uploaded to the public Release.
 
 ## Downloads
 
 | Architecture | Installer |
 | --- | --- |
-| Windows x64 | [Download EXE](https://github.com/coffeefreehans/HarnessX/releases/download/v0.1/HarnessX-0.1-x64-Setup.exe) |
-| Windows ARM64 | [Download EXE](https://github.com/coffeefreehans/HarnessX/releases/download/v0.1/HarnessX-0.1-arm64-Setup.exe) |
-| macOS Intel x64 | [Download DMG](https://github.com/coffeefreehans/HarnessX/releases/download/v0.1/HarnessX-0.1-x64.dmg) |
-| macOS Apple Silicon ARM64 | [Download DMG](https://github.com/coffeefreehans/HarnessX/releases/download/v0.1/HarnessX-0.1-arm64.dmg) |
+| Windows x64 | [Download EXE](https://github.com/coffeefreehans/HarnessX/releases/download/v0.1.5/HarnessX-0.1.5-x64-Setup.exe) |
+| Windows ARM64 | [Download EXE](https://github.com/coffeefreehans/HarnessX/releases/download/v0.1.5/HarnessX-0.1.5-arm64-Setup.exe) |
+| macOS Intel x64 | [Download DMG](https://github.com/coffeefreehans/HarnessX/releases/download/v0.1.5/HarnessX-0.1.5-x64.dmg) |
+| macOS Apple Silicon ARM64 | [Download DMG](https://github.com/coffeefreehans/HarnessX/releases/download/v0.1.5/HarnessX-0.1.5-arm64.dmg) |
 
-[SHA-256 checksums](https://github.com/coffeefreehans/HarnessX/releases/download/v0.1/SHA256SUMS.txt)
+[SHA-256 checksums](https://github.com/coffeefreehans/HarnessX/releases/download/v0.1.5/SHA256SUMS.txt)
 
 > The Windows and macOS artifacts are not publisher-signed. Windows SmartScreen may show an unknown-publisher warning, and macOS may require manual approval in System Settings. Verify the SHA-256 checksum after downloading.
 
@@ -36,6 +36,9 @@ Release `v0.1` is available from the independent public repository with x64 and 
 - Plugin sources, catalog, and installation job management
 - Application update checks and installer downloads
 - Separate Windows x64 and ARM64 installers and local portable test builds
+- Desktop-owned "HARNESSX" settings group: desktop-owned settings pages (notifications, multimodal models, and others) kept separate from the kernel so upstream upgrades cannot overwrite them
+- Multimodal image support: when the current model cannot accept images, pictures are first described by a universal vision model and sent as text; custom endpoints can declare image input per model (the settings page is off by default in this release, but the capability is in place)
+- Desktop preferences now persist host-side (a `prefs.json` under the DSH home), surviving app restarts and kernel web-server port changes
 
 ## Security Boundaries
 

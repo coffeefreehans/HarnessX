@@ -5,6 +5,8 @@
   DeepSeek Harness 的独立桌面客户端
 </p>
 
+<p align="center"><sub>中文 · <a href="README.en.md">English</a></sub></p>
+
 DeepSeek HarnessX 将固定版本的 DeepSeek Harness 运行时组合成原生桌面应用，提供窗口与托盘管理、配置切换、本地终端、插件市场、安装任务和应用更新。它是独立维护的社区项目，不是 DeepSeek 官方产品。
 
 ## 功能
@@ -18,6 +20,9 @@ DeepSeek HarnessX 将固定版本的 DeepSeek Harness 运行时组合成原生�
 - 任务结果、开始时间、完成时间、耗时和可折叠命令日志
 - GitHub Release 更新检查、版本说明和对应架构安装包下载
 - Windows x64、Windows ARM64、macOS Intel 和 macOS Apple Silicon 构建
+- 桌面专属「HARNESSX」设置分组:独立于内核、随桌面功能迭代的设置页(通知、多模态模型等),内核升级不会被覆盖
+- 多模态图片能力:发送图片时,当前模型不支持图片会先经通用识图模型转成文字描述再发送;自定义接口可逐模型声明图片输入(相关设置页本版默认关闭,能力已就位)
+- 桌面偏好改由 host 侧持久化(DSH home 下的 `prefs.json`),跨应用重启与内核 Web 端口变化保留
 
 ## 首次运行
 
@@ -115,7 +120,7 @@ Windows 打包必须在 x64 Windows 主机上使用 x64 Node.js 执行。macOS �
 
 **Windows 安装警告**
 
-版本 0.1 未使用 Authenticode 签名。只从本仓库 Release 下载并核对 SHA-256，不要从第三方下载站获取安装包。
+当前 0.1.x 发布版本尚未使用 Authenticode 签名。只从本仓库 Release 下载并核对 SHA-256，不要从第三方下载站获取安装包。
 
 **macOS 无法打开**
 
