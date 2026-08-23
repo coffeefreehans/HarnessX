@@ -54,7 +54,7 @@ export type VisionModelsKey =
 const zh: Record<VisionModelsKey, string> = {
   nav: '多模态模型',
   title: '多模态模型',
-  desc: '为自定义接口的模型声明图片输入。当前模型不支持图片时,发送图片会自动用下方通用识图模型识别图片,识别结果随消息一并发给当前模型作答;会话模型不变,消息里的图片原样保留。',
+  desc: '为自定义接口的模型声明图片输入。当前模型不支持图片时,发送图片会自动用下方通用识图模型识别图片,识别结果替换图片随消息发给当前模型作答;会话模型始终不变。',
   universal: '通用识图模型',
   universalDesc: '当前模型不支持图片时,由这个模型识别图片并把结果告诉当前模型',
   universalPlaceholder: '选择识图模型',
@@ -75,7 +75,7 @@ const zh: Record<VisionModelsKey, string> = {
 const en: Record<VisionModelsKey, string> = {
   nav: 'Multimodal Models',
   title: 'Multimodal Models',
-  desc: 'Declare image input per custom-endpoint model. When the current model cannot take images, sending an image has the universal vision model below recognize it, and the recognition rides along with the message for the current model to answer from. The session model stays; your images stay in the message.',
+  desc: 'Declare image input per custom-endpoint model. When the current model cannot take images, sending an image has the universal vision model below recognize it, and the labelled recognition replaces the image in the message the current model answers from. The session model never changes.',
   universal: 'Universal Vision Model',
   universalDesc: 'Recognizes images for text-only models and tells them what the images contain',
   universalPlaceholder: 'Choose a caption model',

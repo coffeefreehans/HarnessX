@@ -151,30 +151,28 @@ export function hasImagePart(content: readonly PromptContentPart[]): boolean {
 }
 
 /**
- * Append each image's caption as a labelled text part right after the image
- * part, keeping every original part untouched — the user's bubble still shows
- * their image, and a text-only model receives the visual content as text it
- * can answer from. Captions are labelled so the model knows they are machine
- * recognition output, not the user's own words.
+ * Replace each image part with its caption as a labelled text part, in
+ * position. Keeping the image part would make the kernel present the model
+ * an `Image sha256:` marker plus a read-image tool, and text-only models
+ * then chase the file instead of using the caption. With the image replaced
+ * by its recognition, the model can only answer from the caption — which is
+ * exactly the vision model's report to it.
  */
-export function appendImageCaptions(
+export function replaceImagesWithCaptions(
   content: readonly PromptContentPart[],
   captions: readonly string[],
 ): PromptContentPart[] {
-  const out: PromptContentPart[] = []
   let imageIndex = 0
-  for (const part of content) {
-    out.push(part)
-    if (part.type !== 'image') continue
+  return content.map((part): PromptContentPart => {
+    if (part.type !== 'image') return part
     const ordinal = imageIndex + 1
     const caption = captions[imageIndex]?.trim()
     imageIndex += 1
-    out.push({
+    return {
       type: 'text',
-      text: `\n\n[图片 ${String(ordinal)} 识别结果]\n${caption !== undefined && caption.length > 0 ? caption : '(图片识别未返回内容)'}`,
-    })
-  }
-  return out
+      text: `\n\n[图片 ${String(ordinal)} 识别结果 · 识图模型自动生成,当前模型无法读取原图,请直接依据以下内容回答,不要尝试读取图片文件]\n${caption !== undefined && caption.length > 0 ? caption : '(图片识别未返回内容)'}`,
+    }
+  })
 }
 
 /** Wire protocol the host caption bridge speaks. Only `openai-completions`

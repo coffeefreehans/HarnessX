@@ -230,7 +230,7 @@ describe('vision fallback send wrap', () => {
     expect(sessionsModels).not.toHaveBeenCalled()
   })
 
-  it('keeps the image and appends the caption for a text-only model', async () => {
+  it('replaces the image with its caption for a text-only model', async () => {
     getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
     fetchMock.mockResolvedValue({ ok: true, json: async () => ({ captions: ['一个报错弹窗的截图'] }) })
     await api.sessions.prompt(imageSend)
@@ -239,14 +239,15 @@ describe('vision fallback send wrap', () => {
     expect(url).toBe('/api/desktop/vision/describe')
     expect(JSON.parse(String(init.body))).toMatchObject({ provider: 'nexscp', model: 'gpt-vision' })
     const sent = (promptArgs.at(-1) as unknown[])[0] as { content: PromptContentPart[] }
-    // The user's parts come first, untouched; the caption follows the image.
-    expect(sent.content).toEqual([
-      imageSend.content[0],
-      imageSend.content[1],
-      { type: 'text', text: '\n\n[图片 1 识别结果]\n一个报错弹窗的截图' },
-    ])
+    // The user's text part keeps its identity; the image part is gone,
+    // replaced in position by the labelled caption — no image marker for
+    // the model to chase.
+    expect(sent.content).toHaveLength(2)
     expect(sent.content[0]).toBe(imageSend.content[0])
-    expect(sent.content[1]).toBe(imageSend.content[1])
+    expect(sent.content[1]).toEqual({
+      type: 'text',
+      text: '\n\n[图片 1 识别结果 · 识图模型自动生成,当前模型无法读取原图,请直接依据以下内容回答,不要尝试读取图片文件]\n一个报错弹窗的截图',
+    })
   })
 
   it('skips the bridge for a declared image-capable model', async () => {
@@ -288,6 +289,7 @@ describe('vision fallback send wrap', () => {
     const sent = args[0] as { sessionId: string; mode: string; content: PromptContentPart[] }
     expect(sent.sessionId).toBe('s1')
     expect(sent.mode).toBe('queue')
-    expect(sent.content).toHaveLength(3)
+    expect(sent.content).toHaveLength(2)
+    expect(sent.content[1]!.type).toBe('text')
   })
 })

@@ -3,16 +3,18 @@
  * Wraps the shared client API's `sessions.prompt` method (the one call every
  * composer send lands on). When a prompt carries images and the session's
  * model does not admit them, the images are first described by the configured
- * universal vision model through the desktop caption bridge, and each caption
- * is appended after its image as labelled text — so the ORIGINAL model stays
- * selected and answers using the recognition, while the user's message keeps
- * its images verbatim. Any failure here falls back to the untouched original
- * call.
+ * universal vision model through the desktop caption bridge, and each image
+ * part is replaced by its labelled caption — the ORIGINAL model stays
+ * selected and answers from the recognition it was handed. Keeping the image
+ * part is deliberately avoided: the kernel would show the model an image
+ * marker plus a read-image tool, and text-only models chase that file
+ * instead of using the caption. Any failure here falls back to the untouched
+ * original call.
  */
 
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import {
-  appendImageCaptions,
+  replaceImagesWithCaptions,
   extractVisionGroups,
   getVisionFallbackStore,
   hasImagePart,
@@ -122,7 +124,7 @@ async function captionImagesIfNeeded(
   for (const caption of value.captions) {
     if (typeof caption !== 'string') return undefined
   }
-  return appendImageCaptions(content, value.captions)
+  return replaceImagesWithCaptions(content, value.captions)
 }
 
 let installed = false
