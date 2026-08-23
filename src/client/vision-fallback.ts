@@ -25,7 +25,7 @@ const VISION_DESCRIBE_URL = '/api/desktop/vision/describe'
 
 /** Minimal wire faces the interceptor needs (structural, fixture-compatible). */
 interface WireSessions {
-  prompt: (request: unknown) => Promise<unknown>
+  prompt: (request: unknown, signal?: unknown) => Promise<unknown>
   models: (request: unknown) => Promise<{
     result: { ok: true; value: { current: { provider: string; model: string } } }
     | { ok: false; error: { message: string } }
@@ -150,23 +150,39 @@ export function installVisionFallback(ctx: ClientContext): void {
     if (sessions === undefined || typeof sessions.prompt !== 'function') return
     const original = sessions.prompt.bind(sessions)
     installed = true
-    sessions.prompt = async (request: unknown): Promise<unknown> => {
+    sessions.prompt = async (...args: unknown[]): Promise<unknown> => {
       try {
-        const payload = (request as { payload?: { sessionId?: string; content?: unknown } }).payload
-        const content = payload?.content
-        if (typeof payload?.sessionId === 'string' && Array.isArray(content)) {
+        // The kernel's Session class sends a flat { sessionId, mode, content,
+        // clientTimeZone } request with an optional AbortSignal second
+        // argument; the payload-wrapped read stays for wire-shape tolerance.
+        const request = args[0] as {
+          sessionId?: unknown
+          content?: unknown
+          payload?: { sessionId?: unknown; content?: unknown }
+        } | undefined
+        const flat = request ?? {}
+        const wrappedPayload = flat.payload
+        const sessionId = typeof flat.sessionId === 'string'
+          ? flat.sessionId
+          : typeof wrappedPayload?.sessionId === 'string' ? wrappedPayload.sessionId : undefined
+        const wrapped = wrappedPayload !== undefined && Array.isArray(wrappedPayload.content)
+        const content = wrapped ? wrappedPayload.content : flat.content
+        if (sessionId !== undefined && Array.isArray(content)) {
           const typed = content as PromptContentPart[]
           if (hasImagePart(typed)) {
-            const replacement = await captionIfNeeded(api, payload.sessionId, typed)
+            const replacement = await captionIfNeeded(api, sessionId, typed)
             if (replacement !== undefined) {
-              return original({ ...(request as object), payload: { ...payload, content: replacement } })
+              const patched = wrapped
+                ? { ...(request as object), payload: { ...wrappedPayload, content: replacement } }
+                : { ...(request as object), content: replacement }
+              return original(patched, args[1])
             }
           }
         }
       } catch {
         // Fall through: the send proceeds exactly as the kernel issued it.
       }
-      return original(request)
+      return original(args[0], args[1])
     }
     const remote = (ctx as unknown as {
       remote?: { $on(event: string, listener: () => void): () => void }

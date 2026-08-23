@@ -179,13 +179,15 @@ describe('vision fallback store', () => {
 
 describe('vision fallback send wrap', () => {
   const promptCalls: unknown[] = []
+  const promptArgs: unknown[][] = []
   let fetchMock: ReturnType<typeof vi.fn>
   const sessionsModels = vi.fn()
   const api = {
     sessions: {
-      prompt: vi.fn(async (request: unknown) => {
-        promptCalls.push(request)
-        return { result: { ok: true, value: { accepted: true as const } } }
+      prompt: vi.fn(async (...args: unknown[]) => {
+        promptArgs.push(args)
+        promptCalls.push(args[0])
+        return { result: { ok: true as const, value: { accepted: true as const } } }
       }),
       models: sessionsModels,
     },
@@ -220,6 +222,7 @@ describe('vision fallback send wrap', () => {
 
   beforeEach(() => {
     promptCalls.length = 0
+    promptArgs.length = 0
     sessionsModels.mockReset()
     sessionsModels.mockResolvedValue({
       result: { ok: true as const, value: { current: { provider: 'nexscp', model: 'stealth/ox-alpha' } } },
@@ -234,20 +237,20 @@ describe('vision fallback send wrap', () => {
     vi.unstubAllGlobals()
   })
 
+  // The kernel's Session class issues a flat request (sessionId, mode,
+  // content, clientTimeZone) with an optional AbortSignal second argument.
   const imageSend = {
-    rpcId: 'r1',
-    payload: {
-      sessionId: 's1',
-      mode: 'queue' as const,
-      content: [
-        { type: 'text', text: '这截图什么问题' },
-        { type: 'image', mediaType: 'image/png', data: 'QUJD' },
-      ],
-    },
+    sessionId: 's1',
+    mode: 'queue' as const,
+    clientTimeZone: 'Asia/Shanghai',
+    content: [
+      { type: 'text', text: '这截图什么问题' },
+      { type: 'image', mediaType: 'image/png', data: 'QUJD' },
+    ],
   }
 
   it('passes text-only prompts through untouched', async () => {
-    await api.sessions.prompt({ payload: { sessionId: 's1', mode: 'queue', content: [{ type: 'text', text: 'hi' }] } })
+    await api.sessions.prompt({ sessionId: 's1', mode: 'queue', content: [{ type: 'text', text: 'hi' }] })
     expect(fetchMock).not.toHaveBeenCalled()
     expect(sessionsModels).not.toHaveBeenCalled()
   })
@@ -260,8 +263,24 @@ describe('vision fallback send wrap', () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('/api/desktop/vision/describe')
     expect(JSON.parse(String(init.body)).model).toBe('gpt-vision')
-    const sent = promptCalls.at(-1) as { payload: { content: PromptContentPart[] } }
-    expect(sent.payload.content).toEqual([
+    const sent = promptCalls.at(-1) as { content: PromptContentPart[] }
+    expect(sent.content).toEqual([
+      { type: 'text', text: '这截图什么问题' },
+      { type: 'text', text: '[图片 1 识别结果]\n一个报错弹窗的截图' },
+    ])
+  })
+
+  it('forwards the abort signal and patches the flat request in place', async () => {
+    getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ captions: ['一个报错弹窗的截图'] }) })
+    const signal = new AbortController().signal
+    await api.sessions.prompt(imageSend, signal)
+    const args = promptArgs.at(-1) as unknown[]
+    expect(args[1]).toBe(signal)
+    const sent = args[0] as { sessionId: string; mode: string; content: PromptContentPart[] }
+    expect(sent.sessionId).toBe('s1')
+    expect(sent.mode).toBe('queue')
+    expect(sent.content).toEqual([
       { type: 'text', text: '这截图什么问题' },
       { type: 'text', text: '[图片 1 识别结果]\n一个报错弹窗的截图' },
     ])
@@ -275,10 +294,10 @@ describe('vision fallback send wrap', () => {
     fetchMock.mockResolvedValue({ ok: true, json: async () => ({ captions: ['一个报错弹窗'] }) })
     await api.sessions.prompt(imageSend)
     expect(fetchMock).toHaveBeenCalledTimes(1)
-    const sent = promptCalls.at(-1) as { payload: { content: PromptContentPart[] } }
-    expect(sent.payload.content).toHaveLength(3)
-    expect(sent.payload.content[1]).toEqual({ type: 'image', mediaType: 'image/png', data: 'QUJD' })
-    expect(sent.payload.content[2]).toEqual({ type: 'text', text: '[图片 1 识别结果]\n一个报错弹窗' })
+    const sent = promptCalls.at(-1) as { content: PromptContentPart[] }
+    expect(sent.content).toHaveLength(3)
+    expect(sent.content[1]).toEqual({ type: 'image', mediaType: 'image/png', data: 'QUJD' })
+    expect(sent.content[2]).toEqual({ type: 'text', text: '[图片 1 识别结果]\n一个报错弹窗' })
   })
 
   it('keeps plain originals when captioning fails for a declared custom model', async () => {
@@ -288,24 +307,24 @@ describe('vision fallback send wrap', () => {
     })
     fetchMock.mockResolvedValue({ ok: false, json: async () => ({ error: 'boom' }) })
     await api.sessions.prompt(imageSend)
-    const sent = promptCalls.at(-1) as { payload: { content: PromptContentPart[] } }
-    expect(sent.payload.content).toHaveLength(2)
-    expect(sent.payload.content[1]!.type).toBe('image')
+    const sent = promptCalls.at(-1) as { content: PromptContentPart[] }
+    expect(sent.content).toHaveLength(2)
+    expect(sent.content[1]!.type).toBe('image')
   })
 
   it('falls back to the original send when the bridge fails', async () => {
     getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
     fetchMock.mockResolvedValue({ ok: false, json: async () => ({ error: 'boom' }) })
     await api.sessions.prompt(imageSend)
-    const sent = promptCalls.at(-1) as { payload: { content: PromptContentPart[] } }
-    expect(sent.payload.content[1]!.type).toBe('image')
+    const sent = promptCalls.at(-1) as { content: PromptContentPart[] }
+    expect(sent.content[1]!.type).toBe('image')
   })
 
   it('passes through when no universal model is configured', async () => {
     getVisionFallbackStore().set({ enabled: false, provider: undefined, model: undefined })
     await api.sessions.prompt(imageSend)
     expect(fetchMock).not.toHaveBeenCalled()
-    const sent = promptCalls.at(-1) as { payload: { content: PromptContentPart[] } }
-    expect(sent.payload.content[1]!.type).toBe('image')
+    const sent = promptCalls.at(-1) as { content: PromptContentPart[] }
+    expect(sent.content[1]!.type).toBe('image')
   })
 })
