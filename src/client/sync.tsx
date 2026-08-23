@@ -5,7 +5,7 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import { registerDesktopSettingsNavLabel } from './desktop-section.tsx'
+import { DESKTOP_NAV_ICONS, registerDesktopSettingsNavSection } from './desktop-section.tsx'
 
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -284,7 +284,7 @@ const SYNC_STYLES = `
 
 export function applySync(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'sync: dictionaries')
-  registerDesktopSettingsNavLabel(() => ctx.locale.bind(NS)('nav'))
+  registerDesktopSettingsNavSection(() => ctx.locale.bind(NS)('nav'), DESKTOP_NAV_ICONS.cloud)
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'cloud-sync',

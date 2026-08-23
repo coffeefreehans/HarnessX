@@ -18,7 +18,7 @@ import {
   type NotificationSettings,
 } from './notifications.ts'
 import { playCompletionSound } from './sound.ts'
-import { registerDesktopSettingsNavLabel } from './desktop-section.tsx'
+import { DESKTOP_NAV_ICONS, registerDesktopSettingsNavSection } from './desktop-section.tsx'
 
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -189,7 +189,7 @@ export function NotificationSettingsSection(_props: PropsRuntime<'settings.secti
 export function applyNotificationSettings(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'notifications: dictionaries')
   const t = ctx.locale.bind(NS)
-  registerDesktopSettingsNavLabel(() => t('nav'))
+  registerDesktopSettingsNavSection(() => t('nav'), DESKTOP_NAV_ICONS.bell)
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'notifications',
