@@ -119,6 +119,7 @@
     "start": "node lib/bin.js",
     "dev": "yarn run build && node lib/bin.js",
     "package:dir": "yarn run build && node scripts/package-dir.mjs",
+    "package:portable": "yarn run build && node scripts/package-zip.mjs",
     "dist:mac": "node scripts/release-mac.ts",
     "dist:win": "node scripts/package-win.ts",
     "upstream:version": "cd deepseek-harness && corepack pnpm --version",
