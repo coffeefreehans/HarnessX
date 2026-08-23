@@ -1,13 +1,12 @@
 /** Vision fallback send interception: desktop-owned, zero kernel edits.
  *
  * Wraps the shared client API's `sessions.prompt` method (the one call every
- * composer send lands on). When a prompt carries images, the session's model
- * does not admit them, and a universal caption model is configured, each
- * image is first described through the desktop caption bridge and the image
- * parts are swapped for their caption text — so the kernel sees a plain text
- * prompt and never has to reject it. Models whose image toggle is on pass
- * straight through and keep receiving originals. Any failure here falls back
- * to the untouched original call.
+ * composer send lands on). When a prompt carries images and the session's
+ * model does not admit them, the session is switched to the configured
+ * universal vision model BEFORE the send — so that model reads the images
+ * natively and answers directly. The outgoing request itself is never
+ * modified: no caption text is injected into the user's message, and any
+ * failure here leaves the send exactly as the kernel issued it.
  */
 
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
@@ -15,19 +14,19 @@ import {
   extractVisionGroups,
   getVisionFallbackStore,
   hasImagePart,
-  transformContentHybrid,
-  transformContentWithCaptions,
   walkPath,
   type PromptContentPart,
 } from './vision-models-state.ts'
-
-const VISION_DESCRIBE_URL = '/api/desktop/vision/describe'
 
 /** Minimal wire faces the interceptor needs (structural, fixture-compatible). */
 interface WireSessions {
   prompt: (request: unknown, signal?: unknown) => Promise<unknown>
   models: (request: unknown) => Promise<{
     result: { ok: true; value: { current: { provider: string; model: string } } }
+    | { ok: false; error: { message: string } }
+  }>
+  selectModel: (request: unknown) => Promise<{
+    result: { ok: true; value: { selected: { provider: string; model: string } } }
     | { ok: false; error: { message: string } }
   }>
 }
@@ -40,15 +39,11 @@ interface WireApi {
 
 const supportKey = (provider: string, model: string): string => `${provider}\u0000${model}`
 
-/** Custom (llm-pi-ai) provider routes, whose image declarations are ours. */
-const customProviders = new Set<string>()
-
 let supportMap: Map<string, boolean> | undefined
 let supportMapLoading: Promise<Map<string, boolean>> | undefined
 
 async function loadSupportMap(api: WireApi): Promise<Map<string, boolean>> {
   const map = new Map<string, boolean>()
-  customProviders.clear()
   const providersResponse = await api.llm.providers({})
   if (!providersResponse.result.ok) return map
   const describeResponse = await api.settings.describe({})
@@ -57,7 +52,6 @@ async function loadSupportMap(api: WireApi): Promise<Map<string, boolean>> {
   const rows = providersResponse.result.value.providers
   // Custom routes: per-entry `input` declarations written by our settings page.
   for (const group of extractVisionGroups(namespaces.get('llm-pi-ai'), rows)) {
-    customProviders.add(group.provider)
     for (const model of group.models) {
       if (model.imageEnabled) map.set(supportKey(group.provider, model.id), true)
     }
@@ -92,45 +86,29 @@ async function ensureSupportMap(api: WireApi): Promise<Map<string, boolean>> {
   return supportMapLoading
 }
 
-interface ImagePart { type: 'image'; mediaType: string; data: string; name?: string }
-
 /**
- * Caption the images of one prompt through the bridge, when configured and
- * needed. Returns the replacement content (captions replace or ride along
- * with the images), or undefined to send unchanged.
+ * Switch the session to the universal vision model when the current model
+ * cannot take images. Any failure (not configured, directory unreadable,
+ * selection rejected) returns quietly: the send then proceeds exactly as
+ * the kernel issued it, on the unchanged current model.
  */
-async function captionIfNeeded(
-  api: WireApi,
-  sessionId: string,
-  content: readonly PromptContentPart[],
-): Promise<PromptContentPart[] | undefined> {
+async function switchToVisionModelIfNeeded(api: WireApi, sessionId: string): Promise<void> {
   const config = getVisionFallbackStore().getSnapshot()
-  if (!config.enabled || config.provider === undefined || config.model === undefined) return undefined
+  if (!config.enabled || config.provider === undefined || config.model === undefined) return
   const modelsResponse = await api.sessions.models({ sessionId })
-  if (!modelsResponse.result.ok) return undefined
+  if (!modelsResponse.result.ok) return
   const current = modelsResponse.result.value.current
+  if (current.provider === config.provider && current.model === config.model) return
   const map = await ensureSupportMap(api)
-  const declared = map.get(supportKey(current.provider, current.model)) === true
-  // Official declared-catalog vision routes get originals, trusted. A custom
-  // route's declaration is ours and may be wrong: its endpoint might silently
-  // drop images, so captions ride along and a blind model still answers.
-  const hybrid = declared && customProviders.has(current.provider)
-  if (declared && !hybrid) return undefined
-  const images = content.filter((part): part is ImagePart => part.type === 'image')
-  const response = await fetch(VISION_DESCRIBE_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ provider: config.provider, model: config.model, images }),
+  // Declared image-capable models (official catalog entries, or custom routes
+  // whose toggle the user set) read the originals themselves; only text-only
+  // selections are rerouted to the universal vision model.
+  if (map.get(supportKey(current.provider, current.model)) === true) return
+  await api.sessions.selectModel({
+    sessionId,
+    provider: config.provider,
+    model: config.model,
   })
-  if (!response.ok) return undefined
-  const value = await response.json() as { captions?: unknown }
-  if (!Array.isArray(value.captions) || value.captions.length !== images.length) return undefined
-  for (const caption of value.captions) {
-    if (typeof caption !== 'string') return undefined
-  }
-  return hybrid
-    ? transformContentHybrid(content, value.captions)
-    : transformContentWithCaptions(content, value.captions)
 }
 
 let installed = false
@@ -142,7 +120,7 @@ let installed = false
  * @param ctx - browser Cordis context carrying the connection service.
  */
 export function installVisionFallback(ctx: ClientContext): void {
-  if (installed || typeof fetch !== 'function') return
+  if (installed) return
   try {
     const connection = ctx.get('connection') as { api: WireApi }
     const api = connection?.api
@@ -154,29 +132,13 @@ export function installVisionFallback(ctx: ClientContext): void {
       try {
         // The kernel's Session class sends a flat { sessionId, mode, content,
         // clientTimeZone } request with an optional AbortSignal second
-        // argument; the payload-wrapped read stays for wire-shape tolerance.
-        const request = args[0] as {
-          sessionId?: unknown
-          content?: unknown
-          payload?: { sessionId?: unknown; content?: unknown }
-        } | undefined
-        const flat = request ?? {}
-        const wrappedPayload = flat.payload
-        const sessionId = typeof flat.sessionId === 'string'
-          ? flat.sessionId
-          : typeof wrappedPayload?.sessionId === 'string' ? wrappedPayload.sessionId : undefined
-        const wrapped = wrappedPayload !== undefined && Array.isArray(wrappedPayload.content)
-        const content = wrapped ? wrappedPayload.content : flat.content
-        if (sessionId !== undefined && Array.isArray(content)) {
-          const typed = content as PromptContentPart[]
-          if (hasImagePart(typed)) {
-            const replacement = await captionIfNeeded(api, sessionId, typed)
-            if (replacement !== undefined) {
-              const patched = wrapped
-                ? { ...(request as object), payload: { ...wrappedPayload, content: replacement } }
-                : { ...(request as object), content: replacement }
-              return original(patched, args[1])
-            }
+        // argument. Only the session's model may change here; the request
+        // itself always goes out byte-identical to what the kernel issued.
+        const request = args[0] as { sessionId?: unknown; content?: unknown } | undefined
+        const content = request?.content
+        if (typeof request?.sessionId === 'string' && Array.isArray(content)) {
+          if (hasImagePart(content as PromptContentPart[])) {
+            await switchToVisionModelIfNeeded(api, request.sessionId)
           }
         }
       } catch {

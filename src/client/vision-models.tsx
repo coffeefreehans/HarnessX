@@ -54,9 +54,9 @@ export type VisionModelsKey =
 const zh: Record<VisionModelsKey, string> = {
   nav: '多模态模型',
   title: '多模态模型',
-  desc: '自定义接口即使声明支持图片,也可能收不到图。开启图片输入的模型会同时收到原图和文字识别结果(双保险);未开启的模型发送图片时,自动调用下方通用识图模型把图片转成文字描述再发送。',
+  desc: '为自定义接口的模型声明图片输入。当前模型不支持图片时,发送图片会自动把会话切换到下方通用识图模型,由它直接读图作答;消息原样发送,不会插入任何识图文字。',
   universal: '通用识图模型',
-  universalDesc: '当前模型不支持图片时,先用这个模型识别图片,再把描述发给当前模型',
+  universalDesc: '当前模型不支持图片时,发送图片自动切换到这个模型;之后可在会话中手动切回',
   universalPlaceholder: '选择识图模型',
   searchPlaceholder: '搜索模型…',
   loading: '加载中…',
@@ -75,9 +75,9 @@ const zh: Record<VisionModelsKey, string> = {
 const en: Record<VisionModelsKey, string> = {
   nav: 'Multimodal Models',
   title: 'Multimodal Models',
-  desc: 'Custom endpoints may silently drop images even when declared. Toggled models receive image originals together with their captions; untoggled ones get captions produced by the universal vision model below.',
+  desc: 'Declare image input per custom-endpoint model. When the current model cannot take images, sending an image switches the session to the universal vision model below, which reads it directly; your message is sent verbatim with no caption text injected.',
   universal: 'Universal Vision Model',
-  universalDesc: 'When the current model cannot take images, describe them with this model first, then send the captions',
+  universalDesc: 'Sending an image with a text-only model switches to this one; switch back in the session anytime',
   universalPlaceholder: 'Choose a caption model',
   searchPlaceholder: 'Search models…',
   loading: 'Loading…',

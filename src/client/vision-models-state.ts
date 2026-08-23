@@ -1,4 +1,4 @@
-/** Vision-model state: per-model image toggles, universal fallback config, prompt transforms.
+/** Vision-model state: per-model image toggles and the universal vision model choice.
  *
  * Pure logic plus localStorage-backed desktop-owned configuration. The kernel
  * keeps provider model lists under the `llm-pi-ai` settings namespace; image
@@ -154,60 +154,9 @@ export function hasImagePart(content: readonly PromptContentPart[]): boolean {
  *  custom endpoints can be used as the universal vision model. */
 export const CAPTION_SUPPORTED_API = 'openai-completions'
 
-/** Whether a provider group can serve the universal caption model. */
+/** Whether a provider group can serve the universal vision model. */
 export function isCaptionCompatible(group: VisionProviderGroup): boolean {
   return group.api === CAPTION_SUPPORTED_API
-}
-
-/**
- * Replace image parts, in order, with their caption text blocks. Text parts
- * keep their position; each caption is labelled with its image ordinal so the
- * main model can reference "图片 1" in replies.
- */
-export function transformContentWithCaptions(
-  content: readonly PromptContentPart[],
-  captions: readonly string[],
-): PromptContentPart[] {
-  let imageIndex = 0
-  return content.map((part): PromptContentPart => {
-    if (part.type !== 'image') return part
-    const ordinal = imageIndex + 1
-    const caption = captions[imageIndex]?.trim()
-    imageIndex += 1
-    const body = caption !== undefined && caption.length > 0
-      ? caption
-      : '(图片识别未返回内容)'
-    return { type: 'text', text: `[图片 ${String(ordinal)} 识别结果]\n${body}` }
-  })
-}
-
-/**
- * Augment image parts, in order, with their caption text blocks while KEEPING
- * the image parts. Used for custom-route models declared image-capable whose
- * endpoint may silently drop images: a vision model still receives originals,
- * while a blind one answers from the captions beside them.
- */
-export function transformContentHybrid(
-  content: readonly PromptContentPart[],
-  captions: readonly string[],
-): PromptContentPart[] {
-  const out: PromptContentPart[] = []
-  let imageIndex = 0
-  for (const part of content) {
-    if (part.type !== 'image') {
-      out.push(part)
-      continue
-    }
-    const ordinal = imageIndex + 1
-    const caption = captions[imageIndex]?.trim()
-    imageIndex += 1
-    out.push(part)
-    out.push({
-      type: 'text',
-      text: `[图片 ${String(ordinal)} 识别结果]\n${caption !== undefined && caption.length > 0 ? caption : '(图片识别未返回内容)'}`,
-    })
-  }
-  return out
 }
 
 export interface VisionFallbackSettings {

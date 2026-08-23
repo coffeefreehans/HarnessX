@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
 import {
   buildBulkOps,
   buildToggleOp,
@@ -6,8 +6,6 @@ import {
   getVisionFallbackStore,
   hasImagePart,
   isCaptionCompatible,
-  transformContentHybrid,
-  transformContentWithCaptions,
   walkPath,
   DEFAULT_VISION_FALLBACK_SETTINGS,
   type PromptContentPart,
@@ -106,21 +104,6 @@ describe('vision model state', () => {
     expect(buildToggleOp(group, 99, true, raw)).toBeUndefined()
   })
 
-  it('keeps images and appends their captions in hybrid mode', () => {
-    const content: PromptContentPart[] = [
-      { type: 'text', text: '看下这两张图' },
-      { type: 'image', mediaType: 'image/png', data: 'aaa' },
-      { type: 'image', mediaType: 'image/jpeg', data: 'bbb' },
-    ]
-    const hybrid = transformContentHybrid(content, ['第一张', ''])
-    expect(hybrid).toHaveLength(5)
-    expect(hybrid[0]).toEqual({ type: 'text', text: '看下这两张图' })
-    expect(hybrid[1]).toEqual({ type: 'image', mediaType: 'image/png', data: 'aaa' })
-    expect(hybrid[2]).toEqual({ type: 'text', text: '[图片 1 识别结果]\n第一张' })
-    expect(hybrid[3]).toEqual({ type: 'image', mediaType: 'image/jpeg', data: 'bbb' })
-    expect(hybrid[4]).toEqual({ type: 'text', text: '[图片 2 识别结果]\n(图片识别未返回内容)' })
-  })
-
   it('builds bulk ops that clone only changed entries', () => {
     const groups = extractVisionGroups(namespaceValue, rows)
     const group = groups[0]!
@@ -133,7 +116,7 @@ describe('vision model state', () => {
     expect(value[2]!.input).toEqual(['text', 'image'])
   })
 
-  it('detects image parts and swaps them for ordered captions', () => {
+  it('detects image parts', () => {
     const content: PromptContentPart[] = [
       { type: 'text', text: '看下这两张图' },
       { type: 'image', mediaType: 'image/png', data: 'aaa' },
@@ -142,11 +125,6 @@ describe('vision model state', () => {
     ]
     expect(hasImagePart(content)).toBe(true)
     expect(hasImagePart([content[0]!])).toBe(false)
-    const transformed = transformContentWithCaptions(content, ['第一张的描述', ''])
-    expect(transformed[0]).toEqual({ type: 'text', text: '看下这两张图' })
-    expect(transformed[1]).toEqual({ type: 'text', text: '[图片 1 识别结果]\n第一张的描述' })
-    expect(transformed[2]).toEqual({ type: 'text', text: '重点是第二张' })
-    expect(transformed[3]).toEqual({ type: 'text', text: '[图片 2 识别结果]\n(图片识别未返回内容)' })
   })
 })
 
@@ -178,18 +156,17 @@ describe('vision fallback store', () => {
 })
 
 describe('vision fallback send wrap', () => {
-  const promptCalls: unknown[] = []
   const promptArgs: unknown[][] = []
-  let fetchMock: ReturnType<typeof vi.fn>
   const sessionsModels = vi.fn()
+  const sessionsSelectModel = vi.fn()
   const api = {
     sessions: {
       prompt: vi.fn(async (...args: unknown[]) => {
         promptArgs.push(args)
-        promptCalls.push(args[0])
         return { result: { ok: true as const, value: { accepted: true as const } } }
       }),
       models: sessionsModels,
+      selectModel: sessionsSelectModel,
     },
     llm: {
       providers: vi.fn(async () => ({
@@ -221,20 +198,17 @@ describe('vision fallback send wrap', () => {
   }
 
   beforeEach(() => {
-    promptCalls.length = 0
     promptArgs.length = 0
     sessionsModels.mockReset()
     sessionsModels.mockResolvedValue({
       result: { ok: true as const, value: { current: { provider: 'nexscp', model: 'stealth/ox-alpha' } } },
     })
-    fetchMock = vi.fn()
-    vi.stubGlobal('fetch', fetchMock)
+    sessionsSelectModel.mockReset()
+    sessionsSelectModel.mockResolvedValue({
+      result: { ok: true as const, value: { selected: { provider: 'nexscp', model: 'gpt-vision' } } },
+    })
     getVisionFallbackStore().set({ ...DEFAULT_VISION_FALLBACK_SETTINGS })
     installVisionFallback({ get: () => ({ api }) } as never)
-  })
-
-  afterEach(() => {
-    vi.unstubAllGlobals()
   })
 
   // The kernel's Session class issues a flat request (sessionId, mode,
@@ -251,80 +225,59 @@ describe('vision fallback send wrap', () => {
 
   it('passes text-only prompts through untouched', async () => {
     await api.sessions.prompt({ sessionId: 's1', mode: 'queue', content: [{ type: 'text', text: 'hi' }] })
-    expect(fetchMock).not.toHaveBeenCalled()
     expect(sessionsModels).not.toHaveBeenCalled()
+    expect(sessionsSelectModel).not.toHaveBeenCalled()
   })
 
-  it('captions images through the bridge when the model is not enabled', async () => {
+  it('switches the session to the universal vision model and forwards the request verbatim', async () => {
     getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ captions: ['一个报错弹窗的截图'] }) })
     await api.sessions.prompt(imageSend)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('/api/desktop/vision/describe')
-    expect(JSON.parse(String(init.body)).model).toBe('gpt-vision')
-    const sent = promptCalls.at(-1) as { content: PromptContentPart[] }
-    expect(sent.content).toEqual([
-      { type: 'text', text: '这截图什么问题' },
-      { type: 'text', text: '[图片 1 识别结果]\n一个报错弹窗的截图' },
-    ])
-  })
-
-  it('forwards the abort signal and patches the flat request in place', async () => {
-    getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ captions: ['一个报错弹窗的截图'] }) })
-    const signal = new AbortController().signal
-    await api.sessions.prompt(imageSend, signal)
+    expect(sessionsSelectModel).toHaveBeenCalledTimes(1)
+    expect(sessionsSelectModel).toHaveBeenCalledWith({ sessionId: 's1', provider: 'nexscp', model: 'gpt-vision' })
+    // The outgoing request object is the very same one the kernel issued:
+    // no caption text is ever injected into the user's message.
     const args = promptArgs.at(-1) as unknown[]
-    expect(args[1]).toBe(signal)
-    const sent = args[0] as { sessionId: string; mode: string; content: PromptContentPart[] }
-    expect(sent.sessionId).toBe('s1')
-    expect(sent.mode).toBe('queue')
-    expect(sent.content).toEqual([
-      { type: 'text', text: '这截图什么问题' },
-      { type: 'text', text: '[图片 1 识别结果]\n一个报错弹窗的截图' },
-    ])
+    expect(args[0]).toBe(imageSend)
+    expect((args[0] as { content: PromptContentPart[] }).content[1]!.type).toBe('image')
   })
 
-  it('sends originals plus captions when a declared custom model is selected', async () => {
+  it('keeps a declared image-capable model without switching', async () => {
     getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
     sessionsModels.mockResolvedValue({
       result: { ok: true as const, value: { current: { provider: 'nexscp', model: 'gpt-vision' } } },
     })
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ captions: ['一个报错弹窗'] }) })
     await api.sessions.prompt(imageSend)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const sent = promptCalls.at(-1) as { content: PromptContentPart[] }
-    expect(sent.content).toHaveLength(3)
-    expect(sent.content[1]).toEqual({ type: 'image', mediaType: 'image/png', data: 'QUJD' })
-    expect(sent.content[2]).toEqual({ type: 'text', text: '[图片 1 识别结果]\n一个报错弹窗' })
+    expect(sessionsSelectModel).not.toHaveBeenCalled()
+    const args = promptArgs.at(-1) as unknown[]
+    expect(args[0]).toBe(imageSend)
   })
 
-  it('keeps plain originals when captioning fails for a declared custom model', async () => {
+  it('sends the original request even when the switch is rejected', async () => {
     getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
-    sessionsModels.mockResolvedValue({
-      result: { ok: true as const, value: { current: { provider: 'nexscp', model: 'gpt-vision' } } },
+    sessionsSelectModel.mockResolvedValue({
+      result: { ok: false as const, error: { code: 'route-unavailable', message: 'nope' } },
     })
-    fetchMock.mockResolvedValue({ ok: false, json: async () => ({ error: 'boom' }) })
-    await api.sessions.prompt(imageSend)
-    const sent = promptCalls.at(-1) as { content: PromptContentPart[] }
-    expect(sent.content).toHaveLength(2)
-    expect(sent.content[1]!.type).toBe('image')
-  })
-
-  it('falls back to the original send when the bridge fails', async () => {
-    getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
-    fetchMock.mockResolvedValue({ ok: false, json: async () => ({ error: 'boom' }) })
-    await api.sessions.prompt(imageSend)
-    const sent = promptCalls.at(-1) as { content: PromptContentPart[] }
-    expect(sent.content[1]!.type).toBe('image')
+    await expect(api.sessions.prompt(imageSend)).resolves.toMatchObject({ result: { ok: true } })
+    const args = promptArgs.at(-1) as unknown[]
+    expect(args[0]).toBe(imageSend)
+    expect((args[0] as { content: PromptContentPart[] }).content[1]!.type).toBe('image')
   })
 
   it('passes through when no universal model is configured', async () => {
     getVisionFallbackStore().set({ enabled: false, provider: undefined, model: undefined })
     await api.sessions.prompt(imageSend)
-    expect(fetchMock).not.toHaveBeenCalled()
-    const sent = promptCalls.at(-1) as { content: PromptContentPart[] }
-    expect(sent.content[1]!.type).toBe('image')
+    expect(sessionsModels).not.toHaveBeenCalled()
+    expect(sessionsSelectModel).not.toHaveBeenCalled()
+    const args = promptArgs.at(-1) as unknown[]
+    expect(args[0]).toBe(imageSend)
+  })
+
+  it('forwards the abort signal alongside the untouched request', async () => {
+    getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
+    const signal = new AbortController().signal
+    await api.sessions.prompt(imageSend, signal)
+    const args = promptArgs.at(-1) as unknown[]
+    expect(args[0]).toBe(imageSend)
+    expect(args[1]).toBe(signal)
   })
 })
