@@ -167,6 +167,35 @@ export function transformContentWithCaptions(
   })
 }
 
+/**
+ * Augment image parts, in order, with their caption text blocks while KEEPING
+ * the image parts. Used for custom-route models declared image-capable whose
+ * endpoint may silently drop images: a vision model still receives originals,
+ * while a blind one answers from the captions beside them.
+ */
+export function transformContentHybrid(
+  content: readonly PromptContentPart[],
+  captions: readonly string[],
+): PromptContentPart[] {
+  const out: PromptContentPart[] = []
+  let imageIndex = 0
+  for (const part of content) {
+    if (part.type !== 'image') {
+      out.push(part)
+      continue
+    }
+    const ordinal = imageIndex + 1
+    const caption = captions[imageIndex]?.trim()
+    imageIndex += 1
+    out.push(part)
+    out.push({
+      type: 'text',
+      text: `[图片 ${String(ordinal)} 识别结果]\n${caption !== undefined && caption.length > 0 ? caption : '(图片识别未返回内容)'}`,
+    })
+  }
+  return out
+}
+
 export interface VisionFallbackSettings {
   /** Send images through the universal caption model when the current model cannot take them. */
   enabled: boolean

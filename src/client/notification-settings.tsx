@@ -19,6 +19,7 @@ import {
 } from './notifications.ts'
 import { playCompletionSound } from './sound.ts'
 import { DESKTOP_NAV_ICONS, registerDesktopSettingsNavSection } from './desktop-section.tsx'
+import { schedulePersistDesktopPrefs } from './desktop-prefs.ts'
 
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -113,6 +114,7 @@ export function NotificationSettingsSection(_props: PropsRuntime<'settings.secti
     store.update((draft) => {
       Object.assign(draft, patch)
     })
+    schedulePersistDesktopPrefs()
     if (patch.systemNotification) {
       void requestNotificationPermission()
     }

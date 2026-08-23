@@ -49,6 +49,10 @@
       "types": "./lib/types/vision-caption.d.ts",
       "default": "./lib/vision-caption.js"
     },
+    "./desktop-prefs": {
+      "types": "./lib/types/desktop-prefs.d.ts",
+      "default": "./lib/desktop-prefs.js"
+    },
     "./profile-service": {
       "types": "./lib/types/profile-service.d.ts",
       "default": "./lib/profile-service.js"

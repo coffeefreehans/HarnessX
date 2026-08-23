@@ -14,6 +14,7 @@ export default defineConfig([
       pnpm: 'src/pnpm.ts',
       market: 'src/market.ts',
       'vision-caption': 'src/vision-caption.ts',
+      'desktop-prefs': 'src/desktop-prefs.ts',
       'directory-picker': 'src/directory-picker.ts',
       credentials: 'src/credentials.ts',
       runtime: 'src/runtime.ts',

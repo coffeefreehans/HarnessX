@@ -14,6 +14,8 @@
       name: harnessx-desktop/market
     - id: desktop-vision
       name: harnessx-desktop/vision-caption
+    - id: desktop-prefs
+      name: harnessx-desktop/desktop-prefs
     - id: desktop-updates
       name: harnessx-desktop/updates
     - id: desktop-sync

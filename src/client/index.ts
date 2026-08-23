@@ -12,6 +12,7 @@ import { applySessionNotifications } from './session-notifications.ts'
 import { applyNotificationSettings } from './notification-settings.tsx'
 import { applyVisionModels } from './vision-models.tsx'
 import { installVisionFallback } from './vision-fallback.ts'
+import { hydrateDesktopPrefs } from './desktop-prefs.ts'
 import { applySync } from './sync.tsx'
 import { primeCompletionAudio } from './sound.ts'
 
@@ -50,4 +51,7 @@ export function apply(ctx: ClientContext): void {
   applyVisionModels(ctx)
   installVisionFallback(ctx)
   applySync(ctx)
+  // localStorage is port-scoped and the port changes per launch; desktop
+  // preferences live host-side and hydrate into the stores here.
+  void hydrateDesktopPrefs()
 }

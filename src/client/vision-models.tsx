@@ -20,6 +20,7 @@ import {
   type ProviderRouteRow,
   type VisionProviderGroup,
 } from './vision-models-state.ts'
+import { schedulePersistDesktopPrefs } from './desktop-prefs.ts'
 import { DESKTOP_NAV_ICONS, registerDesktopSettingsNavSection } from './desktop-section.tsx'
 
 
@@ -51,7 +52,7 @@ export type VisionModelsKey =
 const zh: Record<VisionModelsKey, string> = {
   nav: '多模态模型',
   title: '多模态模型',
-  desc: '自定义接口不会上报模型能力,未声明的模型一律按纯文本处理、无法发送图片。开启开关的模型直接接收原图;未开启的模型发送图片时,自动调用下方通用识图模型把图片转成文字描述。',
+  desc: '自定义接口即使声明支持图片,也可能收不到图。开启图片输入的模型会同时收到原图和文字识别结果(双保险);未开启的模型发送图片时,自动调用下方通用识图模型把图片转成文字描述再发送。',
   universal: '通用识图模型',
   universalDesc: '当前模型不支持图片时,先用这个模型识别图片,再把描述发给当前模型',
   universalPlaceholder: '选择识图模型',
@@ -71,7 +72,7 @@ const zh: Record<VisionModelsKey, string> = {
 const en: Record<VisionModelsKey, string> = {
   nav: 'Multimodal Models',
   title: 'Multimodal Models',
-  desc: 'Custom endpoints do not report model capabilities; undeclared models are treated as text-only. Toggled models receive image originals; untoggled ones get image captions produced by the universal vision model below.',
+  desc: 'Custom endpoints may silently drop images even when declared. Toggled models receive image originals together with their captions; untoggled ones get captions produced by the universal vision model below.',
   universal: 'Universal Vision Model',
   universalDesc: 'When the current model cannot take images, describe them with this model first, then send the captions',
   universalPlaceholder: 'Choose a caption model',
@@ -309,7 +310,10 @@ export function VisionModelsSection(
             aria-label={t('universal')}
             checked={fallback.enabled && universalValue !== ''}
             disabled={universalValue === ''}
-            onChange={e => { fallbackStore.set({ ...fallback, enabled: e.target.checked }) }}
+            onChange={e => {
+              fallbackStore.set({ ...fallback, enabled: e.target.checked })
+              schedulePersistDesktopPrefs()
+            }}
           />
         </div>
       </div>
@@ -392,9 +396,15 @@ export function VisionModelsSection(
   )
 }
 
+/** When false the Multimodal Models settings surface is hidden from the panel,
+ *  but every supporting piece (fallback send interception, host caption route,
+ *  preference hydration) stays wired, so re-showing is a one-line flip. */
+const VISION_MODELS_UI_ENABLED = false
+
 /** Register the desktop-owned Multimodal Models section in the settings panel. */
 export function applyVisionModels(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'vision-models: dictionaries')
+  if (!VISION_MODELS_UI_ENABLED) return
   const t = ctx.locale.bind(NS)
   registerDesktopSettingsNavSection(() => t('nav'), DESKTOP_NAV_ICONS.eye)
   const connection = ctx.get('connection') as { api: VisionWireApi }

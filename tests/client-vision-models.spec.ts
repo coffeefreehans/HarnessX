@@ -5,6 +5,7 @@ import {
   extractVisionGroups,
   getVisionFallbackStore,
   hasImagePart,
+  transformContentHybrid,
   transformContentWithCaptions,
   walkPath,
   DEFAULT_VISION_FALLBACK_SETTINGS,
@@ -79,6 +80,21 @@ describe('vision model state', () => {
     expect('input' in disabled[1]!).toBe(false)
 
     expect(buildToggleOp(group, 99, true, raw)).toBeUndefined()
+  })
+
+  it('keeps images and appends their captions in hybrid mode', () => {
+    const content: PromptContentPart[] = [
+      { type: 'text', text: '看下这两张图' },
+      { type: 'image', mediaType: 'image/png', data: 'aaa' },
+      { type: 'image', mediaType: 'image/jpeg', data: 'bbb' },
+    ]
+    const hybrid = transformContentHybrid(content, ['第一张', ''])
+    expect(hybrid).toHaveLength(5)
+    expect(hybrid[0]).toEqual({ type: 'text', text: '看下这两张图' })
+    expect(hybrid[1]).toEqual({ type: 'image', mediaType: 'image/png', data: 'aaa' })
+    expect(hybrid[2]).toEqual({ type: 'text', text: '[图片 1 识别结果]\n第一张' })
+    expect(hybrid[3]).toEqual({ type: 'image', mediaType: 'image/jpeg', data: 'bbb' })
+    expect(hybrid[4]).toEqual({ type: 'text', text: '[图片 2 识别结果]\n(图片识别未返回内容)' })
   })
 
   it('builds bulk ops that clone only changed entries', () => {
@@ -227,14 +243,29 @@ describe('vision fallback send wrap', () => {
     ])
   })
 
-  it('keeps originals when the session model is image-enabled', async () => {
+  it('sends originals plus captions when a declared custom model is selected', async () => {
     getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
     sessionsModels.mockResolvedValue({
       result: { ok: true as const, value: { current: { provider: 'nexscp', model: 'gpt-vision' } } },
     })
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ captions: ['一个报错弹窗'] }) })
     await api.sessions.prompt(imageSend)
-    expect(fetchMock).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
     const sent = promptCalls.at(-1) as { payload: { content: PromptContentPart[] } }
+    expect(sent.payload.content).toHaveLength(3)
+    expect(sent.payload.content[1]).toEqual({ type: 'image', mediaType: 'image/png', data: 'QUJD' })
+    expect(sent.payload.content[2]).toEqual({ type: 'text', text: '[图片 1 识别结果]\n一个报错弹窗' })
+  })
+
+  it('keeps plain originals when captioning fails for a declared custom model', async () => {
+    getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
+    sessionsModels.mockResolvedValue({
+      result: { ok: true as const, value: { current: { provider: 'nexscp', model: 'gpt-vision' } } },
+    })
+    fetchMock.mockResolvedValue({ ok: false, json: async () => ({ error: 'boom' }) })
+    await api.sessions.prompt(imageSend)
+    const sent = promptCalls.at(-1) as { payload: { content: PromptContentPart[] } }
+    expect(sent.payload.content).toHaveLength(2)
     expect(sent.payload.content[1]!.type).toBe('image')
   })
 

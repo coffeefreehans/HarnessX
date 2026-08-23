@@ -15,6 +15,7 @@ import {
   extractVisionGroups,
   getVisionFallbackStore,
   hasImagePart,
+  transformContentHybrid,
   transformContentWithCaptions,
   walkPath,
   type PromptContentPart,
@@ -39,11 +40,15 @@ interface WireApi {
 
 const supportKey = (provider: string, model: string): string => `${provider}\u0000${model}`
 
+/** Custom (llm-pi-ai) provider routes, whose image declarations are ours. */
+const customProviders = new Set<string>()
+
 let supportMap: Map<string, boolean> | undefined
 let supportMapLoading: Promise<Map<string, boolean>> | undefined
 
 async function loadSupportMap(api: WireApi): Promise<Map<string, boolean>> {
   const map = new Map<string, boolean>()
+  customProviders.clear()
   const providersResponse = await api.llm.providers({})
   if (!providersResponse.result.ok) return map
   const describeResponse = await api.settings.describe({})
@@ -52,6 +57,7 @@ async function loadSupportMap(api: WireApi): Promise<Map<string, boolean>> {
   const rows = providersResponse.result.value.providers
   // Custom routes: per-entry `input` declarations written by our settings page.
   for (const group of extractVisionGroups(namespaces.get('llm-pi-ai'), rows)) {
+    customProviders.add(group.provider)
     for (const model of group.models) {
       if (model.imageEnabled) map.set(supportKey(group.provider, model.id), true)
     }
@@ -90,7 +96,8 @@ interface ImagePart { type: 'image'; mediaType: string; data: string; name?: str
 
 /**
  * Caption the images of one prompt through the bridge, when configured and
- * needed. Returns the replacement content, or undefined to send unchanged.
+ * needed. Returns the replacement content (captions replace or ride along
+ * with the images), or undefined to send unchanged.
  */
 async function captionIfNeeded(
   api: WireApi,
@@ -103,7 +110,12 @@ async function captionIfNeeded(
   if (!modelsResponse.result.ok) return undefined
   const current = modelsResponse.result.value.current
   const map = await ensureSupportMap(api)
-  if (map.get(supportKey(current.provider, current.model)) === true) return undefined
+  const declared = map.get(supportKey(current.provider, current.model)) === true
+  // Official declared-catalog vision routes get originals, trusted. A custom
+  // route's declaration is ours and may be wrong: its endpoint might silently
+  // drop images, so captions ride along and a blind model still answers.
+  const hybrid = declared && customProviders.has(current.provider)
+  if (declared && !hybrid) return undefined
   const images = content.filter((part): part is ImagePart => part.type === 'image')
   const response = await fetch(VISION_DESCRIBE_URL, {
     method: 'POST',
@@ -116,7 +128,9 @@ async function captionIfNeeded(
   for (const caption of value.captions) {
     if (typeof caption !== 'string') return undefined
   }
-  return transformContentWithCaptions(content, value.captions)
+  return hybrid
+    ? transformContentHybrid(content, value.captions)
+    : transformContentWithCaptions(content, value.captions)
 }
 
 let installed = false
