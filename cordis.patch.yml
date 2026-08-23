@@ -12,6 +12,8 @@
       name: harnessx-desktop/pnpm
     - id: desktop-market
       name: harnessx-desktop/market
+    - id: desktop-vision
+      name: harnessx-desktop/vision-caption
     - id: desktop-updates
       name: harnessx-desktop/updates
     - id: desktop-sync

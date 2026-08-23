@@ -13,6 +13,7 @@ export default defineConfig([
       'profile-service': 'src/profile-service.ts',
       pnpm: 'src/pnpm.ts',
       market: 'src/market.ts',
+      'vision-caption': 'src/vision-caption.ts',
       'directory-picker': 'src/directory-picker.ts',
       credentials: 'src/credentials.ts',
       runtime: 'src/runtime.ts',

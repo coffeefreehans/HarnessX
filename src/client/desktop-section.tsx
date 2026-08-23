@@ -20,6 +20,8 @@ export const DESKTOP_NAV_ICONS = {
   refresh: `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" ${ICON_STROKE}><path d="M13 8a5 5 0 1 1-1.6-3.7"/><path d="M13 3v3h-3"/></svg>`,
   /** Cloud sync: cloud. */
   cloud: `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" ${ICON_STROKE}><path d="M5 12.4h6.2a2.6 2.6 0 0 0 .5-5.2 4.2 4.2 0 0 0-8-.6 2.7 2.7 0 0 0-.7 5.3Z"/></svg>`,
+  /** Multimodal models: eye. */
+  eye: `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" ${ICON_STROKE}><path d="M1.8 8s2.2-4 6.2-4 6.2 4 6.2 4-2.2 4-6.2 4-6.2-4-6.2-4Z"/><circle cx="8" cy="8" r="2.1"/></svg>`,
 } as const
 
 const NAV_SECTION_CSS = `

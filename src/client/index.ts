@@ -10,6 +10,8 @@ import { applyMarket } from './market.tsx'
 import { applyUpdates } from './updates.tsx'
 import { applySessionNotifications } from './session-notifications.ts'
 import { applyNotificationSettings } from './notification-settings.tsx'
+import { applyVisionModels } from './vision-models.tsx'
+import { installVisionFallback } from './vision-fallback.ts'
 import { applySync } from './sync.tsx'
 import { primeCompletionAudio } from './sound.ts'
 
@@ -30,6 +32,8 @@ export const inject = [
   'sessions',
   'theme',
   'locale',
+  'connection',
+  'remote',
 ]
 
 /** Register desktop-owned client surfaces for the current BrowserWindow mode. @param ctx - browser Cordis context. */
@@ -43,5 +47,7 @@ export function apply(ctx: ClientContext): void {
   applyUpdates(ctx)
   applySessionNotifications(ctx)
   applyNotificationSettings(ctx)
+  applyVisionModels(ctx)
+  installVisionFallback(ctx)
   applySync(ctx)
 }
