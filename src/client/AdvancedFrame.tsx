@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import type { ReactNode } from 'react'
 import type { PropsRenderSlots, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
 import type {} from './contracts.ts'
 import type { DesktopClientPlatform } from './environment.ts'
 import {
@@ -19,6 +21,11 @@ export interface AdvancedFrameInjected {
 export type AdvancedFrameProps = PropsRuntime<'root'>
   & PropsRenderSlots<'sidebar' | 'conversation' | 'details' | 'shell.overlay'>
   & AdvancedFrameInjected
+
+/** Product name occupying the sidebar's documented brand-name seat. */
+export function DesktopBrandName(_props: PropsRuntime<'sidebar.brand.name'>): ReactNode {
+  return 'HARNESSX'
+}
 
 /** Desktop-owned transparent frame around the unchanged product surfaces. */
 export function AdvancedFrame({ layout, platform, renderSlot, useSessions }: AdvancedFrameProps) {

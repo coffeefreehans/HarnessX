@@ -2,7 +2,7 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-theme/client'
 import type {} from './contracts.ts'
 import type { DesktopClientEnvironment } from './environment.ts'
-import { AdvancedFrame } from './AdvancedFrame.tsx'
+import { AdvancedFrame, DesktopBrandName } from './AdvancedFrame.tsx'
 import { DesktopLayoutState } from './layout-state.ts'
 import { provideDesktopLayout } from './layout-service.ts'
 import { installAdvancedStyles } from './styles.ts'
@@ -55,4 +55,12 @@ export function applyAdvancedShell(ctx: ClientContext, environment: DesktopClien
     },
     inject: () => ({ layout: desktopLayout, platform: environment.platform }),
   }, AdvancedFrame), 'desktop: advanced root slot')
+
+  // Occupy the sidebar's documented brand-name seat with the product name.
+  // Slot shadowing (priority below the official brand plugin's default 0) is
+  // the sanctioned composition path, so kernel updates cannot regress it.
+  ctx.effect(() => ctx.slots.inject('sidebar.brand.name', () => ctx.slots.register({
+    name: 'sidebar.brand.name',
+    priority: -1,
+  }, DesktopBrandName)), 'desktop: product brand name')
 }

@@ -5,6 +5,7 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+import { DesktopSectionHeader } from './desktop-section.tsx'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -211,6 +212,7 @@ function UpdateSettingsSection(props: PropsRuntime<'settings.section'> & PropsLo
 
   return (
     <section className="harnessxUpdates">
+      <DesktopSectionHeader />
       <header className="harnessxUpdatesHeader">
         <div>
           <h2 className="harnessxUpdatesTitle">{t('title')}</h2>

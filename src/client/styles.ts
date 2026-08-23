@@ -36,8 +36,6 @@ body[data-dsh-desktop-mode="advanced"] { margin: 0; background: transparent !imp
 .dshDesktopOverlay > * { pointer-events: auto; }
 .dshDesktopResizeHandle { position: absolute; z-index: 50; top: 0; bottom: 0; width: 8px; margin-left: -4px; cursor: col-resize; touch-action: none; -webkit-app-region: no-drag; }
 .dshDesktopNoDrag, button, input, textarea, select, a, [role="button"], [role="dialog"], [role="presentation"] { -webkit-app-region: no-drag; }
-.dshDesktopUpstreamSidebar button svg[viewBox="0 0 182 24"] { display: none; }
-.dshDesktopUpstreamSidebar button:has(svg[viewBox="0 0 182 24"])::before { content: "HARNESSX"; font-size: 16px; line-height: 24px; font-weight: 700; letter-spacing: 0; }
 [role="dialog"], [aria-modal="true"] { -webkit-app-region: no-drag !important; }
 html:has([aria-modal="true"]) .dshDesktopWindowsCaptionRow::before,
 html:has([aria-modal="true"]) .dshDesktopMacCaptionRow::before,
