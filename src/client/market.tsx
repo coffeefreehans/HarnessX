@@ -12,7 +12,8 @@ import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots
 // Type-only: pulls the settings.section slot declaration into this program.
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import { DesktopSectionHeader } from './desktop-section.tsx'
+import { registerDesktopSettingsNavLabel } from './desktop-section.tsx'
+
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -547,6 +548,7 @@ const MARKET_STYLES = `
 /** Register the market page in the upstream settings panel. */
 export function applyMarket(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'market: dictionaries')
+  registerDesktopSettingsNavLabel(() => ctx.locale.bind(NS)('nav'))
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'plugin-market',
@@ -686,7 +688,6 @@ function MarketSettingsSection(props: PropsRuntime<'settings.section'> & PropsLo
 
   return (
     <div className="dshMarketSection">
-      <DesktopSectionHeader />
       <header className="dshMarketHeader">
         <h2 className="dshMarketTitle">{t('title')}</h2>
       </header>

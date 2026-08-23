@@ -5,7 +5,8 @@ import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import { DesktopSectionHeader } from './desktop-section.tsx'
+import { registerDesktopSettingsNavLabel } from './desktop-section.tsx'
+
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -158,6 +159,7 @@ const UPDATE_STYLES = `
 /** Register the HarnessX update page in the upstream settings panel. */
 export function applyUpdates(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'updates: dictionaries')
+  registerDesktopSettingsNavLabel(() => ctx.locale.bind(NS)('nav'))
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'application-updates',
@@ -212,7 +214,6 @@ function UpdateSettingsSection(props: PropsRuntime<'settings.section'> & PropsLo
 
   return (
     <section className="harnessxUpdates">
-      <DesktopSectionHeader />
       <header className="harnessxUpdatesHeader">
         <div>
           <h2 className="harnessxUpdatesTitle">{t('title')}</h2>
