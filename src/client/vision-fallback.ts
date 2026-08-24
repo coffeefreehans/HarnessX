@@ -1,28 +1,35 @@
 /** Vision fallback send interception: desktop-owned, zero kernel edits.
  *
- * Wraps the shared client API's `sessions.prompt` method (the one call every
- * composer send lands on). When a prompt carries images and the session's
- * model does not admit them, the images are stripped silently — both upstream
- * adapters hard-fail any turn that carries an image for such a model — and
- * recognition runs in parallel through the desktop caption bridge (with local
- * downscaling so relay gateways don't reject large screenshots). Its result
- * is delivered mid-turn as a steering message (`mode: 'steer'`), so the
- * recognition happens inside the thinking phase instead of blocking the send.
- * The ORIGINAL model stays selected and answers from the recognition it was
- * handed; the session's model is never switched.
+ * The kernel rejects any image send for a model declared without image input
+ * before the image ever reaches storage, so the bubble could never show it.
+ * This module therefore keeps every custom-route declaration forced to
+ * `input: ['text', 'image']` (see `ensureCustomImageDeclarations`): images are
+ * always admitted, always stored, and always rendered natively in the chat.
+ * A model that truly has vision then answers from the image itself. A model
+ * marked 无多模态 in the desktop store gets its image described by the
+ * universal caption bridge in parallel (locally downscaled first so relay
+ * gateways don't reject large screenshots); the description is delivered
+ * mid-turn as a steering message (`mode: 'steer'`) while the model's own turn
+ * runs — the composer never blocks and the session model never changes.
+ * Official-route (llm-deepseek) text-only entries keep the older behavior:
+ * their admission cannot be overridden, so their sends strip the image and
+ * rely on the steered caption alone.
  */
 
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import {
+  buildForceImageInputOps,
+  capabilityKey,
   captionSteerContent,
   extractVisionGroups,
   failureSteerContent,
   getVisionFallbackStore,
   hasImagePart,
-  stripImageParts,
   walkPath,
   type PromptContentPart,
+  type VisionFallbackSettings,
 } from './vision-models-state.ts'
+import { schedulePersistDesktopPrefs } from './desktop-prefs.ts'
 
 const VISION_DESCRIBE_URL = '/api/desktop/vision/describe'
 /** Long-edge cap for images sent to the caption bridge: relay gateways
@@ -49,43 +56,76 @@ interface WireSessions {
 interface WireApi {
   sessions: WireSessions
   llm: { providers: (request: unknown) => Promise<{ result: { ok: true; value: { providers: { provider: string; displayName: string; settingsNs: string; settingsPath: string[] }[] } } | { ok: false; error: { message: string } } }> }
-  settings: { describe: (request: unknown) => Promise<{ result: { ok: true; value: { namespaces: { ns: string; value: unknown }[] } } | { ok: false; error: { message: string } } }> }
+  settings: {
+    describe: (request: unknown) => Promise<{ result: { ok: true; value: { writable?: boolean; namespaces: { ns: string; value: unknown; revision: number }[] } } | { ok: false; error: { message: string } } }>
+    mutate: (request: unknown) => Promise<{ result: { ok: true } | { ok: false; error: { message: string } } }>
+  }
 }
 
-const supportKey = (provider: string, model: string): string => `${provider}\u0000${model}`
+/**
+ * Force every custom-route model declaration to admit images, once per page.
+ * The kernel's admission gate rejects image sends for entries whose `input`
+ * lacks `image` BEFORE they reach storage — with the gate closed, the chat
+ * could never display the image. Declaring every custom-route entry capable
+ * moves the "can this model really see" decision into desktop-owned
+ * bookkeeping (`textOnly` in the vision store), where absent means
+ * vision-capable and only marked models get caption help.
+ *
+ * Memoized; a failed attempt clears the memo so the next send retries.
+ */
+let declarationsPromise: Promise<void> | undefined
+function ensureCustomImageDeclarations(api: WireApi): Promise<void> {
+  declarationsPromise ??= (async (): Promise<void> => {
+    const [providersResponse, describeResponse] = await Promise.all([
+      api.llm.providers({}),
+      api.settings.describe({}),
+    ])
+    if (!providersResponse.result.ok) throw new Error(providersResponse.result.error.message)
+    if (!describeResponse.result.ok) throw new Error(describeResponse.result.error.message)
+    const namespaces = new Map(describeResponse.result.value.namespaces.map(view => [view.ns, view.value]))
+    const rows = providersResponse.result.value.providers
+    const groups = extractVisionGroups(namespaces.get('llm-pi-ai'), rows)
+    if (groups.length === 0) return
+    const rawByProvider = new Map<string, unknown[]>()
+    for (const group of groups) {
+      const raw = walkPath(namespaces.get('llm-pi-ai'), group.modelsPath)
+      if (Array.isArray(raw)) rawByProvider.set(group.provider, raw)
+    }
+    const ops = buildForceImageInputOps(groups, rawByProvider)
+    if (ops.length === 0) return
+    const view = describeResponse.result.value.namespaces.find(entry => entry.ns === 'llm-pi-ai')
+    const response = await api.settings.mutate({
+      ns: 'llm-pi-ai',
+      ops,
+      ...(view === undefined ? {} : { expectedRevision: view.revision }),
+    })
+    if (!response.result.ok) throw new Error(response.result.error.message)
+    debug(`forced image-input declarations on ${String(ops.length)} provider(s); bubbles can store and show images`)
+  })()
+  return declarationsPromise
+}
 
 /**
- * Read which models currently admit images. Deliberately uncached: the user
- * may have toggled 图片输入 for a model moments ago, and a stale map would
- * caption (and replace) images a now-capable model could read natively.
- * @throws when the provider directory or settings cannot be read, so callers
- *  can treat "cannot tell" as "capable" and leave the send untouched.
+ * Read which OFFICIAL-route (llm-deepseek) models admit images from their
+ * declared catalog modalities. Their admission gate cannot be overridden by
+ * desktop settings, so these declarations remain authoritative.
  */
-async function loadSupportMap(api: WireApi): Promise<Map<string, boolean>> {
+async function loadOfficialSupportMap(api: WireApi): Promise<Map<string, boolean>> {
   const map = new Map<string, boolean>()
-  const providersResponse = await api.llm.providers({})
-  if (!providersResponse.result.ok) throw new Error(providersResponse.result.error.message)
   const describeResponse = await api.settings.describe({})
   if (!describeResponse.result.ok) throw new Error(describeResponse.result.error.message)
   const namespaces = new Map(describeResponse.result.value.namespaces.map(view => [view.ns, view.value]))
-  const rows = providersResponse.result.value.providers
-  // Custom routes: per-entry `input` declarations written by our settings page.
-  for (const group of extractVisionGroups(namespaces.get('llm-pi-ai'), rows)) {
-    for (const model of group.models) {
-      if (model.imageEnabled) map.set(supportKey(group.provider, model.id), true)
-    }
-  }
-  // The official route: declared `inputModalities` of its catalog entries.
   const deepSeek = namespaces.get('llm-deepseek')
   const deepSeekModels = walkPath(deepSeek, ['models'])
-  const official = rows.find(row => row.settingsNs === 'llm-deepseek')
-  if (official !== undefined && Array.isArray(deepSeekModels)) {
+  const official = (await api.llm.providers({})).result
+  const row = official.ok ? official.value.providers.find(entry => entry.settingsNs === 'llm-deepseek') : undefined
+  if (row !== undefined && Array.isArray(deepSeekModels)) {
     for (const entry of deepSeekModels) {
       if (typeof entry !== 'object' || entry === null) continue
       const id = (entry as { id?: unknown }).id
       const modalities = (entry as { inputModalities?: unknown }).inputModalities
       if (typeof id === 'string' && Array.isArray(modalities) && modalities.includes('image')) {
-        map.set(supportKey(official.provider, id), true)
+        map.set(capabilityKey(row.provider, id), true)
       }
     }
   }
@@ -193,26 +233,31 @@ export function installVisionFallback(ctx: ClientContext): void {
     if (sessions === undefined || typeof sessions.prompt !== 'function') return
     const original = sessions.prompt.bind(sessions)
     installed = true
+    // Kick the declaration sweep eagerly so the admission gate is already open
+    // before the user's first image send of this session.
+    void ensureCustomImageDeclarations(api).catch((cause: unknown) => {
+      declarationsPromise = undefined
+      debug('declaration sweep failed; retrying on next send:', cause instanceof Error ? cause.message : String(cause))
+    })
     sessions.prompt = async (...args: unknown[]): Promise<unknown> => {
       let engaged: {
-        patched: Record<string, unknown>
+        strip: boolean
         images: ImagePart[]
         provider: string
         model: string
         sessionId: string
       } | undefined
+      const request = args[0] as { sessionId?: unknown; mode?: unknown; content?: unknown } | undefined
+      const content = request?.content
       try {
-        // The kernel's Session class sends a flat { sessionId, mode, content,
-        // clientTimeZone } request with an optional AbortSignal second
-        // argument. The send itself always forwards verbatim; only a parallel
-        // recognition (steered in later) is added for text-only models.
-        const request = args[0] as { sessionId?: unknown; mode?: unknown; content?: unknown } | undefined
-        const content = request?.content
         if (
           typeof request?.sessionId === 'string'
           && Array.isArray(content)
           && hasImagePart(content as PromptContentPart[])
         ) {
+          // Open the admission gate first: without the forced declarations the
+          // kernel rejects the whole send and no bubble could ever show it.
+          await ensureCustomImageDeclarations(api)
           // The in-memory store is the source of truth, NOT localStorage: the
           // kernel web server port changes every launch, so this origin's
           // localStorage is wiped on restart while the host-side prefs file
@@ -221,38 +266,36 @@ export function installVisionFallback(ctx: ClientContext): void {
           const config = getVisionFallbackStore().getSnapshot()
           debug(`fallback config: enabled=${String(config.enabled)} provider=${config.provider ?? '(none)'} model=${config.model ?? '(none)'}`)
           if (!config.enabled || config.provider === undefined || config.model === undefined) {
-            debug('universal vision model not configured or disabled; image sent as-is')
+            debug('universal vision not configured or disabled; model answers from the image directly')
           } else {
             const modelsResponse = await api.sessions.models({ sessionId: request.sessionId })
             if (!modelsResponse.result.ok) {
-              debug('sessions.models failed; image sent as-is:', modelsResponse.result.error.message)
+              debug('sessions.models failed; send untouched:', modelsResponse.result.error.message)
             } else {
               const current = modelsResponse.result.value.current
               if (current.provider === config.provider && current.model === config.model) {
-                debug('current model IS the universal vision model; image sent as-is')
-              } else {
-                let capable: boolean
-                try {
-                  const map = await loadSupportMap(api)
-                  capable = map.get(supportKey(current.provider, current.model)) === true
-                } catch (cause) {
-                  // Capability unreadable: respect the user's model choice and
-                  // send the originals untouched rather than captioning on a guess.
-                  debug('capability unreadable; image sent as-is:', cause instanceof Error ? cause.message : String(cause))
-                  capable = true
-                }
+                debug('current model IS the universal vision model; answering from the image directly')
+              } else if (await officialRouteProvider(api, current.provider)) {
+                // Official-route capability declarations are server-owned truth;
+                // desktop settings cannot override their admission gate.
+                const capable = (await loadOfficialSupportMap(api)).get(capabilityKey(current.provider, current.model)) === true
                 if (capable) {
-                  debug(`model ${current.provider}/${current.model} declared image-capable; originals sent`)
+                  debug(`official-route model ${current.provider}/${current.model} admits images natively`)
                 } else {
-                  debug(`current model ${current.provider}/${current.model} cannot take images; asking ${config.provider}/${config.model} to describe while the turn runs`)
-                  engaged = {
-                    patched: { ...(request as object), content: stripImageParts(content as PromptContentPart[]) },
-                    images: (content as PromptContentPart[])
-                      .filter((part): part is ImagePart => part.type === 'image'),
-                    provider: config.provider,
-                    model: config.model,
-                    sessionId: request.sessionId,
-                  }
+                  debug(`official-route model ${current.provider}/${current.model} cannot admit images; asking ${config.provider}/${config.model} to describe`)
+                  engaged = engage(config, request.sessionId, content as PromptContentPart[], true)
+                }
+              } else {
+                const key = capabilityKey(current.provider, current.model)
+                if (config.textOnly[key] === true) {
+                  debug(`model ${current.provider}/${current.model} is marked 无多模态; asking ${config.provider}/${config.model} to describe while it answers`)
+                  engaged = engage(config, request.sessionId, content as PromptContentPart[], false)
+                } else if (config.probeResults[key] === false) {
+                  debug(`probe found no vision in ${current.provider}/${current.model}; asking ${config.provider}/${config.model} to describe while it answers`)
+                  engaged = engage(config, request.sessionId, content as PromptContentPart[], false)
+                } else {
+                  if (config.probeResults[key] === undefined) void probeVision(key, current.provider, current.model)
+                  debug(`model ${current.provider}/${current.model} uses its own vision; no caption needed`)
                 }
               }
             }
@@ -261,43 +304,132 @@ export function installVisionFallback(ctx: ClientContext): void {
       } catch (cause) {
         // Fall through: the send proceeds exactly as the kernel issued it,
         // but never silently — the cause names itself in the console.
-        debug('decision error; image sent as-is:', cause instanceof Error ? cause.message : String(cause))
+        debug('decision error; send untouched:', cause instanceof Error ? cause.message : String(cause))
       }
-      if (engaged === undefined) return original(args[0], args[1])
-      // Images are stripped silently: both upstream adapters HARD-FAIL a turn
-      // that carries an image for a model without a declared image input, so
-      // the image can never enter the session. The recognition steers in.
-      const sendPromise = original(engaged.patched, args[1])
-      // Recognition must not block the composer: dispatch it once the host
-      // accepted the pending-note send, then steer the result mid-turn.
-      void (async (): Promise<void> => {
-        try {
-          const accepted = await sendPromise
-          const ok = (accepted as { result?: { ok?: boolean } })?.result?.ok === true
-          if (!ok) {
-            debug('send was not accepted; skipping recognition steering')
+      // Custom-route sends always carry their images verbatim: they are stored,
+      // rendered in the bubble, and (when marked 无多模态) described in parallel.
+      // Only the official-route legacy path strips before sending.
+      const sendArgs = engaged?.strip === true
+        ? [{ ...(request as object), content: stripForStorage(content as PromptContentPart[]) }, args[1]]
+        : [args[0], args[1]]
+      const sendPromise = original(sendArgs[0], sendArgs[1])
+      if (engaged !== undefined) {
+        // Recognition must not block the composer: dispatch it once the host
+        // accepted the send, then steer the result mid-turn.
+        void (async (): Promise<void> => {
+          try {
+            const accepted = await sendPromise
+            const ok = (accepted as { result?: { ok?: boolean } })?.result?.ok === true
+            if (!ok) {
+              debug('send was not accepted; skipping recognition steering')
+              return
+            }
+          } catch {
+            // A rejected send promise still resolves through promptError paths;
+            // attempt steering anyway — the host drops it if the session is gone.
+          }
+          if (args[1] instanceof AbortSignal && args[1].aborted) {
+            debug('send aborted before recognition finished; skipping steering')
             return
           }
-        } catch {
-          // A rejected send promise still resolves through promptError paths;
-          // attempt steering anyway — the host drops it if the session is gone.
-        }
-        if (args[1] instanceof AbortSignal && args[1].aborted) {
-          debug('send aborted before recognition finished; skipping steering')
-          return
-        }
-        await steerRecognition(
-          original,
-          engaged.sessionId,
-          engaged.images,
-          engaged.provider,
-          engaged.model,
-          args[1],
-        )
-      })()
+          await steerRecognition(
+            original,
+            engaged.sessionId,
+            engaged.images,
+            engaged.provider,
+            engaged.model,
+            args[1],
+          )
+        })()
+      }
       return sendPromise
     }
   } catch {
     // Feature stays off; the kernel path behaves exactly as before.
   }
+}
+
+function engage(
+  config: VisionFallbackSettings,
+  sessionId: string,
+  content: PromptContentPart[],
+  strip: boolean,
+): { strip: boolean; images: ImagePart[]; provider: string; model: string; sessionId: string } {
+  return {
+    strip,
+    images: content.filter((part): part is ImagePart => part.type === 'image'),
+    provider: config.provider!,
+    model: config.model!,
+    sessionId,
+  }
+}
+
+const VISION_PROBE_URL = '/api/desktop/vision/probe'
+
+/** Reset module-level memoization between tests (declaration sweep, probes). */
+export function __resetVisionFallbackForTests(): void {
+  declarationsPromise = undefined
+  probesInFlight.clear()
+}
+
+/** Probe calls already in flight, so concurrent sends fire one request per
+ *  model instead of one per message. */
+const probesInFlight = new Set<string>()
+
+/**
+ * Ask the host bridge whether a custom-route endpoint's model can really see
+ * images (a tiny test image goes out; only an affirmative reply counts). The
+ * verdict lands in the vision store and persists with the desktop prefs;
+ * manual 无多模态 marks keep priority because the write is skipped once any
+ * result exists. Fire-and-forget: probes never delay a send.
+ */
+async function probeVision(key: string, provider: string, model: string): Promise<void> {
+  if (probesInFlight.has(key)) return
+  probesInFlight.add(key)
+  try {
+    const response = await fetch(VISION_PROBE_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider, model }),
+    })
+    if (!response.ok) throw new Error(`probe HTTP ${String(response.status)}`)
+    const value = await response.json() as { capable?: unknown }
+    const capable = value.capable === true
+    const store = getVisionFallbackStore()
+    const snapshot = store.getSnapshot()
+    if (snapshot.probeResults[key] === undefined) {
+      store.set({ ...snapshot, probeResults: { ...snapshot.probeResults, [key]: capable } })
+      schedulePersistDesktopPrefs()
+    }
+    debug(`vision probe for ${provider}/${model}: ${capable ? 'has vision' : 'no vision'}`)
+  } catch (cause) {
+    debug('vision probe failed:', cause instanceof Error ? cause.message : String(cause))
+  } finally {
+    probesInFlight.delete(key)
+  }
+}
+
+/**
+ * Whether this provider is served by the official llm-deepseek route, whose
+ * capability declarations are server-owned truth desktop settings cannot
+ * override. Any lookup failure answers false (custom-route treatment).
+ */
+async function officialRouteProvider(api: WireApi, provider: string): Promise<boolean> {
+  try {
+    const response = await api.llm.providers({})
+    if (!response.result.ok) return false
+    return response.result.value.providers.some(row => row.provider === provider && row.settingsNs === 'llm-deepseek')
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Remove every image part from content bound for storage. Only used for the
+ * official-route legacy path, whose admission gate rejects images outright;
+ * custom-route sends keep their images so the bubble can render them.
+ */
+function stripForStorage(content: PromptContentPart[]): PromptContentPart[] {
+  const kept = content.filter(part => part.type !== 'image')
+  return kept.length === 0 ? [{ type: 'text', text: ' ' }] : kept
 }

@@ -8,7 +8,7 @@
  */
 
 import { getNotificationSettingsStore, DEFAULT_NOTIFICATION_SETTINGS, type NotificationSettings } from './notifications.ts'
-import { getVisionFallbackStore, type VisionFallbackSettings } from './vision-models-state.ts'
+import { getVisionFallbackStore, sanitizeTextOnlyMap, type VisionFallbackSettings } from './vision-models-state.ts'
 
 const PREFS_URL = '/api/desktop/prefs'
 
@@ -64,6 +64,8 @@ export async function hydrateDesktopPrefs(): Promise<void> {
       enabled: vision.enabled === true,
       provider: typeof vision.provider === 'string' && vision.provider.length > 0 ? vision.provider : undefined,
       model: typeof vision.model === 'string' && vision.model.length > 0 ? vision.model : undefined,
+      textOnly: sanitizeTextOnlyMap(vision.textOnly),
+      probeResults: sanitizeTextOnlyMap(vision.probeResults),
     })
   }
   const notifications = prefs.notifications

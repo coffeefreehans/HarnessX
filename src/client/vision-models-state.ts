@@ -101,67 +101,48 @@ export function extractVisionGroups(
 }
 
 /**
- * Whole-array `set` op flipping one entry's image declaration, the same
- * granularity the kernel Models editor writes. Enabling copies the entry and
- * sets `input: ['text', 'image']`; disabling drops the key so resolution falls
- * back to the route default (text). Unknown index returns undefined.
+ * Build one whole-array `set` op per provider that forces EVERY entry's image
+ * declaration on (`input: ['text', 'image']`). The kernel rejects image sends
+ * for models declared without image input before they ever reach storage, so
+ * bubbles could never show them. With every custom-route entry declared
+ * capable, a model that truly has vision answers from the image itself, and a
+ * model marked 无多模态 in the desktop store still gets its image stored and
+ * displayed while the universal caption model describes it in parallel.
+ * Entries already declaring images keep their object identity so unchanged
+ * providers produce no ops at all. Providers without raw arrays are skipped.
  */
-export function buildToggleOp(
-  group: VisionProviderGroup,
-  index: number,
-  enable: boolean,
-  rawModels: readonly unknown[],
-): SettingsPathOp | undefined {
-  if (index < 0 || index >= group.models.length || index >= rawModels.length) return undefined
-  const next = rawModels.map((entry, at) => {
-    if (at !== index || typeof entry !== 'object' || entry === null) return entry
-    const clone: Record<string, unknown> = { ...(entry as Record<string, unknown>) }
-    if (enable) clone.input = ['text', 'image']
-    else delete clone.input
-    return clone
-  })
-  return { op: 'set', path: [...group.modelsPath], value: next }
+export function buildForceImageInputOps(
+  groups: readonly VisionProviderGroup[],
+  rawByProvider: ReadonlyMap<string, readonly unknown[]>,
+): SettingsPathOp[] {
+  const ops: SettingsPathOp[] = []
+  for (const group of groups) {
+    const raw = rawByProvider.get(group.provider)
+    if (raw === undefined) continue
+    let changed = false
+    const next = raw.map((entry, at) => {
+      const row = group.models[at]
+      if (row === undefined || row.imageEnabled) return entry
+      if (typeof entry !== 'object' || entry === null) return entry
+      changed = true
+      return { ...(entry as Record<string, unknown>), input: ['text', 'image'] }
+    })
+    if (changed) ops.push({ op: 'set', path: [...group.modelsPath], value: next })
+  }
+  return ops
+}
+
+/** Desktop-owned record key for one provider/model pair. Model ids may
+ *  contain `/`, so the separator must be a character ids cannot carry. */
+export function capabilityKey(provider: string, model: string): string {
+  return `${provider}\u0000${model}`
 }
 
 /**
- * Whole-array `set` op setting every entry's image declaration at once. Used
- * by the per-provider enable/disable-all buttons; a no-change entry keeps its
- * object identity so the settings diff stays small.
+ * Whether a prompt carries at least one image part.
  */
-export function buildBulkOps(
-  group: VisionProviderGroup,
-  rawModels: readonly unknown[],
-  enable: boolean,
-): SettingsPathOp[] {
-  const next = rawModels.map((entry, at) => {
-    const row = group.models[at]
-    if (row === undefined || typeof entry !== 'object' || entry === null) return entry
-    if (row.imageEnabled === enable) return entry
-    const clone: Record<string, unknown> = { ...(entry as Record<string, unknown>) }
-    if (enable) clone.input = ['text', 'image']
-    else delete clone.input
-    return clone
-  })
-  return [{ op: 'set', path: [...group.modelsPath], value: next }]
-}
-
-/** Whether a prompt carries at least one image part. */
 export function hasImagePart(content: readonly PromptContentPart[]): boolean {
   return content.some(part => part.type === 'image')
-}
-
-/**
- * Silently strip every image part from the outgoing content. Both upstream
- * adapters HARD-FAIL a turn whose messages contain an image for a model
- * without a declared image input (`does not support image input`), so the
- * image must never reach the session for such models — and any visible
- * stand-in text would pollute the user's bubble. Recognition runs in
- * parallel and arrives as a steering message instead.
- */
-export function stripImageParts(content: readonly PromptContentPart[]): PromptContentPart[] {
-  const kept = content.filter(part => part.type !== 'image')
-  if (kept.length === 0) return [{ type: 'text', text: ' ' }]
-  return kept
 }
 export function captionSteerContent(
   captions: readonly string[],
@@ -201,6 +182,14 @@ export interface VisionFallbackSettings {
   provider: string | undefined
   /** Model id of the universal caption model. */
   model: string | undefined
+  /** Models marked 无多模态 by the user, keyed {@link capabilityKey}. A model
+   *  absent here is treated as vision-capable unless a probe says otherwise;
+   *  an explicit mark wins over any probe result. */
+  textOnly: Record<string, boolean>
+  /** Cached automatic vision-probe outcomes, keyed {@link capabilityKey}.
+   *  true = the endpoint answered a tiny test image affirmatively; false =
+   *  it rejected or denied seeing it. Absent = never probed. */
+  probeResults: Record<string, boolean>
 }
 
 export const VISION_FALLBACK_STORAGE_KEY = 'harnessx.desktop.vision'
@@ -209,6 +198,18 @@ export const DEFAULT_VISION_FALLBACK_SETTINGS: VisionFallbackSettings = {
   enabled: false,
   provider: undefined,
   model: undefined,
+  textOnly: {},
+  probeResults: {},
+}
+
+/** Sanitize one candidate text-only map: plain objects with boolean values. */
+export function sanitizeTextOnlyMap(value: unknown): Record<string, boolean> {
+  if (typeof value !== 'object' || value === null) return {}
+  const result: Record<string, boolean> = {}
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (key.length > 0 && typeof entry === 'boolean') result[key] = entry
+  }
+  return result
 }
 
 export interface VisionFallbackStore {
@@ -223,18 +224,20 @@ let fallbackStore: VisionFallbackStore | undefined
  *  snapshot. The send interceptor calls this per prompt so a toggle flipped in
  *  another window (or another module instance) applies on the very next send. */
 export function readPersistedFallback(): VisionFallbackSettings {
-  if (typeof localStorage === 'undefined') return DEFAULT_VISION_FALLBACK_SETTINGS
+  if (typeof localStorage === 'undefined') return { ...DEFAULT_VISION_FALLBACK_SETTINGS, textOnly: {}, probeResults: {} }
   try {
     const raw = localStorage.getItem(VISION_FALLBACK_STORAGE_KEY)
-    if (raw === null) return DEFAULT_VISION_FALLBACK_SETTINGS
+    if (raw === null) return { ...DEFAULT_VISION_FALLBACK_SETTINGS, textOnly: {} }
     const value = JSON.parse(raw) as Partial<VisionFallbackSettings>
     return {
       enabled: value.enabled === true,
       provider: typeof value.provider === 'string' && value.provider.length > 0 ? value.provider : undefined,
       model: typeof value.model === 'string' && value.model.length > 0 ? value.model : undefined,
+      textOnly: sanitizeTextOnlyMap(value.textOnly),
+      probeResults: sanitizeTextOnlyMap(value.probeResults),
     }
   } catch {
-    return DEFAULT_VISION_FALLBACK_SETTINGS
+    return { ...DEFAULT_VISION_FALLBACK_SETTINGS, textOnly: {}, probeResults: {} }
   }
 }
 

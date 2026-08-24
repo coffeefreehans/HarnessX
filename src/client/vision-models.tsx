@@ -13,8 +13,7 @@ import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import {
-  buildBulkOps,
-  buildToggleOp,
+  capabilityKey,
   extractVisionGroups,
   getVisionFallbackStore,
   isCaptionCompatible,
@@ -54,18 +53,18 @@ export type VisionModelsKey =
 const zh: Record<VisionModelsKey, string> = {
   nav: '多模态模型',
   title: '多模态模型',
-  desc: '为自定义接口的模型声明图片输入。当前模型不支持图片时,发送图片会自动用下方通用识图模型识别图片,识别结果替换图片随消息发给当前模型作答;会话模型始终不变。',
+  desc: '图片始终显示在对话框里并随消息发送。发图时自动检测当前模型是否真能看图:能则用其自身视觉作答;不能则自动由下方通用识图模型识别,识别结果交给该模型作答,会话模型始终不变。勾选「无多模态」可跳过检测强制走通用识图。',
   universal: '通用识图模型',
-  universalDesc: '当前模型不支持图片时,由这个模型识别图片并把结果告诉当前模型',
+  universalDesc: '被标记为「无多模态」的模型收到图片时,由这个模型识别图片内容并把结果告诉当前模型',
   universalPlaceholder: '选择识图模型',
   searchPlaceholder: '搜索模型…',
   loading: '加载中…',
   loadFailed: '读取模型配置失败',
   retry: '重试',
   empty: '没有自定义模型接口,请先在「模型」设置中添加。',
-  enableAll: '全部开启',
-  disableAll: '全部关闭',
-  imageInput: '图片输入',
+  enableAll: '全部标记无多模态',
+  disableAll: '全部清除标记',
+  imageInput: '无多模态',
   notWritable: '设置为只读,无法修改',
   saveFailed: '保存失败',
   modelsSuffix: '个模型',
@@ -75,18 +74,18 @@ const zh: Record<VisionModelsKey, string> = {
 const en: Record<VisionModelsKey, string> = {
   nav: 'Multimodal Models',
   title: 'Multimodal Models',
-  desc: 'Declare image input per custom-endpoint model. When the current model cannot take images, sending an image has the universal vision model below recognize it, and the labelled recognition replaces the image in the message the current model answers from. The session model never changes.',
+  desc: 'Images always show in the conversation and travel with the message. On each image send the model is checked automatically: models that truly see images answer from them, while blind models get their images described by the universal vision model below. Tick "no vision" to skip detection and always caption.',
   universal: 'Universal Vision Model',
-  universalDesc: 'Recognizes images for text-only models and tells them what the images contain',
+  universalDesc: 'Describes images for models marked "no vision" and tells the current model what they contain',
   universalPlaceholder: 'Choose a caption model',
   searchPlaceholder: 'Search models…',
   loading: 'Loading…',
   loadFailed: 'Failed to load model settings',
   retry: 'Retry',
   empty: 'No custom model endpoints. Add one in the Models settings first.',
-  enableAll: 'Enable all',
-  disableAll: 'Disable all',
-  imageInput: 'Image input',
+  enableAll: 'Mark all no-vision',
+  disableAll: 'Clear all marks',
+  imageInput: 'No vision',
   notWritable: 'Settings are read-only',
   saveFailed: 'Save failed',
   modelsSuffix: 'models',
@@ -150,14 +149,11 @@ export interface VisionWireApi {
 interface VisionModelState {
   status: 'loading' | 'ready' | 'error'
   error: string | undefined
-  writable: boolean
   groups: VisionProviderGroup[]
-  rawModels: Map<string, unknown[]>
-  revision: number | undefined
 }
 
 const EMPTY_STATE: VisionModelState = {
-  status: 'loading', error: undefined, writable: true, groups: [], rawModels: new Map(), revision: undefined,
+  status: 'loading', error: undefined, groups: [],
 }
 
 async function loadVisionState(api: VisionWireApi): Promise<VisionModelState> {
@@ -167,29 +163,12 @@ async function loadVisionState(api: VisionWireApi): Promise<VisionModelState> {
   ])
   if (!providersResponse.result.ok) throw new Error(providersResponse.result.error.message)
   if (!describeResponse.result.ok) throw new Error(describeResponse.result.error.message)
-  const view = describeResponse.result.value
-  const namespace = view.namespaces.find(entry => entry.ns === 'llm-pi-ai')
+  const namespace = describeResponse.result.value.namespaces.find(entry => entry.ns === 'llm-pi-ai')
   if (namespace === undefined) throw new Error('llm-pi-ai settings namespace unavailable')
-  const groups = extractVisionGroups(namespace.value, providersResponse.result.value.providers)
-  const rawModels = new Map<string, unknown[]>()
-  for (const group of groups) {
-    let cursor: unknown = namespace.value
-    let raw: unknown[] = []
-    for (const segment of group.modelsPath) {
-      cursor = typeof cursor === 'object' && cursor !== null
-        ? (cursor as Record<string, unknown>)[segment]
-        : undefined
-    }
-    if (Array.isArray(cursor)) raw = cursor
-    rawModels.set(group.provider, raw)
-  }
   return {
     status: 'ready',
     error: undefined,
-    writable: view.writable,
-    groups,
-    rawModels,
-    revision: namespace.revision,
+    groups: extractVisionGroups(namespace.value, providersResponse.result.value.providers),
   }
 }
 
@@ -199,8 +178,6 @@ export function VisionModelsSection(
   const { t, api } = _props
   const [state, setState] = useState<VisionModelState>(EMPTY_STATE)
   const [search, setSearch] = useState('')
-  const [busyProvider, setBusyProvider] = useState<string | undefined>(undefined)
-  const [saveError, setSaveError] = useState<string | undefined>(undefined)
   const fallbackStore = getVisionFallbackStore()
   const [fallback, setFallback] = useState(fallbackStore.getSnapshot())
 
@@ -222,37 +199,23 @@ export function VisionModelsSection(
 
   useEffect(() => { reload() }, [reload])
 
-  const mutate = useCallback(async (provider: string, ops: { op: 'set' | 'unset'; path: string[]; value?: unknown }[]): Promise<void> => {
-    if (state.writable !== true || busyProvider !== undefined) return
-    setBusyProvider(provider)
-    setSaveError(undefined)
-    try {
-      const response = await api.settings.mutate({
-        ns: 'llm-pi-ai',
-        ops,
-        ...(state.revision === undefined ? {} : { expectedRevision: state.revision }),
-      })
-      if (!response.result.ok) {
-        setSaveError(`${t('saveFailed')}:${response.result.error.message}`)
-      }
-    } catch (cause) {
-      setSaveError(`${t('saveFailed')}:${cause instanceof Error ? cause.message : String(cause)}`)
-    } finally {
-      setBusyProvider(undefined)
-      reload()
-    }
-  }, [api, busyProvider, reload, state.revision, state.writable, t])
-
-  const toggle = (group: VisionProviderGroup, index: number, enable: boolean): void => {
-    const raw = state.rawModels.get(group.provider) ?? []
-    const op = buildToggleOp(group, index, enable, raw)
-    if (op === undefined) return
-    void mutate(group.provider, [op])
+  /** Flip one model's manual 无多模态 mark in the desktop-owned store. */
+  const setTextOnly = (provider: string, modelId: string, value: boolean): void => {
+    const snapshot = fallbackStore.getSnapshot()
+    fallbackStore.set({
+      ...snapshot,
+      textOnly: { ...snapshot.textOnly, [capabilityKey(provider, modelId)]: value },
+    })
+    schedulePersistDesktopPrefs()
   }
 
-  const bulk = (group: VisionProviderGroup, enable: boolean): void => {
-    const raw = state.rawModels.get(group.provider) ?? []
-    void mutate(group.provider, buildBulkOps(group, raw, enable))
+  /** Apply one manual mark to every model of a provider group at once. */
+  const setGroupTextOnly = (group: VisionProviderGroup, value: boolean): void => {
+    const snapshot = fallbackStore.getSnapshot()
+    const textOnly = { ...snapshot.textOnly }
+    for (const model of group.models) textOnly[capabilityKey(group.provider, model.id)] = value
+    fallbackStore.set({ ...snapshot, textOnly })
+    schedulePersistDesktopPrefs()
   }
 
   const universalValue = fallback.provider !== undefined && fallback.model !== undefined
@@ -335,9 +298,6 @@ export function VisionModelsSection(
         ? <div className="dshVisionNotice">{t('universalOnlyOpenai')}</div>
         : null}
 
-      {saveError === undefined ? null : <div className="dshVisionError">{saveError}</div>}
-      {state.writable ? null : <div className="dshVisionNotice">{t('notWritable')}</div>}
-
       {state.groups.length === 0
         ? <div className="dshVisionNotice">{t('empty')}</div>
         : (
@@ -357,25 +317,24 @@ export function VisionModelsSection(
                   model.id.toLowerCase().includes(query)
                   || (model.name ?? '').toLowerCase().includes(query))
               if (models.length === 0) return null
-              const enabledCount = group.models.filter(model => model.imageEnabled).length
+              const markedCount = group.models.filter(model =>
+                fallback.textOnly[capabilityKey(group.provider, model.id)] === true).length
               return (
-                <details key={group.provider} className="dshVisionGroup" open={enabledCount > 0}>
+                <details key={group.provider} className="dshVisionGroup" open={markedCount > 0}>
                   <summary>
                     <span>{`${group.displayName} · ${String(group.models.length)} ${t('modelsSuffix')}`}</span>
                     <span className="dshVisionGroupSummaryRight">
                       <button
                         type="button"
                         className="dshVisionLinkButton"
-                        disabled={!state.writable || busyProvider !== undefined}
-                        onClick={e => { e.preventDefault(); bulk(group, true) }}
+                        onClick={e => { e.preventDefault(); setGroupTextOnly(group, true) }}
                       >
                         {t('enableAll')}
                       </button>
                       <button
                         type="button"
                         className="dshVisionLinkButton"
-                        disabled={!state.writable || busyProvider !== undefined}
-                        onClick={e => { e.preventDefault(); bulk(group, false) }}
+                        onClick={e => { e.preventDefault(); setGroupTextOnly(group, false) }}
                       >
                         {t('disableAll')}
                       </button>
@@ -383,7 +342,7 @@ export function VisionModelsSection(
                   </summary>
                   <div className="dshVisionModels">
                     {models.map(model => {
-                      const index = group.models.indexOf(model)
+                      const key = capabilityKey(group.provider, model.id)
                       return (
                         <div key={model.id} className="dshVisionModelRow">
                           <div className="dshVisionCardLeft">
@@ -396,9 +355,8 @@ export function VisionModelsSection(
                             type="checkbox"
                             className="dshVisionToggle"
                             aria-label={`${t('imageInput')} ${model.id}`}
-                            checked={model.imageEnabled}
-                            disabled={!state.writable || busyProvider !== undefined}
-                            onChange={e => { toggle(group, index, e.target.checked) }}
+                            checked={fallback.textOnly[key] === true}
+                            onChange={e => { setTextOnly(group.provider, model.id, e.target.checked) }}
                           />
                         </div>
                       )

@@ -21,8 +21,27 @@ const MAX_JSON_BODY_BYTES = 64 * 1024
 
 /** The persisted desktop-owned preference shape (all sections optional). */
 export interface DesktopPrefs {
-  vision?: { enabled?: unknown; provider?: unknown; model?: unknown }
+  vision?: {
+    enabled?: unknown
+    provider?: unknown
+    model?: unknown
+    textOnly?: unknown
+    probeResults?: unknown
+  }
   notifications?: { sound?: unknown; systemNotification?: unknown; onlyWhenBlurred?: unknown }
+}
+
+/**
+ * Keep only plain-object boolean entries; absent when nothing survives, so an
+ * empty map never materializes in the file.
+ */
+function booleanMap(value: unknown): Record<string, boolean> | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const result: Record<string, boolean> = {}
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (key.length > 0 && typeof entry === 'boolean') result[key] = entry
+  }
+  return Object.keys(result).length > 0 ? result : undefined
 }
 
 /**
@@ -49,6 +68,8 @@ export function normalizePrefs(value: unknown): DesktopPrefs {
       ...(typeof v.enabled === 'boolean' ? { enabled: v.enabled } : {}),
       ...(optionalString(v.provider) !== undefined ? { provider: v.provider } : {}),
       ...(optionalString(v.model) !== undefined ? { model: v.model } : {}),
+      ...booleanMap(v.textOnly) !== undefined ? { textOnly: booleanMap(v.textOnly) } : {},
+      ...booleanMap(v.probeResults) !== undefined ? { probeResults: booleanMap(v.probeResults) } : {},
     }
   }
   const notifications = source.notifications

@@ -16,9 +16,17 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type {} from './runtime.ts'
 
 const VISION_ROUTE = '/api/desktop/vision/describe'
+const PROBE_ROUTE = '/api/desktop/vision/probe'
 const MAX_JSON_BODY_BYTES = 32 * 1024 * 1024
 const CAPTION_TIMEOUT_MS = 60_000
+const PROBE_TIMEOUT_MS = 30_000
 const PI_AI_SETTINGS = settingsNamespace('llm-pi-ai')
+
+/** One-pixel PNG: the smallest image that still exercises the provider's
+ *  vision path end to end. */
+const PROBE_IMAGE_DATA = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+
+const PROBE_PROMPT = '这是一张测试图片。请只回答 yes 或 no:你能看到这张图片并分辨它的内容吗?'
 const CAPTION_PROMPT = [
   '请详细描述这张图片的内容。',
   '如果图片包含文字,请完整转述文字内容;如果是界面截图,请列出界面元素和布局;',
@@ -111,6 +119,89 @@ export function parseCaptionResponse(payload: unknown): string | undefined {
     return joined.length > 0 ? joined : undefined
   }
   return undefined
+}
+
+/**
+ * Build the OpenAI chat-completions request body for one vision probe.
+ * @param model - the model id to probe.
+ */
+export function buildProbeRequestBody(model: string): Record<string, unknown> {
+  return {
+    model,
+    stream: false,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: PROBE_PROMPT },
+        { type: 'image_url', image_url: { url: `data:image/png;base64,${PROBE_IMAGE_DATA}` } },
+      ],
+    }],
+  }
+}
+
+/** The probe verdict parsed from one chat-completions reply. */
+export type ProbeVerdict = 'yes' | 'no' | 'unknown'
+
+/**
+ * Classify one probe reply. Affirmations across common phrasings count as
+ * seeing; denials, refusals, and empty content do not.
+ */
+export function parseProbeVerdict(payload: unknown): ProbeVerdict {
+  const caption = parseCaptionResponse(payload)
+  if (caption === undefined) return 'unknown'
+  return /yes|是|能|看到/u.test(caption.toLowerCase()) ? 'yes' : 'no'
+}
+
+/** POST body of the probe route. */
+export interface ProbeRequest {
+  provider: string
+  model: string
+}
+
+function isProbeRequest(value: unknown): value is ProbeRequest {
+  return typeof value === 'object' && value !== null
+    && typeof (value as { provider?: unknown }).provider === 'string'
+    && (value as { provider: string }).provider.length > 0
+    && typeof (value as { model?: unknown }).model === 'string'
+    && (value as { model: string }).model.length > 0
+}
+
+/**
+ * Ask one custom-route model whether it can see a test image. Endpoints that
+ * reject image input answer false; so do models that admit the request but
+ * deny seeing anything — only an affirmative reply counts as vision.
+ */
+export async function probeModelVision(
+  body: ProbeRequest,
+  deps: CaptionDeps,
+): Promise<boolean> {
+  const profile = resolveProviderProfile(deps.readSettings(), body.provider)
+  if (profile === undefined) throw new Error(`未找到自定义接口 "${body.provider}" 的配置`)
+  if (profile.api !== undefined && profile.api !== 'openai-completions') {
+    throw new Error('自动检测仅支持 openai-completions 协议的自定义接口')
+  }
+  if (profile.baseURL === undefined) throw new Error(`自定义接口 "${body.provider}" 未配置 baseURL`)
+  const apiKey = profile.apiKeyEnv === undefined
+    ? undefined
+    : await deps.resolveCredential(profile.apiKeyEnv)
+  const endpoint = `${profile.baseURL.replace(/\/+$/u, '')}/chat/completions`
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  if (apiKey !== undefined) headers.authorization = `Bearer ${apiKey}`
+  const controller = new AbortController()
+  const timer = setTimeout(() => { controller.abort() }, PROBE_TIMEOUT_MS)
+  try {
+    const response = await deps.fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(buildProbeRequestBody(body.model)),
+      signal: controller.signal,
+    })
+    const payload = await response.json()
+    if (!response.ok) return false
+    return parseProbeVerdict(payload) === 'yes'
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 function isCaptionImage(value: unknown): value is CaptionImageRequest {
@@ -237,7 +328,7 @@ export const name = 'desktop-vision'
 export const inject = ['webServer', 'desktopRuntime', 'settings', 'credentials']
 
 /**
- * Register the desktop vision caption HTTP route.
+ * Register the desktop vision caption HTTP routes.
  * @param ctx - Host context carrying the Web carrier and kernel services.
  */
 export function apply(ctx: Context): void {
@@ -281,4 +372,44 @@ export function apply(ctx: Context): void {
       }
     },
   }), 'harnessx-desktop: vision caption API route')
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: PROBE_ROUTE,
+    handler: async (request: IncomingMessage, response: ServerResponse) => {
+      if (!ctx.desktopRuntime.authorizeLocalApiRequest(request)) {
+        sendJson(response, 401, { error: 'unauthorized' })
+        return
+      }
+      if (request.method !== 'POST') {
+        sendJson(response, 405, { error: 'method not allowed' })
+        return
+      }
+      let body: unknown
+      try {
+        body = await readJsonBody(request)
+      } catch (cause) {
+        sendJson(response, 400, { error: `invalid request body: ${cause instanceof Error ? cause.message : String(cause)}` })
+        return
+      }
+      if (!isProbeRequest(body)) {
+        sendJson(response, 400, { error: 'provider and model are required' })
+        return
+      }
+      try {
+        const capable = await probeModelVision(body, {
+          fetch: (input, init) => fetch(input, init as RequestInit),
+          resolveCredential: async ref => {
+            const resolved = await ctx.credentials.resolve(credentialRef(ref))
+            if (resolved === undefined) return undefined
+            const value = (resolved as { value?: unknown }).value
+            return typeof value === 'string' ? value : undefined
+          },
+          readSettings: () => ctx.settings.get(PI_AI_SETTINGS),
+        })
+        sendJson(response, 200, { capable })
+      } catch (cause) {
+        sendJson(response, 502, { error: cause instanceof Error ? cause.message : String(cause) })
+      }
+    },
+  }), 'harnessx-desktop: vision probe API route')
 }
