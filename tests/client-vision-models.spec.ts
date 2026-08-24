@@ -261,6 +261,51 @@ describe('vision fallback send wrap', () => {
     expect(args[0]).toBe(imageSend)
   })
 
+  it('re-reads capability on every send and never captions a freshly toggled model', async () => {
+    getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ captions: ['一个报错弹窗'] }) })
+    // First send: current model has no image declaration → captioned.
+    await api.sessions.prompt(imageSend)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    // The user now toggles 图片输入 on for that model: the next send must
+    // read the fresh declaration and leave the originals alone.
+    ;(api.settings.describe as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      result: {
+        ok: true as const,
+        value: {
+          writable: true,
+          namespaces: [{
+            ns: 'llm-pi-ai',
+            revision: 8,
+            value: {
+              providers: {
+                nexscp: { models: [
+                  { id: 'stealth/ox-alpha', input: ['text', 'image'] },
+                  { id: 'gpt-vision', input: ['text', 'image'] },
+                ] },
+              },
+            },
+          }],
+        },
+      },
+    })
+    await api.sessions.prompt(imageSend)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const args = promptArgs.at(-1) as unknown[]
+    expect(args[0]).toBe(imageSend)
+  })
+
+  it('sends the originals untouched when capability cannot be read', async () => {
+    getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
+    ;(api.llm.providers as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      result: { ok: false as const, error: { message: 'directory unavailable' } },
+    })
+    await api.sessions.prompt(imageSend)
+    expect(fetchMock).not.toHaveBeenCalled()
+    const args = promptArgs.at(-1) as unknown[]
+    expect(args[0]).toBe(imageSend)
+  })
+
   it('falls back to the original send when the bridge fails', async () => {
     getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
     fetchMock.mockResolvedValue({ ok: false, json: async () => ({ error: 'boom' }) })

@@ -41,15 +41,19 @@ interface WireApi {
 
 const supportKey = (provider: string, model: string): string => `${provider}\u0000${model}`
 
-let supportMap: Map<string, boolean> | undefined
-let supportMapLoading: Promise<Map<string, boolean>> | undefined
-
+/**
+ * Read which models currently admit images. Deliberately uncached: the user
+ * may have toggled 图片输入 for a model moments ago, and a stale map would
+ * caption (and replace) images a now-capable model could read natively.
+ * @throws when the provider directory or settings cannot be read, so callers
+ *  can treat "cannot tell" as "capable" and leave the send untouched.
+ */
 async function loadSupportMap(api: WireApi): Promise<Map<string, boolean>> {
   const map = new Map<string, boolean>()
   const providersResponse = await api.llm.providers({})
-  if (!providersResponse.result.ok) return map
+  if (!providersResponse.result.ok) throw new Error(providersResponse.result.error.message)
   const describeResponse = await api.settings.describe({})
-  if (!describeResponse.result.ok) return map
+  if (!describeResponse.result.ok) throw new Error(describeResponse.result.error.message)
   const namespaces = new Map(describeResponse.result.value.namespaces.map(view => [view.ns, view.value]))
   const rows = providersResponse.result.value.providers
   // Custom routes: per-entry `input` declarations written by our settings page.
@@ -75,25 +79,13 @@ async function loadSupportMap(api: WireApi): Promise<Map<string, boolean>> {
   return map
 }
 
-async function ensureSupportMap(api: WireApi): Promise<Map<string, boolean>> {
-  if (supportMap !== undefined) return supportMap
-  supportMapLoading ??= loadSupportMap(api).then(map => {
-    supportMap = map
-    supportMapLoading = undefined
-    return map
-  }, () => {
-    supportMapLoading = undefined
-    return new Map<string, boolean>()
-  })
-  return supportMapLoading
-}
-
 interface ImagePart { type: 'image'; mediaType: string; data: string; name?: string }
 
 /**
  * Describe the images of one prompt through the caption bridge, when the
- * current model cannot take them. Returns the content with each caption
- * appended after its image (originals kept), or undefined to send unchanged.
+ * current model cannot take them. The capability decision is re-read on
+ * every send: an image-capable model always gets its originals, and only a
+ * text-only model's images are replaced by the universal model's captions.
  * The session's model is never switched: the ORIGINAL model answers, using
  * the recognition the vision model produced.
  */
@@ -108,10 +100,16 @@ async function captionImagesIfNeeded(
   if (!modelsResponse.result.ok) return undefined
   const current = modelsResponse.result.value.current
   if (current.provider === config.provider && current.model === config.model) return undefined
-  const map = await ensureSupportMap(api)
-  // Declared image-capable models read the originals themselves; only
-  // text-only selections need the caption bridge.
-  if (map.get(supportKey(current.provider, current.model)) === true) return undefined
+  let capable: boolean
+  try {
+    const map = await loadSupportMap(api)
+    capable = map.get(supportKey(current.provider, current.model)) === true
+  } catch {
+    // Capability unreadable: respect the user's model choice and send the
+    // originals untouched rather than captioning on a guess.
+    return undefined
+  }
+  if (capable) return undefined
   const images = content.filter((part): part is ImagePart => part.type === 'image')
   const response = await fetch(VISION_DESCRIBE_URL, {
     method: 'POST',
@@ -165,12 +163,6 @@ export function installVisionFallback(ctx: ClientContext): void {
       }
       return original(args[0], args[1])
     }
-    const remote = (ctx as unknown as {
-      remote?: { $on(event: string, listener: () => void): () => void }
-    }).remote
-    remote?.$on('settings/document-updated', () => {
-      supportMap = undefined
-    })
   } catch {
     // Feature stays off; the kernel path behaves exactly as before.
   }
