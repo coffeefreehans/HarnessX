@@ -230,7 +230,10 @@ export interface VisionFallbackStore {
 
 let fallbackStore: VisionFallbackStore | undefined
 
-function readPersistedFallback(): VisionFallbackSettings {
+/** Read the fallback settings straight from storage, bypassing any in-memory
+ *  snapshot. The send interceptor calls this per prompt so a toggle flipped in
+ *  another window (or another module instance) applies on the very next send. */
+export function readPersistedFallback(): VisionFallbackSettings {
   if (typeof localStorage === 'undefined') return DEFAULT_VISION_FALLBACK_SETTINGS
   try {
     const raw = localStorage.getItem(VISION_FALLBACK_STORAGE_KEY)

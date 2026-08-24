@@ -17,7 +17,7 @@ import {
   replaceImagesWithCaptions,
   replaceImagesWithFailureNotes,
   extractVisionGroups,
-  getVisionFallbackStore,
+  readPersistedFallback,
   hasImagePart,
   walkPath,
   type PromptContentPart,
@@ -101,9 +101,11 @@ async function captionImagesIfNeeded(
   sessionId: string,
   content: readonly PromptContentPart[],
 ): Promise<PromptContentPart[] | undefined> {
-  const config = getVisionFallbackStore().getSnapshot()
+  // Live storage read, not the in-process snapshot: a toggle flipped in
+  // another window (or before this page loaded) applies on the next send.
+  const config = readPersistedFallback()
   if (!config.enabled || config.provider === undefined || config.model === undefined) {
-    debug('universal vision model not configured; image sent as-is')
+    debug(`universal vision model not configured or disabled (enabled=${String(config.enabled)}); image sent as-is`)
     return undefined
   }
   const modelsResponse = await api.sessions.models({ sessionId })
