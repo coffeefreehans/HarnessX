@@ -151,11 +151,18 @@ export function hasImagePart(content: readonly PromptContentPart[]): boolean {
 }
 
 /**
- * Build the steering message that delivers recognitions into the thinking
- * turn: one labelled text part per recognized image. The producing vision
- * model's name travels inside the label so every historic send stays
- * attributable.
+ * Silently strip every image part from the outgoing content. Both upstream
+ * adapters HARD-FAIL a turn whose messages contain an image for a model
+ * without a declared image input (`does not support image input`), so the
+ * image must never reach the session for such models — and any visible
+ * stand-in text would pollute the user's bubble. Recognition runs in
+ * parallel and arrives as a steering message instead.
  */
+export function stripImageParts(content: readonly PromptContentPart[]): PromptContentPart[] {
+  const kept = content.filter(part => part.type !== 'image')
+  if (kept.length === 0) return [{ type: 'text', text: ' ' }]
+  return kept
+}
 export function captionSteerContent(
   captions: readonly string[],
   visionModel: string,

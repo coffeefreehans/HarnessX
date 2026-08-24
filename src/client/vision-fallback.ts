@@ -2,14 +2,14 @@
  *
  * Wraps the shared client API's `sessions.prompt` method (the one call every
  * composer send lands on). When a prompt carries images and the session's
- * model does not admit them, the send leaves VERBATIM — the user's bubble
- * shows the real image and nothing about the send path changes. Recognition
- * runs in parallel through the desktop caption bridge (with local downscaling
- * so relay gateways don't reject large screenshots), and its result is
- * delivered mid-turn as a steering message (`mode: 'steer'`), so the
- * recognition happens inside the thinking phase instead of blocking the
- * send. The ORIGINAL model stays selected and answers from the recognition
- * it was handed; the session's model is never switched.
+ * model does not admit them, the images are stripped silently — both upstream
+ * adapters hard-fail any turn that carries an image for such a model — and
+ * recognition runs in parallel through the desktop caption bridge (with local
+ * downscaling so relay gateways don't reject large screenshots). Its result
+ * is delivered mid-turn as a steering message (`mode: 'steer'`), so the
+ * recognition happens inside the thinking phase instead of blocking the send.
+ * The ORIGINAL model stays selected and answers from the recognition it was
+ * handed; the session's model is never switched.
  */
 
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
@@ -19,6 +19,7 @@ import {
   failureSteerContent,
   getVisionFallbackStore,
   hasImagePart,
+  stripImageParts,
   walkPath,
   type PromptContentPart,
 } from './vision-models-state.ts'
@@ -194,6 +195,7 @@ export function installVisionFallback(ctx: ClientContext): void {
     installed = true
     sessions.prompt = async (...args: unknown[]): Promise<unknown> => {
       let engaged: {
+        patched: Record<string, unknown>
         images: ImagePart[]
         provider: string
         model: string
@@ -244,6 +246,7 @@ export function installVisionFallback(ctx: ClientContext): void {
                 } else {
                   debug(`current model ${current.provider}/${current.model} cannot take images; asking ${config.provider}/${config.model} to describe while the turn runs`)
                   engaged = {
+                    patched: { ...(request as object), content: stripImageParts(content as PromptContentPart[]) },
                     images: (content as PromptContentPart[])
                       .filter((part): part is ImagePart => part.type === 'image'),
                     provider: config.provider,
@@ -261,10 +264,10 @@ export function installVisionFallback(ctx: ClientContext): void {
         debug('decision error; image sent as-is:', cause instanceof Error ? cause.message : String(cause))
       }
       if (engaged === undefined) return original(args[0], args[1])
-      // The send leaves VERBATIM — the user's bubble shows the real image and
-      // the kernel behaves exactly as in a vanilla chat. Only the parallel
-      // recognition differs.
-      const sendPromise = original(args[0], args[1])
+      // Images are stripped silently: both upstream adapters HARD-FAIL a turn
+      // that carries an image for a model without a declared image input, so
+      // the image can never enter the session. The recognition steers in.
+      const sendPromise = original(engaged.patched, args[1])
       // Recognition must not block the composer: dispatch it once the host
       // accepted the pending-note send, then steer the result mid-turn.
       void (async (): Promise<void> => {
