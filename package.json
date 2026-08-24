@@ -1,6 +1,6 @@
 {
   "name": "harnessx-desktop",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "DeepSeek HarnessX: an Electron desktop client composed around DeepSeek Harness",
   "license": "MIT",
   "private": true,
