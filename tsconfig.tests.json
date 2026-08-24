@@ -9,6 +9,7 @@
   "exclude": [
     "tests/client-environment.spec.ts",
     "tests/client-notifications.spec.ts",
+    "tests/client-plugin-slot-compat.spec.ts",
     "tests/client-vision-models.spec.ts"
   ]
 }

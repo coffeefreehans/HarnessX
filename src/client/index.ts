@@ -12,6 +12,7 @@ import { applySessionNotifications } from './session-notifications.ts'
 import { applyNotificationSettings } from './notification-settings.tsx'
 import { applyVisionModels } from './vision-models.tsx'
 import { installVisionFallback } from './vision-fallback.ts'
+import { installPluginSlotCompat } from './plugin-slot-compat.ts'
 import { hydrateDesktopPrefs } from './desktop-prefs.ts'
 import { applySync } from './sync.tsx'
 import { primeCompletionAudio } from './sound.ts'
@@ -41,6 +42,9 @@ export const inject = [
 export function apply(ctx: ClientContext): void {
   const environment = parseDesktopClientEnvironment(window.location.search)
   if (environment.mode === 'advanced') applyAdvancedShell(ctx, environment)
+  // The desktop bundle applies before appended community bundles; wrapping
+  // registration here lets the compat shim see their slot calls.
+  installPluginSlotCompat(ctx)
   // Warm the AudioContext on the first real gesture so blurred-window
   // completion chimes are not silenced by autoplay policy.
   primeCompletionAudio()

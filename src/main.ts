@@ -3,7 +3,8 @@
 import { app } from 'electron'
 import type { Context } from '@deepseek-ai/cordis'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { tmpdir } from 'node:os'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   boot,
   installFailLoud,
@@ -15,6 +16,7 @@ import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { DSH_LAUNCH_ENVIRONMENT_KEY } from '@deepseek-ai/dsh-launch-environment'
 import { installDesktopPnpmRuntime } from './desktop-runtime-environment.ts'
 import { ElectronDesktopRuntime } from './electron-runtime.ts'
+import { installPluginFsGuard } from './plugin-fs-guard.ts'
 import { installProfilePackageResolver } from './module-resolution.ts'
 import { packagedDependencyPath } from './packaged-runtime-path.ts'
 import {
@@ -133,6 +135,14 @@ async function start(): Promise<void> {
     const releasePnpmRuntime = (): void => { pnpmRuntime.dispose() }
     disposePnpmRuntime = releasePnpmRuntime
     const homeDir = resolveDshHome()
+    // Community host plugins load in this process with full fs access; wrap
+    // the deletion family for their module graphs so they cannot remove
+    // anything outside their own data zone (DSH home, temp, userData).
+    installPluginFsGuard({
+      allowedRoots: [homeDir, tmpdir(), app.getPath('userData')],
+      externalZoneUrl: pathToFileURL(homeDir).href,
+      debug: message => { process.stderr.write(`${BIN_NAME}: ${message}\n`) },
+    })
     const selectionStatePath = join(app.getPath('userData'), 'profile-selection', 'state.json')
     profileStatePath = selectionStatePath
     profileStartup = beginDesktopProfileStartup(selectionStatePath, homeDir)
