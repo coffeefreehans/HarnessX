@@ -2,23 +2,24 @@
  *
  * Wraps the shared client API's `sessions.prompt` method (the one call every
  * composer send lands on). When a prompt carries images and the session's
- * model does not admit them, the images are first described by the configured
- * universal vision model through the desktop caption bridge, and each image
- * part is replaced by its labelled caption — the ORIGINAL model stays
- * selected and answers from the recognition it was handed. Keeping the image
- * part is deliberately avoided: the kernel would show the model an image
- * marker plus a read-image tool, and text-only models chase that file
- * instead of using the caption. Any failure here falls back to the untouched
- * original call.
+ * model does not admit them, the send leaves IMMEDIATELY with each image
+ * replaced by a short pending note — the user's message appears at once and
+ * the model starts thinking. Recognition runs in parallel through the
+ * desktop caption bridge, and its result is delivered mid-turn as a steering
+ * message (`mode: 'steer'`), so the recognition happens inside the thinking
+ * phase instead of blocking the send. The ORIGINAL model stays selected and
+ * answers from the recognition it was handed; the session's model is never
+ * switched.
  */
 
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import {
-  replaceImagesWithCaptions,
-  replaceImagesWithFailureNotes,
+  captionSteerContent,
   extractVisionGroups,
+  failureSteerContent,
   getVisionFallbackStore,
   hasImagePart,
+  replaceImagesWithPendingNotes,
   walkPath,
   type PromptContentPart,
 } from './vision-models-state.ts'
@@ -90,59 +91,25 @@ async function loadSupportMap(api: WireApi): Promise<Map<string, boolean>> {
 interface ImagePart { type: 'image'; mediaType: string; data: string; name?: string }
 
 /**
- * Describe the images of one prompt through the caption bridge, when the
- * current model cannot take them. The capability decision is re-read on
- * every send: an image-capable model always gets its originals, and only a
- * text-only model's images are replaced by the universal model's captions.
- * The session's model is never switched: the ORIGINAL model answers, using
- * the recognition the vision model produced.
+ * Run recognition for an already-dispatched send and deliver the outcome as a
+ * steering message into the thinking turn. Fire-and-forget: the send itself
+ * has already left, so no latency here reaches the composer.
  */
-async function captionImagesIfNeeded(
-  api: WireApi,
+async function steerRecognition(
+  original: WireSessions['prompt'],
   sessionId: string,
-  content: readonly PromptContentPart[],
-): Promise<PromptContentPart[] | undefined> {
-  // The in-memory store is the source of truth, NOT localStorage: the kernel
-  // web server port changes every launch, so this origin's localStorage is
-  // wiped on restart while the host-side prefs file hydrates the store at
-  // boot. Reading storage directly would silently see "disabled" forever.
-  const config = getVisionFallbackStore().getSnapshot()
-  debug(`fallback config: enabled=${String(config.enabled)} provider=${config.provider ?? '(none)'} model=${config.model ?? '(none)'}`)
-  if (!config.enabled || config.provider === undefined || config.model === undefined) {
-    debug('universal vision model not configured or disabled; image sent as-is')
-    return undefined
-  }
-  const modelsResponse = await api.sessions.models({ sessionId })
-  if (!modelsResponse.result.ok) {
-    debug('sessions.models failed; image sent as-is:', modelsResponse.result.error.message)
-    return undefined
-  }
-  const current = modelsResponse.result.value.current
-  if (current.provider === config.provider && current.model === config.model) {
-    debug('current model IS the universal vision model; image sent as-is')
-    return undefined
-  }
-  let capable: boolean
-  try {
-    const map = await loadSupportMap(api)
-    capable = map.get(supportKey(current.provider, current.model)) === true
-  } catch (cause) {
-    // Capability unreadable: respect the user's model choice and send the
-    // originals untouched rather than captioning on a guess.
-    debug('capability unreadable; image sent as-is:', cause instanceof Error ? cause.message : String(cause))
-    return undefined
-  }
-  if (capable) {
-    debug(`model ${current.provider}/${current.model} declared image-capable; originals sent`)
-    return undefined
-  }
-  debug(`current model ${current.provider}/${current.model} cannot take images; asking ${config.provider}/${config.model} to describe`)
-  const images = content.filter((part): part is ImagePart => part.type === 'image')
+  images: readonly ImagePart[],
+  provider: string,
+  model: string,
+  signal: unknown,
+): Promise<void> {
+  let captions: string[] | undefined
   try {
     const response = await fetch(VISION_DESCRIBE_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ provider: config.provider, model: config.model, images }),
+      body: JSON.stringify({ images, provider, model }),
+      ...(signal instanceof AbortSignal ? { signal } : {}),
     })
     if (!response.ok) throw new Error(`caption bridge HTTP ${String(response.status)}`)
     const value = await response.json() as { captions?: unknown }
@@ -152,13 +119,20 @@ async function captionImagesIfNeeded(
     for (const caption of value.captions) {
       if (typeof caption !== 'string') throw new Error('caption bridge returned a non-string caption')
     }
-    return replaceImagesWithCaptions(content, value.captions, `${config.provider}/${config.model}`)
+    captions = value.captions
   } catch (cause) {
-    // The caption bridge failed for a model that cannot read images. Sending
-    // the raw image would only hand the model a sha256 marker it would chase
-    // through read_image; replace with an honest failure note instead.
     debug('caption bridge failed:', cause instanceof Error ? cause.message : String(cause))
-    return replaceImagesWithFailureNotes(content)
+  }
+  try {
+    const content = captions !== undefined
+      ? captionSteerContent(captions, `${provider}/${model}`)
+      : failureSteerContent(images.length)
+    debug(captions !== undefined
+      ? 'recognition done; steering it into the running turn'
+      : 'steering the failure note into the running turn')
+    await original({ sessionId, mode: 'steer', content })
+  } catch (cause) {
+    debug('steering failed:', cause instanceof Error ? cause.message : String(cause))
   }
 }
 
@@ -180,18 +154,69 @@ export function installVisionFallback(ctx: ClientContext): void {
     const original = sessions.prompt.bind(sessions)
     installed = true
     sessions.prompt = async (...args: unknown[]): Promise<unknown> => {
+      let engaged: {
+        patched: Record<string, unknown>
+        images: ImagePart[]
+        provider: string
+        model: string
+        sessionId: string
+      } | undefined
       try {
         // The kernel's Session class sends a flat { sessionId, mode, content,
         // clientTimeZone } request with an optional AbortSignal second
-        // argument. Only content may gain appended caption parts; everything
-        // else (and the signal) forwards exactly as the kernel issued it.
-        const request = args[0] as { sessionId?: unknown; content?: unknown } | undefined
+        // argument. Only the outgoing content changes (images → pending
+        // notes); everything else (and the signal) forwards exactly as the
+        // kernel issued it.
+        const request = args[0] as { sessionId?: unknown; mode?: unknown; content?: unknown } | undefined
         const content = request?.content
-        if (typeof request?.sessionId === 'string' && Array.isArray(content)) {
-          if (hasImagePart(content as PromptContentPart[])) {
-            const replacement = await captionImagesIfNeeded(api, request.sessionId, content as PromptContentPart[])
-            if (replacement !== undefined) {
-              return original({ ...(request as object), content: replacement }, args[1])
+        if (
+          typeof request?.sessionId === 'string'
+          && Array.isArray(content)
+          && hasImagePart(content as PromptContentPart[])
+        ) {
+          // The in-memory store is the source of truth, NOT localStorage: the
+          // kernel web server port changes every launch, so this origin's
+          // localStorage is wiped on restart while the host-side prefs file
+          // hydrates the store at boot. Reading storage directly would
+          // silently see "disabled" forever.
+          const config = getVisionFallbackStore().getSnapshot()
+          debug(`fallback config: enabled=${String(config.enabled)} provider=${config.provider ?? '(none)'} model=${config.model ?? '(none)'}`)
+          if (!config.enabled || config.provider === undefined || config.model === undefined) {
+            debug('universal vision model not configured or disabled; image sent as-is')
+          } else {
+            const modelsResponse = await api.sessions.models({ sessionId: request.sessionId })
+            if (!modelsResponse.result.ok) {
+              debug('sessions.models failed; image sent as-is:', modelsResponse.result.error.message)
+            } else {
+              const current = modelsResponse.result.value.current
+              if (current.provider === config.provider && current.model === config.model) {
+                debug('current model IS the universal vision model; image sent as-is')
+              } else {
+                let capable: boolean
+                try {
+                  const map = await loadSupportMap(api)
+                  capable = map.get(supportKey(current.provider, current.model)) === true
+                } catch (cause) {
+                  // Capability unreadable: respect the user's model choice and
+                  // send the originals untouched rather than captioning on a guess.
+                  debug('capability unreadable; image sent as-is:', cause instanceof Error ? cause.message : String(cause))
+                  capable = true
+                }
+                if (capable) {
+                  debug(`model ${current.provider}/${current.model} declared image-capable; originals sent`)
+                } else {
+                  debug(`current model ${current.provider}/${current.model} cannot take images; asking ${config.provider}/${config.model} to describe while the turn runs`)
+                  const images = (content as PromptContentPart[])
+                    .filter((part): part is ImagePart => part.type === 'image')
+                  engaged = {
+                    patched: { ...(request as object), content: replaceImagesWithPendingNotes(content as PromptContentPart[]) },
+                    images,
+                    provider: config.provider,
+                    model: config.model,
+                    sessionId: request.sessionId,
+                  }
+                }
+              }
             }
           }
         }
@@ -200,7 +225,36 @@ export function installVisionFallback(ctx: ClientContext): void {
         // but never silently — the cause names itself in the console.
         debug('decision error; image sent as-is:', cause instanceof Error ? cause.message : String(cause))
       }
-      return original(args[0], args[1])
+      if (engaged === undefined) return original(args[0], args[1])
+      const sendPromise = original(engaged.patched, args[1])
+      // Recognition must not block the composer: dispatch it once the host
+      // accepted the pending-note send, then steer the result mid-turn.
+      void (async (): Promise<void> => {
+        try {
+          const accepted = await sendPromise
+          const ok = (accepted as { result?: { ok?: boolean } })?.result?.ok === true
+          if (!ok) {
+            debug('send was not accepted; skipping recognition steering')
+            return
+          }
+        } catch {
+          // A rejected send promise still resolves through promptError paths;
+          // attempt steering anyway — the host drops it if the session is gone.
+        }
+        if (args[1] instanceof AbortSignal && args[1].aborted) {
+          debug('send aborted before recognition finished; skipping steering')
+          return
+        }
+        await steerRecognition(
+          original,
+          engaged.sessionId,
+          engaged.images,
+          engaged.provider,
+          engaged.model,
+          args[1],
+        )
+      })()
+      return sendPromise
     }
   } catch {
     // Feature stays off; the kernel path behaves exactly as before.

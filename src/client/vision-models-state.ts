@@ -150,52 +150,56 @@ export function hasImagePart(content: readonly PromptContentPart[]): boolean {
   return content.some(part => part.type === 'image')
 }
 
+/** Count image parts (the bridge describes each one). */
+export function countImageParts(content: readonly PromptContentPart[]): number {
+  return content.filter(part => part.type === 'image').length
+}
+
 /**
- * Replace each image part with its caption as a labelled text part, in
- * position. Keeping the image part would make the kernel present the model
- * an `Image sha256:` marker plus a read-image tool, and text-only models
- * then chase the file instead of using the caption. With the image replaced
- * by its recognition, the model can only answer from the caption — which is
- * exactly the vision model's report to it. The producing vision model's name
- * travels inside the label so every historic send stays attributable.
+ * Replace each image part with a short pending note so the send leaves the
+ * composer immediately — the user's message appears at once and the session
+ * model starts thinking while recognition runs in parallel. The recognition
+ * itself arrives afterwards as a steering message.
  */
-export function replaceImagesWithCaptions(
-  content: readonly PromptContentPart[],
-  captions: readonly string[],
-  visionModel: string,
-): PromptContentPart[] {
+export function replaceImagesWithPendingNotes(content: readonly PromptContentPart[]): PromptContentPart[] {
   let imageIndex = 0
   return content.map((part): PromptContentPart => {
     if (part.type !== 'image') return part
     const ordinal = imageIndex + 1
-    const caption = captions[imageIndex]?.trim()
     imageIndex += 1
     return {
       type: 'text',
-      text: `\n\n[图片 ${String(ordinal)} 识别结果 · 由识图模型 ${visionModel} 自动生成,当前模型无法读取原图,请直接依据以下内容回答,不要尝试读取图片文件]\n${caption !== undefined && caption.length > 0 ? caption : '(图片识别未返回内容)'}`,
+      text: `\n\n[图片 ${String(ordinal)} 已收到,正在用通用识图模型识别图片内容,识别结果稍后单独送达;在此之前不要声称看不到图片]`,
     }
   })
 }
 
 /**
- * Replace each image part with a failure note, for sends where the caption
- * bridge was engaged but the recognition call failed. Sending the raw image
- * instead would only give a text-only model the kernel's `Image sha256:`
- * marker plus a read-image tool it cannot use — models then chase the hash
- * and answer nonsense. The note lets the model state honestly that the
- * image could not be recognized.
+ * Build the steering message that delivers recognitions into the thinking
+ * turn: one labelled text part per recognized image. The producing vision
+ * model's name travels inside the label so every historic send stays
+ * attributable.
  */
-export function replaceImagesWithFailureNotes(content: readonly PromptContentPart[]): PromptContentPart[] {
-  let imageIndex = 0
-  return content.map((part): PromptContentPart => {
-    if (part.type !== 'image') return part
-    const ordinal = imageIndex + 1
-    imageIndex += 1
-    return {
-      type: 'text',
-      text: `\n\n[图片 ${String(ordinal)} · 识图服务调用失败,当前模型无法读取原图。请直接告知用户这张图片暂时无法识别,不要尝试读取图片文件、调用读图工具或输出文件哈希]`,
-    }
-  })
+export function captionSteerContent(
+  captions: readonly string[],
+  visionModel: string,
+): PromptContentPart[] {
+  return captions.map((caption, index): PromptContentPart => ({
+    type: 'text',
+    text: `\n\n[图片 ${String(index + 1)} 识别结果 · 由识图模型 ${visionModel} 自动生成,当前模型无法读取原图,请直接依据以下内容回答用户关于这张图片的问题,不要尝试读取图片文件]\n${caption.trim().length > 0 ? caption.trim() : '(图片识别未返回内容)'}`,
+  }))
+}
+
+/**
+ * Build the steering message for sends whose recognition failed. The note
+ * lets the model state honestly that the image could not be recognized,
+ * instead of chasing kernel sha256 markers through read_image.
+ */
+export function failureSteerContent(count: number): PromptContentPart[] {
+  return Array.from({ length: Math.max(0, count) }, (_unused, index): PromptContentPart => ({
+    type: 'text',
+    text: `\n\n[图片 ${String(index + 1)} · 识图服务调用失败,当前模型无法读取原图。请直接告知用户这张图片暂时无法识别,不要尝试读取图片文件、调用读图工具或输出文件哈希]`,
+  }))
 }
 
 /** Wire protocol the host caption bridge speaks. Only `openai-completions`
