@@ -306,13 +306,19 @@ describe('vision fallback send wrap', () => {
     expect(args[0]).toBe(imageSend)
   })
 
-  it('falls back to the original send when the bridge fails', async () => {
+  it('replaces the image with an honest failure note when the bridge fails', async () => {
     getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
     fetchMock.mockResolvedValue({ ok: false, json: async () => ({ error: 'boom' }) })
     await api.sessions.prompt(imageSend)
-    const args = promptArgs.at(-1) as unknown[]
-    expect(args[0]).toBe(imageSend)
-    expect((args[0] as { content: PromptContentPart[] }).content).toHaveLength(2)
+    // The raw image must NOT go out: a text-only model would only chase the
+    // kernel's sha256 marker through read_image and answer nonsense.
+    const sent = (promptArgs.at(-1) as unknown[])[0] as { content: PromptContentPart[] }
+    expect(sent.content).toHaveLength(2)
+    expect(sent.content[0]).toBe(imageSend.content[0])
+    expect(sent.content[1]).toEqual({
+      type: 'text',
+      text: '\n\n[图片 1 · 识图服务调用失败,当前模型无法读取原图。请直接告知用户这张图片暂时无法识别,不要尝试读取图片文件、调用读图工具或输出文件哈希]',
+    })
   })
 
   it('passes through when no universal model is configured', async () => {

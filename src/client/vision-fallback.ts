@@ -15,6 +15,7 @@
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import {
   replaceImagesWithCaptions,
+  replaceImagesWithFailureNotes,
   extractVisionGroups,
   getVisionFallbackStore,
   hasImagePart,
@@ -23,6 +24,12 @@ import {
 } from './vision-models-state.ts'
 
 const VISION_DESCRIBE_URL = '/api/desktop/vision/describe'
+
+/** Quiet per-decision trace: invisible unless the user opens devtools with
+ *  verbose logging, but enough to tell which branch handled an image send. */
+function debug(reason: string, detail?: string): void {
+  console.debug(`[harnessx-desktop] vision: ${reason}${detail === undefined ? '' : ` ${detail}`}`)
+}
 
 /** Minimal wire faces the interceptor needs (structural, fixture-compatible). */
 interface WireSessions {
@@ -95,34 +102,54 @@ async function captionImagesIfNeeded(
   content: readonly PromptContentPart[],
 ): Promise<PromptContentPart[] | undefined> {
   const config = getVisionFallbackStore().getSnapshot()
-  if (!config.enabled || config.provider === undefined || config.model === undefined) return undefined
+  if (!config.enabled || config.provider === undefined || config.model === undefined) {
+    debug('universal vision model not configured; image sent as-is')
+    return undefined
+  }
   const modelsResponse = await api.sessions.models({ sessionId })
   if (!modelsResponse.result.ok) return undefined
   const current = modelsResponse.result.value.current
-  if (current.provider === config.provider && current.model === config.model) return undefined
+  if (current.provider === config.provider && current.model === config.model) {
+    debug('current model IS the universal vision model; image sent as-is')
+    return undefined
+  }
   let capable: boolean
   try {
     const map = await loadSupportMap(api)
     capable = map.get(supportKey(current.provider, current.model)) === true
-  } catch {
+  } catch (cause) {
     // Capability unreadable: respect the user's model choice and send the
     // originals untouched rather than captioning on a guess.
+    debug('capability unreadable; image sent as-is:', cause instanceof Error ? cause.message : String(cause))
     return undefined
   }
-  if (capable) return undefined
-  const images = content.filter((part): part is ImagePart => part.type === 'image')
-  const response = await fetch(VISION_DESCRIBE_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ provider: config.provider, model: config.model, images }),
-  })
-  if (!response.ok) return undefined
-  const value = await response.json() as { captions?: unknown }
-  if (!Array.isArray(value.captions) || value.captions.length !== images.length) return undefined
-  for (const caption of value.captions) {
-    if (typeof caption !== 'string') return undefined
+  if (capable) {
+    debug(`model ${current.provider}/${current.model} declared image-capable; originals sent`)
+    return undefined
   }
-  return replaceImagesWithCaptions(content, value.captions)
+  const images = content.filter((part): part is ImagePart => part.type === 'image')
+  try {
+    const response = await fetch(VISION_DESCRIBE_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ provider: config.provider, model: config.model, images }),
+    })
+    if (!response.ok) throw new Error(`caption bridge HTTP ${String(response.status)}`)
+    const value = await response.json() as { captions?: unknown }
+    if (!Array.isArray(value.captions) || value.captions.length !== images.length) {
+      throw new Error('caption bridge returned a malformed payload')
+    }
+    for (const caption of value.captions) {
+      if (typeof caption !== 'string') throw new Error('caption bridge returned a non-string caption')
+    }
+    return replaceImagesWithCaptions(content, value.captions)
+  } catch (cause) {
+    // The caption bridge failed for a model that cannot read images. Sending
+    // the raw image would only hand the model a sha256 marker it would chase
+    // through read_image; replace with an honest failure note instead.
+    debug('caption bridge failed:', cause instanceof Error ? cause.message : String(cause))
+    return replaceImagesWithFailureNotes(content)
+  }
 }
 
 let installed = false

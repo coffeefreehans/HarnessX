@@ -175,6 +175,27 @@ export function replaceImagesWithCaptions(
   })
 }
 
+/**
+ * Replace each image part with a failure note, for sends where the caption
+ * bridge was engaged but the recognition call failed. Sending the raw image
+ * instead would only give a text-only model the kernel's `Image sha256:`
+ * marker plus a read-image tool it cannot use — models then chase the hash
+ * and answer nonsense. The note lets the model state honestly that the
+ * image could not be recognized.
+ */
+export function replaceImagesWithFailureNotes(content: readonly PromptContentPart[]): PromptContentPart[] {
+  let imageIndex = 0
+  return content.map((part): PromptContentPart => {
+    if (part.type !== 'image') return part
+    const ordinal = imageIndex + 1
+    imageIndex += 1
+    return {
+      type: 'text',
+      text: `\n\n[图片 ${String(ordinal)} · 识图服务调用失败,当前模型无法读取原图。请直接告知用户这张图片暂时无法识别,不要尝试读取图片文件、调用读图工具或输出文件哈希]`,
+    }
+  })
+}
+
 /** Wire protocol the host caption bridge speaks. Only `openai-completions`
  *  custom endpoints can be used as the universal vision model. */
 export const CAPTION_SUPPORTED_API = 'openai-completions'
