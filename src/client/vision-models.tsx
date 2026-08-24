@@ -53,9 +53,9 @@ export type VisionModelsKey =
 const zh: Record<VisionModelsKey, string> = {
   nav: '视觉模型',
   title: '视觉模型',
-  desc: '图片始终显示在对话框里并随消息发送。发图时自动检测当前模型是否真能看图:能则用其自身视觉作答;不能则自动由下方通用识图模型识别,识别结果交给该模型作答,会话模型始终不变。勾选「无多模态」可跳过检测强制走通用识图。',
+  desc: '图片始终显示在对话框里并随消息发送。发图时自动检测当前模型是否真能看图:能则用其自身视觉作答;不能则自动由下方通用识图模型识别,识别结果交给该模型作答,会话模型始终不变。勾选「强制」可跳过检测,始终走通用识图。',
   universal: '通用识图模型',
-  universalDesc: '被标记为「无多模态」的模型收到图片时,由这个模型识别图片内容并把结果告诉当前模型',
+  universalDesc: '被标记为「强制」的模型收到图片时,由这个模型识别图片内容并把结果告诉当前模型',
   universalPlaceholder: '选择识图模型',
   searchPlaceholder: '搜索模型…',
   loading: '加载中…',
@@ -64,7 +64,7 @@ const zh: Record<VisionModelsKey, string> = {
   empty: '没有自定义模型接口,请先在「模型」设置中添加。',
   enableAll: '全部强制',
   disableAll: '取消强制',
-  imageInput: '无多模态',
+  imageInput: '强制',
   notWritable: '设置为只读,无法修改',
   saveFailed: '保存失败',
   modelsSuffix: '个模型',
@@ -74,9 +74,9 @@ const zh: Record<VisionModelsKey, string> = {
 const en: Record<VisionModelsKey, string> = {
   nav: 'Vision Models',
   title: 'Vision Models',
-  desc: 'Images always show in the conversation and travel with the message. On each image send the model is checked automatically: models that truly see images answer from them, while blind models get their images described by the universal vision model below. Tick "no vision" to skip detection and always caption.',
+  desc: 'Images always show in the conversation and travel with the message. On each image send the model is checked automatically: models that truly see images answer from them, while blind models get their images described by the universal vision model below. Tick "Force" to skip detection and always caption.',
   universal: 'Universal Vision Model',
-  universalDesc: 'Describes images for models marked "no vision" and tells the current model what they contain',
+  universalDesc: 'Describes images for models marked "Force" and tells the current model what they contain',
   universalPlaceholder: 'Choose a caption model',
   searchPlaceholder: 'Search models…',
   loading: 'Loading…',
@@ -85,7 +85,7 @@ const en: Record<VisionModelsKey, string> = {
   empty: 'No custom model endpoints. Add one in the Models settings first.',
   enableAll: 'Force all',
   disableAll: 'Unforce all',
-  imageInput: 'No vision',
+  imageInput: 'Force',
   notWritable: 'Settings are read-only',
   saveFailed: 'Save failed',
   modelsSuffix: 'models',
@@ -178,6 +178,9 @@ export function VisionModelsSection(
   const { t, api } = _props
   const [state, setState] = useState<VisionModelState>(EMPTY_STATE)
   const [search, setSearch] = useState('')
+  /** User-driven expansion per provider group; undefined keeps the smart
+   *  default of expanding groups that contain 强制 marks. */
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
   const fallbackStore = getVisionFallbackStore()
   const [fallback, setFallback] = useState(fallbackStore.getSnapshot())
 
@@ -199,7 +202,7 @@ export function VisionModelsSection(
 
   useEffect(() => { reload() }, [reload])
 
-  /** Flip one model's manual 无多模态 mark in the desktop-owned store. */
+  /** Flip one model's manual 强制 mark in the desktop-owned store. */
   const setTextOnly = (provider: string, modelId: string, value: boolean): void => {
     const snapshot = fallbackStore.getSnapshot()
     fallbackStore.set({
@@ -320,7 +323,14 @@ export function VisionModelsSection(
               const markedCount = group.models.filter(model =>
                 fallback.textOnly[capabilityKey(group.provider, model.id)] === true).length
               return (
-                <details key={group.provider} className="dshVisionGroup" open={markedCount > 0}>
+                <details
+                  key={group.provider}
+                  className="dshVisionGroup"
+                  open={expandedGroups[group.provider] ?? markedCount > 0}
+                  onToggle={e => {
+                    setExpandedGroups(prev => ({ ...prev, [group.provider]: (e.target as HTMLDetailsElement).open }))
+                  }}
+                >
                   <summary>
                     <span>{`${group.displayName} · ${String(group.models.length)} ${t('modelsSuffix')}`}</span>
                     <span className="dshVisionGroupSummaryRight">
