@@ -25,10 +25,11 @@ import {
 
 const VISION_DESCRIBE_URL = '/api/desktop/vision/describe'
 
-/** Quiet per-decision trace: invisible unless the user opens devtools with
- *  verbose logging, but enough to tell which branch handled an image send. */
+/** Per-decision trace, always visible in devtools: console.debug lands in
+ *  Chromium's Verbose level, which the console hides by default, so the
+ *  branch that handled an image send must log at the default level. */
 function debug(reason: string, detail?: string): void {
-  console.debug(`[harnessx-desktop] vision: ${reason}${detail === undefined ? '' : ` ${detail}`}`)
+  console.log(`[harnessx-desktop] vision: ${reason}${detail === undefined ? '' : ` ${detail}`}`)
 }
 
 /** Minimal wire faces the interceptor needs (structural, fixture-compatible). */
@@ -104,12 +105,16 @@ async function captionImagesIfNeeded(
   // Live storage read, not the in-process snapshot: a toggle flipped in
   // another window (or before this page loaded) applies on the next send.
   const config = readPersistedFallback()
+  debug(`fallback config: enabled=${String(config.enabled)} provider=${config.provider ?? '(none)'} model=${config.model ?? '(none)'}`)
   if (!config.enabled || config.provider === undefined || config.model === undefined) {
-    debug(`universal vision model not configured or disabled (enabled=${String(config.enabled)}); image sent as-is`)
+    debug('universal vision model not configured or disabled; image sent as-is')
     return undefined
   }
   const modelsResponse = await api.sessions.models({ sessionId })
-  if (!modelsResponse.result.ok) return undefined
+  if (!modelsResponse.result.ok) {
+    debug('sessions.models failed; image sent as-is:', modelsResponse.result.error.message)
+    return undefined
+  }
   const current = modelsResponse.result.value.current
   if (current.provider === config.provider && current.model === config.model) {
     debug('current model IS the universal vision model; image sent as-is')
@@ -129,6 +134,7 @@ async function captionImagesIfNeeded(
     debug(`model ${current.provider}/${current.model} declared image-capable; originals sent`)
     return undefined
   }
+  debug(`current model ${current.provider}/${current.model} cannot take images; asking ${config.provider}/${config.model} to describe`)
   const images = content.filter((part): part is ImagePart => part.type === 'image')
   try {
     const response = await fetch(VISION_DESCRIBE_URL, {
@@ -144,7 +150,7 @@ async function captionImagesIfNeeded(
     for (const caption of value.captions) {
       if (typeof caption !== 'string') throw new Error('caption bridge returned a non-string caption')
     }
-    return replaceImagesWithCaptions(content, value.captions)
+    return replaceImagesWithCaptions(content, value.captions, `${config.provider}/${config.model}`)
   } catch (cause) {
     // The caption bridge failed for a model that cannot read images. Sending
     // the raw image would only hand the model a sha256 marker it would chase
@@ -187,8 +193,10 @@ export function installVisionFallback(ctx: ClientContext): void {
             }
           }
         }
-      } catch {
-        // Fall through: the send proceeds exactly as the kernel issued it.
+      } catch (cause) {
+        // Fall through: the send proceeds exactly as the kernel issued it,
+        // but never silently — the cause names itself in the console.
+        debug('decision error; image sent as-is:', cause instanceof Error ? cause.message : String(cause))
       }
       return original(args[0], args[1])
     }

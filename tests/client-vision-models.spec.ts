@@ -256,7 +256,7 @@ describe('vision fallback send wrap', () => {
     expect(sent.content[0]).toBe(imageSend.content[0])
     expect(sent.content[1]).toEqual({
       type: 'text',
-      text: '\n\n[图片 1 识别结果 · 识图模型自动生成,当前模型无法读取原图,请直接依据以下内容回答,不要尝试读取图片文件]\n一个报错弹窗的截图',
+      text: '\n\n[图片 1 识别结果 · 由识图模型 nexscp/gpt-vision 自动生成,当前模型无法读取原图,请直接依据以下内容回答,不要尝试读取图片文件]\n一个报错弹窗的截图',
     })
   })
 

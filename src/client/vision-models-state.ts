@@ -156,11 +156,13 @@ export function hasImagePart(content: readonly PromptContentPart[]): boolean {
  * an `Image sha256:` marker plus a read-image tool, and text-only models
  * then chase the file instead of using the caption. With the image replaced
  * by its recognition, the model can only answer from the caption — which is
- * exactly the vision model's report to it.
+ * exactly the vision model's report to it. The producing vision model's name
+ * travels inside the label so every historic send stays attributable.
  */
 export function replaceImagesWithCaptions(
   content: readonly PromptContentPart[],
   captions: readonly string[],
+  visionModel: string,
 ): PromptContentPart[] {
   let imageIndex = 0
   return content.map((part): PromptContentPart => {
@@ -170,7 +172,7 @@ export function replaceImagesWithCaptions(
     imageIndex += 1
     return {
       type: 'text',
-      text: `\n\n[图片 ${String(ordinal)} 识别结果 · 识图模型自动生成,当前模型无法读取原图,请直接依据以下内容回答,不要尝试读取图片文件]\n${caption !== undefined && caption.length > 0 ? caption : '(图片识别未返回内容)'}`,
+      text: `\n\n[图片 ${String(ordinal)} 识别结果 · 由识图模型 ${visionModel} 自动生成,当前模型无法读取原图,请直接依据以下内容回答,不要尝试读取图片文件]\n${caption !== undefined && caption.length > 0 ? caption : '(图片识别未返回内容)'}`,
     }
   })
 }
