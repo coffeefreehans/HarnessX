@@ -51,8 +51,8 @@ export type VisionModelsKey =
   | 'universalOnlyOpenai'
 
 const zh: Record<VisionModelsKey, string> = {
-  nav: '多模态模型',
-  title: '多模态模型',
+  nav: '视觉模型',
+  title: '视觉模型',
   desc: '图片始终显示在对话框里并随消息发送。发图时自动检测当前模型是否真能看图:能则用其自身视觉作答;不能则自动由下方通用识图模型识别,识别结果交给该模型作答,会话模型始终不变。勾选「无多模态」可跳过检测强制走通用识图。',
   universal: '通用识图模型',
   universalDesc: '被标记为「无多模态」的模型收到图片时,由这个模型识别图片内容并把结果告诉当前模型',
@@ -62,8 +62,8 @@ const zh: Record<VisionModelsKey, string> = {
   loadFailed: '读取模型配置失败',
   retry: '重试',
   empty: '没有自定义模型接口,请先在「模型」设置中添加。',
-  enableAll: '全部标记无多模态',
-  disableAll: '全部清除标记',
+  enableAll: '全部强制',
+  disableAll: '取消强制',
   imageInput: '无多模态',
   notWritable: '设置为只读,无法修改',
   saveFailed: '保存失败',
@@ -72,8 +72,8 @@ const zh: Record<VisionModelsKey, string> = {
 }
 
 const en: Record<VisionModelsKey, string> = {
-  nav: 'Multimodal Models',
-  title: 'Multimodal Models',
+  nav: 'Vision Models',
+  title: 'Vision Models',
   desc: 'Images always show in the conversation and travel with the message. On each image send the model is checked automatically: models that truly see images answer from them, while blind models get their images described by the universal vision model below. Tick "no vision" to skip detection and always caption.',
   universal: 'Universal Vision Model',
   universalDesc: 'Describes images for models marked "no vision" and tells the current model what they contain',
@@ -83,8 +83,8 @@ const en: Record<VisionModelsKey, string> = {
   loadFailed: 'Failed to load model settings',
   retry: 'Retry',
   empty: 'No custom model endpoints. Add one in the Models settings first.',
-  enableAll: 'Mark all no-vision',
-  disableAll: 'Clear all marks',
+  enableAll: 'Force all',
+  disableAll: 'Unforce all',
   imageInput: 'No vision',
   notWritable: 'Settings are read-only',
   saveFailed: 'Save failed',
