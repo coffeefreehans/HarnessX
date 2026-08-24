@@ -2,14 +2,14 @@
  *
  * Wraps the shared client API's `sessions.prompt` method (the one call every
  * composer send lands on). When a prompt carries images and the session's
- * model does not admit them, the send leaves IMMEDIATELY with each image
- * replaced by a short pending note — the user's message appears at once and
- * the model starts thinking. Recognition runs in parallel through the
- * desktop caption bridge, and its result is delivered mid-turn as a steering
- * message (`mode: 'steer'`), so the recognition happens inside the thinking
- * phase instead of blocking the send. The ORIGINAL model stays selected and
- * answers from the recognition it was handed; the session's model is never
- * switched.
+ * model does not admit them, the send leaves VERBATIM — the user's bubble
+ * shows the real image and nothing about the send path changes. Recognition
+ * runs in parallel through the desktop caption bridge (with local downscaling
+ * so relay gateways don't reject large screenshots), and its result is
+ * delivered mid-turn as a steering message (`mode: 'steer'`), so the
+ * recognition happens inside the thinking phase instead of blocking the
+ * send. The ORIGINAL model stays selected and answers from the recognition
+ * it was handed; the session's model is never switched.
  */
 
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
@@ -19,12 +19,15 @@ import {
   failureSteerContent,
   getVisionFallbackStore,
   hasImagePart,
-  replaceImagesWithPendingNotes,
   walkPath,
   type PromptContentPart,
 } from './vision-models-state.ts'
 
 const VISION_DESCRIBE_URL = '/api/desktop/vision/describe'
+/** Long-edge cap for images sent to the caption bridge: relay gateways
+ *  reject multi-megabyte data URLs with HTTP 413, so every image is locally
+ *  downscaled and re-encoded before it leaves the app. */
+const CAPTION_MAX_EDGE = 1400
 
 /** Per-decision trace, always visible in devtools: console.debug lands in
  *  Chromium's Verbose level, which the console hides by default, so the
@@ -91,6 +94,41 @@ async function loadSupportMap(api: WireApi): Promise<Map<string, boolean>> {
 interface ImagePart { type: 'image'; mediaType: string; data: string; name?: string }
 
 /**
+ * Locally downscale and re-encode one image so the caption request fits
+ * through relay gateways (multi-megabyte data URLs die with HTTP 413) and
+ * uploads finish fast. Long edge is capped at CAPTION_MAX_EDGE and the result
+ * re-encoded as JPEG; any canvas failure returns the original untouched.
+ */
+async function toCaptionImage(part: ImagePart): Promise<ImagePart> {
+  try {
+    const bytes = Uint8Array.from(atob(part.data), ch => ch.charCodeAt(0))
+    const bitmap = await createImageBitmap(new Blob([bytes], { type: part.mediaType }))
+    try {
+      const scale = Math.min(1, CAPTION_MAX_EDGE / Math.max(bitmap.width, bitmap.height))
+      const width = Math.max(1, Math.round(bitmap.width * scale))
+      const height = Math.max(1, Math.round(bitmap.height * scale))
+      const canvas = new OffscreenCanvas(width, height)
+      const ctx = canvas.getContext('2d')
+      if (ctx === null) throw new Error('canvas 2d context unavailable')
+      ctx.drawImage(bitmap, 0, 0, width, height)
+      const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 })
+      const encoded = new Uint8Array(await blob.arrayBuffer())
+      let binary = ''
+      const chunk = 0x8000
+      for (let at = 0; at < encoded.length; at += chunk) {
+        binary += String.fromCharCode(...encoded.subarray(at, at + chunk))
+      }
+      return { type: 'image', mediaType: 'image/jpeg', data: btoa(binary), ...(part.name === undefined ? {} : { name: part.name }) }
+    } finally {
+      bitmap.close()
+    }
+  } catch (cause) {
+    debug('local image compression failed; sending original:', cause instanceof Error ? cause.message : String(cause))
+    return part
+  }
+}
+
+/**
  * Run recognition for an already-dispatched send and deliver the outcome as a
  * steering message into the thinking turn. Fire-and-forget: the send itself
  * has already left, so no latency here reaches the composer.
@@ -105,10 +143,11 @@ async function steerRecognition(
 ): Promise<void> {
   let captions: string[] | undefined
   try {
+    const compressed = await Promise.all(images.map(toCaptionImage))
     const response = await fetch(VISION_DESCRIBE_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ images, provider, model }),
+      body: JSON.stringify({ images: compressed, provider, model }),
       ...(signal instanceof AbortSignal ? { signal } : {}),
     })
     if (!response.ok) throw new Error(`caption bridge HTTP ${String(response.status)}`)
@@ -155,7 +194,6 @@ export function installVisionFallback(ctx: ClientContext): void {
     installed = true
     sessions.prompt = async (...args: unknown[]): Promise<unknown> => {
       let engaged: {
-        patched: Record<string, unknown>
         images: ImagePart[]
         provider: string
         model: string
@@ -164,9 +202,8 @@ export function installVisionFallback(ctx: ClientContext): void {
       try {
         // The kernel's Session class sends a flat { sessionId, mode, content,
         // clientTimeZone } request with an optional AbortSignal second
-        // argument. Only the outgoing content changes (images → pending
-        // notes); everything else (and the signal) forwards exactly as the
-        // kernel issued it.
+        // argument. The send itself always forwards verbatim; only a parallel
+        // recognition (steered in later) is added for text-only models.
         const request = args[0] as { sessionId?: unknown; mode?: unknown; content?: unknown } | undefined
         const content = request?.content
         if (
@@ -206,11 +243,9 @@ export function installVisionFallback(ctx: ClientContext): void {
                   debug(`model ${current.provider}/${current.model} declared image-capable; originals sent`)
                 } else {
                   debug(`current model ${current.provider}/${current.model} cannot take images; asking ${config.provider}/${config.model} to describe while the turn runs`)
-                  const images = (content as PromptContentPart[])
-                    .filter((part): part is ImagePart => part.type === 'image')
                   engaged = {
-                    patched: { ...(request as object), content: replaceImagesWithPendingNotes(content as PromptContentPart[]) },
-                    images,
+                    images: (content as PromptContentPart[])
+                      .filter((part): part is ImagePart => part.type === 'image'),
                     provider: config.provider,
                     model: config.model,
                     sessionId: request.sessionId,
@@ -226,7 +261,10 @@ export function installVisionFallback(ctx: ClientContext): void {
         debug('decision error; image sent as-is:', cause instanceof Error ? cause.message : String(cause))
       }
       if (engaged === undefined) return original(args[0], args[1])
-      const sendPromise = original(engaged.patched, args[1])
+      // The send leaves VERBATIM — the user's bubble shows the real image and
+      // the kernel behaves exactly as in a vanilla chat. Only the parallel
+      // recognition differs.
+      const sendPromise = original(args[0], args[1])
       // Recognition must not block the composer: dispatch it once the host
       // accepted the pending-note send, then steer the result mid-turn.
       void (async (): Promise<void> => {

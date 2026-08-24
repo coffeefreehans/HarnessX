@@ -230,25 +230,19 @@ describe('vision fallback send wrap', () => {
     expect(sessionsModels).not.toHaveBeenCalled()
   })
 
-  it('sends instantly with a pending note, then steers the recognition', async () => {
+  it('sends the message verbatim and steers the recognition mid-turn', async () => {
     getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
     fetchMock.mockResolvedValue({ ok: true, json: async () => ({ captions: ['一个报错弹窗的截图'] }) })
     await api.sessions.prompt(imageSend)
     await new Promise(resolve => { setTimeout(resolve, 0) })
-    // First original call: the user's message left immediately, the image
-    // replaced by a short pending note — no caption latency in the composer.
+    // The user's send left VERBATIM: same request object, image intact —
+    // the bubble shows the real picture and nothing blocks the composer.
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('/api/desktop/vision/describe')
     expect(JSON.parse(String(init.body))).toMatchObject({ provider: 'nexscp', model: 'gpt-vision' })
     const send = promptArgs[0] as unknown[]
-    const sent = send[0] as { sessionId: string; mode: string; content: PromptContentPart[] }
-    expect(sent.sessionId).toBe('s1')
-    expect(sent.mode).toBe('queue')
-    expect(sent.content).toHaveLength(2)
-    expect(sent.content[0]).toBe(imageSend.content[0])
-    expect(sent.content[1]!.type).toBe('text')
-    expect(String((sent.content[1] as { text: string }).text)).toContain('正在用通用识图模型识别')
+    expect(send[0]).toBe(imageSend)
     // Second original call: the recognition steered into the running turn.
     const steer = promptArgs[1] as unknown[] | undefined
     expect(steer).toBeDefined()
@@ -321,13 +315,10 @@ describe('vision fallback send wrap', () => {
     fetchMock.mockResolvedValue({ ok: false, json: async () => ({ error: 'Invalid token' }) })
     await api.sessions.prompt(imageSend)
     await new Promise(resolve => { setTimeout(resolve, 0) })
-    // The raw image must NOT go out: a text-only model would only chase the
-    // kernel's sha256 marker through read_image and answer nonsense. The
-    // failure note arrives as a steering message instead.
-    const send = promptArgs[0] as unknown[]
-    const sent = send[0] as { content: PromptContentPart[] }
-    expect(sent.content).toHaveLength(2)
-    expect(sent.content[1]!.type).toBe('text')
+    // The user's send left verbatim; the failure note arrives as a steering
+    // message so the model states the outage honestly instead of chasing
+    // kernel sha256 markers through read_image.
+    expect(promptArgs[0]![0]).toBe(imageSend)
     const steer = promptArgs[1] as unknown[] | undefined
     expect(steer).toBeDefined()
     const steerRequest = steer![0] as { mode: string; content: PromptContentPart[] }
@@ -344,19 +335,15 @@ describe('vision fallback send wrap', () => {
     expect(args[0]).toBe(imageSend)
   })
 
-  it('forwards the abort signal with the patched request', async () => {
+  it('forwards the abort signal with the verbatim send', async () => {
     getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
     fetchMock.mockResolvedValue({ ok: true, json: async () => ({ captions: ['一个报错弹窗的截图'] }) })
     const signal = new AbortController().signal
     await api.sessions.prompt(imageSend, signal)
     await new Promise(resolve => { setTimeout(resolve, 0) })
     const args = promptArgs[0] as unknown[]
+    expect(args[0]).toBe(imageSend)
     expect(args[1]).toBe(signal)
-    const sent = args[0] as { sessionId: string; mode: string; content: PromptContentPart[] }
-    expect(sent.sessionId).toBe('s1')
-    expect(sent.mode).toBe('queue')
-    expect(sent.content).toHaveLength(2)
-    expect(sent.content[1]!.type).toBe('text')
   })
 
   it('re-reads the store on every send, so hydrated settings apply at once', async () => {

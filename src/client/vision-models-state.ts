@@ -150,30 +150,6 @@ export function hasImagePart(content: readonly PromptContentPart[]): boolean {
   return content.some(part => part.type === 'image')
 }
 
-/** Count image parts (the bridge describes each one). */
-export function countImageParts(content: readonly PromptContentPart[]): number {
-  return content.filter(part => part.type === 'image').length
-}
-
-/**
- * Replace each image part with a short pending note so the send leaves the
- * composer immediately — the user's message appears at once and the session
- * model starts thinking while recognition runs in parallel. The recognition
- * itself arrives afterwards as a steering message.
- */
-export function replaceImagesWithPendingNotes(content: readonly PromptContentPart[]): PromptContentPart[] {
-  let imageIndex = 0
-  return content.map((part): PromptContentPart => {
-    if (part.type !== 'image') return part
-    const ordinal = imageIndex + 1
-    imageIndex += 1
-    return {
-      type: 'text',
-      text: `\n\n[图片 ${String(ordinal)} 已收到,正在用通用识图模型识别图片内容,识别结果稍后单独送达;在此之前不要声称看不到图片]`,
-    }
-  })
-}
-
 /**
  * Build the steering message that delivers recognitions into the thinking
  * turn: one labelled text part per recognized image. The producing vision
