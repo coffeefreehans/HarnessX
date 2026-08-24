@@ -268,6 +268,7 @@
     "node-addon-require-builtin": "^0.1.4",
     "pnpm": "11.7.0",
     "react": "18.3.1",
+    "react-dom": "18.3.1",
     "yaml": "^2.9.0"
   },
   "peerDependencies": {
@@ -278,6 +279,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.20.0",
     "@types/react": "^18",
+    "@types/react-dom": "^18",
     "electron": "43.4.0",
     "electron-builder": "26.15.3",
     "sharp": "0.35.3",

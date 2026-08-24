@@ -7,7 +7,8 @@
  * desktop-owned localStorage).
  */
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -38,6 +39,7 @@ export type VisionModelsKey =
   | 'universalDesc'
   | 'universalPlaceholder'
   | 'searchPlaceholder'
+  | 'noMatch'
   | 'loading'
   | 'loadFailed'
   | 'retry'
@@ -58,6 +60,7 @@ const zh: Record<VisionModelsKey, string> = {
   universalDesc: '被标记为「强制」的模型收到图片时,由这个模型识别图片内容并把结果告诉当前模型',
   universalPlaceholder: '选择识图模型',
   searchPlaceholder: '搜索模型…',
+  noMatch: '没有匹配的模型',
   loading: '加载中…',
   loadFailed: '读取模型配置失败',
   retry: '重试',
@@ -79,6 +82,7 @@ const en: Record<VisionModelsKey, string> = {
   universalDesc: 'Describes images for models marked "Force" and tells the current model what they contain',
   universalPlaceholder: 'Choose a caption model',
   searchPlaceholder: 'Search models…',
+  noMatch: 'No matching models',
   loading: 'Loading…',
   loadFailed: 'Failed to load model settings',
   retry: 'Retry',
@@ -104,7 +108,19 @@ const VISION_CSS = `
 .dshVisionCardLabel { font-size: 13px; font-weight: 500; color: var(--dsw-alias-label-primary); }
 .dshVisionCardDesc { font-size: 11px; color: var(--dsw-alias-label-tertiary); }
 .dshVisionCardRight { display: flex; align-items: center; gap: 10px; }
-.dshVisionSelect { padding: 4px 8px; font-size: 12px; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-module-platform, transparent); color: var(--dsw-alias-label-primary); max-width: 220px; }
+.dshVisionPicker { position: relative; display: flex; flex: 1 1 auto; min-width: 170px; max-width: 220px; }
+.dshVisionPickerButton { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; padding: 4px 8px; font-size: 12px; font-family: inherit; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-module-platform, rgba(0,0,0,0.03)); color: var(--dsw-alias-label-primary); cursor: pointer; text-align: left; }
+.dshVisionPickerButton:disabled { opacity: 0.5; cursor: not-allowed; }
+.dshVisionPickerValue { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dshVisionPickerChevron { flex: none; font-size: 10px; color: var(--dsw-alias-label-tertiary); transition: transform 0.15s ease; }
+.dshVisionPickerChevronOpen { transform: rotate(180deg); }
+.dshVisionPickerPanel { position: fixed; z-index: 1200; display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 8px; border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-module-platform, #fff)); box-shadow: 0 8px 24px rgba(0,0,0,0.16); }
+.dshVisionPickerSearch { padding: 6px 8px; font-size: 12px; font-family: inherit; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l2); background: transparent; color: var(--dsw-alias-label-primary); width: 100%; box-sizing: border-box; }
+.dshVisionPickerList { display: flex; flex-direction: column; max-height: 300px; overflow-y: auto; }
+.dshVisionPickerOption { display: block; width: 100%; padding: 5px 8px; font-size: 12px; font-family: inherit; text-align: left; border: none; border-radius: 4px; background: transparent; color: var(--dsw-alias-label-primary); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dshVisionPickerOption:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.dshVisionPickerOptionSelected { color: var(--dsw-alias-accent, #2563eb); font-weight: 600; }
+.dshVisionPickerEmpty { padding: 8px; font-size: 12px; color: var(--dsw-alias-label-tertiary); }
 .dshVisionSearch { padding: 6px 10px; font-size: 12px; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l2); background: transparent; color: var(--dshVisionSearch-color, var(--dsw-alias-label-primary)); width: 200px; }
 .dshVisionGroup { border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; overflow: hidden; }
 .dshVisionGroup > summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; cursor: pointer; background: var(--dsw-alias-bg-module-platform, rgba(0,0,0,0.03)); font-size: 13px; font-weight: 500; color: var(--dsw-alias-label-primary); list-style: none; }
@@ -171,6 +187,179 @@ async function loadVisionState(api: VisionWireApi): Promise<VisionModelState> {
     groups: extractVisionGroups(namespace.value, providersResponse.result.value.providers),
   }
 }
+
+interface PickerEntry {
+  value: string
+  label: string
+}
+
+/** Anchor geometry for the floating panel, captured when it opens. */
+interface PickerRect {
+  left: number
+  top: number
+  width: number
+}
+
+/** In-page replacement for the native `<select>` picker.
+ *
+ * The native control opens its option list as an OS popup window. That path
+ * fails silently on some Windows setups — launches without foreground
+ * activation rights (autostart, tray) and DPI-scaled displays close or
+ * misplace the popup, which reads as "the dropdown cannot be clicked". This
+ * renderer draws every option as ordinary in-page DOM through a portal, so
+ * opening and picking are plain hit-tested clicks like any other button.
+ */
+function UniversalModelPicker(props: {
+  groups: readonly VisionProviderGroup[]
+  value: string
+  disabled: boolean
+  placeholder: string
+  searchPlaceholder: string
+  noMatch: string
+  onChange: (value: string) => void
+}): ReactNode {
+  const { groups, value, disabled, placeholder, searchPlaceholder, noMatch, onChange } = props
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [rect, setRect] = useState<PickerRect | undefined>(undefined)
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const searchRef = useRef<HTMLInputElement | null>(null)
+
+  const entries = useMemo<PickerEntry[]>(() => groups.flatMap(group => group.models.map(model => ({
+    value: `${group.provider}\u0000${model.id}`,
+    label: `${group.displayName} · ${model.id}`,
+  }))), [groups])
+  const current = entries.find(entry => entry.value === value)
+
+  const close = useCallback((): void => { setOpen(false) }, [])
+
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target as Node | null
+      if (target === null) return
+      if ((rootRef.current?.contains(target) ?? false) || (panelRef.current?.contains(target) ?? false)) return
+      setOpen(false)
+    }
+    // The panel anchors to captured viewport coordinates; scrolling under it
+    // would leave it detached, so any scroll closes it instead.
+    const onScroll = (): void => { setOpen(false) }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      event.stopPropagation()
+      setOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    document.addEventListener('scroll', onScroll, true)
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true)
+      document.removeEventListener('scroll', onScroll, true)
+      document.removeEventListener('keydown', onKeyDown, true)
+    }
+  }, [open])
+
+  if (disabled) {
+    return (
+      <div className="dshVisionPicker">
+        <button type="button" className="dshVisionPickerButton" aria-label={placeholder} disabled>
+          <span className="dshVisionPickerValue">{current?.label ?? placeholder}</span>
+          <span className="dshVisionPickerChevron" aria-hidden="true">▾</span>
+        </button>
+      </div>
+    )
+  }
+
+  const filtered = query.trim() === ''
+    ? entries
+    : entries.filter(entry => entry.label.toLowerCase().includes(query.trim().toLowerCase()))
+
+  const openPanel = (): void => {
+    const box = rootRef.current?.getBoundingClientRect()
+    if (box === undefined) return
+    const width = Math.max(Math.round(box.width), 280)
+    const left = Math.max(8, Math.round(box.right) - width)
+    const top = Math.min(Math.round(box.bottom) + 4, Math.max(8, window.innerHeight - 340))
+    setRect({ left, top, width })
+    setQuery('')
+    setOpen(true)
+  }
+
+  const pick = (next: string): void => {
+    onChange(next)
+    setOpen(false)
+  }
+
+  const moveFocus = (event: ReactKeyboardEvent): void => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+    const panel = panelRef.current
+    if (panel === null) return
+    const options = Array.from(panel.querySelectorAll<HTMLButtonElement>('.dshVisionPickerOption'))
+    if (options.length === 0) return
+    event.preventDefault()
+    const at = options.indexOf(document.activeElement as HTMLButtonElement)
+    const nextAt = event.key === 'ArrowDown'
+      ? Math.min(at + 1, options.length - 1)
+      : Math.max(at - 1, 0)
+    const next = options[nextAt]
+    if (next !== undefined) next.focus()
+  }
+
+  return (
+    <div className="dshVisionPicker" ref={rootRef}>
+      <button
+        type="button"
+        className="dshVisionPickerButton"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => { open ? close() : openPanel() }}
+      >
+        <span className="dshVisionPickerValue">{current?.label ?? placeholder}</span>
+        <span className={open ? 'dshVisionPickerChevron dshVisionPickerChevronOpen' : 'dshVisionPickerChevron'} aria-hidden="true">▾</span>
+      </button>
+      {createPortal(
+        open && rect !== undefined ? (
+          <div
+            className="dshVisionPickerPanel"
+            ref={panelRef}
+            style={{ left: rect.left, top: rect.top, width: rect.width }}
+            onKeyDown={moveFocus}
+          >
+            <input
+              ref={searchRef}
+              type="search"
+              className="dshVisionPickerSearch"
+              placeholder={searchPlaceholder}
+              value={query}
+              autoFocus
+              onChange={e => { setQuery(e.target.value) }}
+            />
+            <div className="dshVisionPickerList">
+              {filtered.length === 0
+                ? <div className="dshVisionPickerEmpty">{noMatch}</div>
+                : filtered.map(entry => (
+                  <button
+                    type="button"
+                    key={entry.value}
+                    className={entry.value === value
+                      ? 'dshVisionPickerOption dshVisionPickerOptionSelected'
+                      : 'dshVisionPickerOption'}
+                    title={entry.label}
+                    onClick={() => { pick(entry.value) }}
+                  >
+                    {entry.label}
+                  </button>
+                ))}
+            </div>
+          </div>
+        ) : null,
+        document.body,
+      )}
+    </div>
+  )
+}
+
 
 export function VisionModelsSection(
   _props: PropsRuntime<'settings.section'> & PropsLocale<'settings.visionModels'> & { api: VisionWireApi },
@@ -270,19 +459,15 @@ export function VisionModelsSection(
           <div className="dshVisionCardDesc">{t('universalDesc')}</div>
         </div>
         <div className="dshVisionCardRight">
-          <select
-            className="dshVisionSelect"
-            aria-label={t('universal')}
+          <UniversalModelPicker
+            groups={captionGroups}
             value={universalValue}
             disabled={state.groups.length > 0 && !hasCaptionEndpoint}
-            onChange={e => { onUniversalChange(e.target.value) }}
-          >
-            <option value="">{t('universalPlaceholder')}</option>
-            {captionGroups.map(group => group.models.map(model => {
-              const value = `${group.provider}\u0000${model.id}`
-              return <option key={value} value={value}>{`${group.displayName} · ${model.id}`}</option>
-            }))}
-          </select>
+            placeholder={t('universalPlaceholder')}
+            searchPlaceholder={t('searchPlaceholder')}
+            noMatch={t('noMatch')}
+            onChange={onUniversalChange}
+          />
           <input
             type="checkbox"
             className="dshVisionToggle"
