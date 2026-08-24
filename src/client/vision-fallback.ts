@@ -17,7 +17,7 @@ import {
   replaceImagesWithCaptions,
   replaceImagesWithFailureNotes,
   extractVisionGroups,
-  readPersistedFallback,
+  getVisionFallbackStore,
   hasImagePart,
   walkPath,
   type PromptContentPart,
@@ -102,9 +102,11 @@ async function captionImagesIfNeeded(
   sessionId: string,
   content: readonly PromptContentPart[],
 ): Promise<PromptContentPart[] | undefined> {
-  // Live storage read, not the in-process snapshot: a toggle flipped in
-  // another window (or before this page loaded) applies on the next send.
-  const config = readPersistedFallback()
+  // The in-memory store is the source of truth, NOT localStorage: the kernel
+  // web server port changes every launch, so this origin's localStorage is
+  // wiped on restart while the host-side prefs file hydrates the store at
+  // boot. Reading storage directly would silently see "disabled" forever.
+  const config = getVisionFallbackStore().getSnapshot()
   debug(`fallback config: enabled=${String(config.enabled)} provider=${config.provider ?? '(none)'} model=${config.model ?? '(none)'}`)
   if (!config.enabled || config.provider === undefined || config.model === undefined) {
     debug('universal vision model not configured or disabled; image sent as-is')

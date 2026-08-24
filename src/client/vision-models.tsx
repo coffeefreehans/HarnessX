@@ -262,10 +262,12 @@ export function VisionModelsSection(
   const onUniversalChange = (value: string): void => {
     if (value === '') {
       fallbackStore.set({ ...fallback, provider: undefined, model: undefined })
+      schedulePersistDesktopPrefs()
       return
     }
     const [provider, model] = value.split('\u0000')
     fallbackStore.set({ ...fallback, provider, model })
+    schedulePersistDesktopPrefs()
   }
 
   // The caption bridge only speaks openai-completions, so the universal model

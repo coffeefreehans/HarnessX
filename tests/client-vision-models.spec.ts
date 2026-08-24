@@ -8,7 +8,6 @@ import {
   isCaptionCompatible,
   walkPath,
   DEFAULT_VISION_FALLBACK_SETTINGS,
-  VISION_FALLBACK_STORAGE_KEY,
   type PromptContentPart,
   type ProviderRouteRow,
 } from '../src/client/vision-models-state.ts'
@@ -199,15 +198,6 @@ describe('vision fallback send wrap', () => {
 
   beforeEach(() => {
     promptArgs.length = 0
-    const backing = new Map<string, string>()
-    Object.defineProperty(globalThis, 'localStorage', {
-      configurable: true,
-      value: {
-        getItem: (key: string) => backing.get(key) ?? null,
-        setItem: (key: string, value: string) => { backing.set(key, value) },
-        removeItem: (key: string) => { backing.delete(key) },
-      },
-    })
     sessionsModels.mockReset()
     sessionsModels.mockResolvedValue({
       result: { ok: true as const, value: { current: { provider: 'nexscp', model: 'stealth/ox-alpha' } } },
@@ -354,23 +344,14 @@ describe('vision fallback send wrap', () => {
     expect(sent.content[1]!.type).toBe('text')
   })
 
-  it('honors a disable written straight to storage by another window', async () => {
-    getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
-    // Simulate a second renderer flipping the toggle off: storage is updated
-    // while this page's in-memory store still says enabled.
-    localStorage.setItem(VISION_FALLBACK_STORAGE_KEY, JSON.stringify({ enabled: false }))
+  it('re-reads the store on every send, so hydrated settings apply at once', async () => {
+    // Boot order in the real app: the wrapper installs first, then
+    // hydrateDesktopPrefs() fills the store from the host prefs file. A send
+    // before hydration must stay untouched; the next send must see it.
     await api.sessions.prompt(imageSend)
     expect(fetchMock).not.toHaveBeenCalled()
-    const args = promptArgs.at(-1) as unknown[]
-    expect(args[0]).toBe(imageSend)
-  })
-
-  it('picks up an enable written straight to storage by another window', async () => {
-    getVisionFallbackStore().set({ ...DEFAULT_VISION_FALLBACK_SETTINGS })
-    localStorage.setItem(
-      VISION_FALLBACK_STORAGE_KEY,
-      JSON.stringify({ enabled: true, provider: 'nexscp', model: 'gpt-vision' }),
-    )
+    getVisionFallbackStore().set({ enabled: true, provider: 'nexscp', model: 'gpt-vision' })
+    fetchMock.mockResolvedValue({ ok: true, json: async () => ({ captions: ['识别内容'] }) })
     await api.sessions.prompt(imageSend)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
