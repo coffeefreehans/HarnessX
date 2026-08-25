@@ -116,7 +116,7 @@ const VISION_CSS = `
 .dshVisionPickerChevronOpen { transform: rotate(180deg); }
 .dshVisionPickerPanel { position: fixed; z-index: 1200; display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 8px; border: 1px solid var(--dsw-alias-border-l2); background: var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-module-platform, #fff)); box-shadow: 0 8px 24px rgba(0,0,0,0.16); }
 .dshVisionPickerSearch { padding: 6px 8px; font-size: 12px; font-family: inherit; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l2); background: transparent; color: var(--dsw-alias-label-primary); width: 100%; box-sizing: border-box; }
-.dshVisionPickerList { display: flex; flex-direction: column; max-height: 300px; overflow-y: auto; }
+.dshVisionPickerList { max-height: 300px; overflow-y: auto; }
 .dshVisionPickerOption { display: block; width: 100%; padding: 5px 8px; font-size: 12px; font-family: inherit; text-align: left; border: none; border-radius: 4px; background: transparent; color: var(--dsw-alias-label-primary); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dshVisionPickerOption:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .dshVisionPickerOptionSelected { color: var(--dsw-alias-accent, #2563eb); font-weight: 600; }

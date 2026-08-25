@@ -1,4 +1,8 @@
+import { createRequire } from 'node:module'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const require = createRequire(import.meta.url)
+const productVersion = (require('../package.json') as { version: string }).version
 import type { DesktopShellSpec } from '../src/runtime.ts'
 import type { UpdateReleaseInfo } from '../src/update-checker.ts'
 
@@ -500,7 +504,7 @@ describe('Electron compatibility runtime', () => {
         pnpmBinPath: expect.stringMatching(/[\\/]node_modules[\\/]pnpm[\\/]bin[\\/]pnpm\.mjs$/u),
         electronVersion: '43.4.0',
         profileName: 'desktop',
-        productVersion: '0.1.6',
+        productVersion,
         profileDir: '/tmp/dsh-home/profiles/desktop',
         homeDir: '/tmp/dsh-home',
         stateDir: expect.stringMatching(/^[\\/]tmp[\\/]dsh-desktop-user-data[\\/]cli[\\/][a-f0-9]{64}$/u),
@@ -567,7 +571,7 @@ describe('Electron compatibility runtime', () => {
     expect(runtime.updates).toMatchObject({
       isPackaged: false,
       canDownload: false,
-      currentVersion: '0.1.6',
+      currentVersion: productVersion,
       statePath: expect.stringMatching(/[\\/]tmp[\\/]dsh-desktop-user-data[\\/]updates[\\/]state\.json$/u),
     })
     electron.app.isPackaged = true
