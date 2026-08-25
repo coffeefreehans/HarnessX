@@ -242,9 +242,14 @@ function UniversalModelPicker(props: {
       if ((rootRef.current?.contains(target) ?? false) || (panelRef.current?.contains(target) ?? false)) return
       setOpen(false)
     }
-    // The panel anchors to captured viewport coordinates; scrolling under it
-    // would leave it detached, so any scroll closes it instead.
-    const onScroll = (): void => { setOpen(false) }
+    // The panel anchors to captured viewport coordinates; scrolling elsewhere
+    // in the page would leave it detached, so that closes it. Scrolls from the
+    // panel's own option list (the wheel over it) must keep it open.
+    const onScroll = (event: Event): void => {
+      const target = event.target as Node | null
+      if (target !== null && ((panelRef.current?.contains(target) ?? false) || (rootRef.current?.contains(target) ?? false))) return
+      setOpen(false)
+    }
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return
       event.stopPropagation()
