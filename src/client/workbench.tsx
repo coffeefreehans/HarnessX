@@ -68,6 +68,7 @@ interface WorkbenchStrings {
   discard: string
   discardAll: string
   stageAll: string
+  unstageAll: string
   confirmDiscard(count: number): string
   stage: string
   unstage: string
@@ -129,6 +130,7 @@ const STRINGS_ZH: WorkbenchStrings = {
   discard: '放弃',
   discardAll: '全部放弃',
   stageAll: '全部暂存',
+  unstageAll: '全部取消暂存',
   confirmDiscard: count => `确定放弃 ${String(count)} 个文件的未提交更改吗？此操作不可撤销。`,
   stage: '暂存',
   unstage: '取消暂存',
@@ -190,6 +192,7 @@ const STRINGS_EN: WorkbenchStrings = {
   discard: 'Discard',
   discardAll: 'Discard all',
   stageAll: 'Stage all',
+  unstageAll: 'Unstage all',
   confirmDiscard: count => `Discard uncommitted changes in ${String(count)} file(s)? This cannot be undone.`,
   stage: 'Stage',
   unstage: 'Unstage',
@@ -1588,7 +1591,14 @@ function GitPanel(props: { state: WorkbenchState }): ReactNode {
       {diff !== undefined && diff.files > 0 && (
         <div className="hxpWbDiffLine">{t.diffSummary(diff.files, diff.additions, diff.deletions)}</div>
       )}
-      <SectionTitle label={t.gitStaged} count={staged.length} />
+      <SectionTitle label={t.gitStaged} count={staged.length}>
+        {staged.length > 0 && (
+          <button type="button" className="hxpWbLinkAction" disabled={busy}
+            onClick={() => { void mutate('unstage', staged.map(entry => entry.path)) }}>
+            {t.unstageAll}
+          </button>
+        )}
+      </SectionTitle>
       <div className="hxpWbFileList">
         {staged.map(entry => (
           <GitRow key={`s-${entry.path}`} entry={entry} action="unstage" actionLabel={t.unstage}
