@@ -225,3 +225,99 @@ export function readWorkbenchPrefs(): {
     ...(snapshot.browserHome !== undefined ? { browserHome: snapshot.browserHome } : {}),
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Auxiliary chat history folding                                      */
+/* ------------------------------------------------------------------ */
+
+/** One folded auxiliary-chat bubble. */
+export interface AuxMessage {
+  id: string
+  role: 'user' | 'assistant'
+  text: string
+}
+
+/** Auxiliary-conversation view state backed by one real upstream session. */
+export interface AuxConversation {
+  sessionId: string
+  /** Stable per-page ordinal shown in the tab title. */
+  index: number
+  messages: AuxMessage[]
+  /** Text accepted by the host but not yet echoed back by history. */
+  pendingText: string | undefined
+  /** In-flight assistant partial folded from trailing chunk events. */
+  streamingText: string | undefined
+  /** A user message still waits for its turn to finish (or fail). */
+  awaitingReply: boolean
+  error: string | undefined
+}
+
+/**
+ * Extract the visible text out of a content-block array; reasoning and tool
+ * blocks never render as chat text.
+ * @param content - raw ContentBlock[] off the wire.
+ * @returns the concatenated text.
+ */
+export function auxBlockText(content: unknown): string {
+  if (!Array.isArray(content)) return ''
+  let text = ''
+  for (const block of content) {
+    if (typeof block === 'object' && block !== null && (block as { type?: unknown }).type === 'text') {
+      text += String((block as { text?: unknown }).text ?? '')
+    }
+  }
+  return text
+}
+
+/**
+ * Fold one session-history tail page into chat bubbles. Pages carry every
+ * finalized message plus their raw chunk events; only chunks trailing the last
+ * finalized assistant message form the in-flight partial of a running turn.
+ * A user message keeps the busy flag up until its whole turn closes
+ * (`turn/end`), so tool-running steps stay visibly active.
+ * @param events - raw SessionEvent records from `sessions.history`.
+ * @returns bubbles, the streaming partial, and the awaiting-reply flag.
+ */
+export function foldAuxHistory(events: ReadonlyArray<Record<string, unknown>>): {
+  messages: AuxMessage[]
+  streamingText: string | undefined
+  awaitingReply: boolean
+} {
+  const messages: AuxMessage[] = []
+  let streaming = ''
+  let awaiting = false
+  for (const event of events) {
+    if (typeof event !== 'object' || event === null) continue
+    const record = event as { type?: unknown; seq?: unknown; data?: unknown }
+    const data = typeof record.data === 'object' && record.data !== null
+      ? record.data as Record<string, unknown>
+      : undefined
+    if (record.type === 'user/message' && data !== undefined) {
+      const text = auxBlockText(data.content)
+      if (text.length > 0) messages.push({ id: String(data.id ?? record.seq), role: 'user', text })
+      awaiting = true
+    } else if (record.type === 'assistant/message' && data !== undefined) {
+      const message = typeof data.message === 'object' && data.message !== null
+        ? data.message as Record<string, unknown>
+        : undefined
+      // Steps that only issued tool calls carry no visible text; skip them.
+      const text = message === undefined ? '' : auxBlockText(message.content)
+      if (text.length > 0) messages.push({ id: String(message?.id ?? record.seq), role: 'assistant', text })
+      // The turn may keep running (tool rounds); only turn/end closes it.
+      streaming = ''
+    } else if (record.type === 'assistant/chunk' && data !== undefined) {
+      const chunk = typeof data.chunk === 'object' && data.chunk !== null
+        ? data.chunk as Record<string, unknown>
+        : undefined
+      if (chunk?.type === 'text-delta') streaming += String(chunk.text ?? '')
+    } else if (record.type === 'turn/end') {
+      // Closes normal, rejected, aborted, and empty turns alike.
+      awaiting = false
+    }
+  }
+  return {
+    messages,
+    streamingText: streaming.length > 0 ? streaming : undefined,
+    awaitingReply: awaiting,
+  }
+}

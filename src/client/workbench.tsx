@@ -1,8 +1,10 @@
 /** Desktop workbench dock: right sidebar with rail icons, browser-style tabs, and panels.
  *
  * Desktop-owned advanced-shell presentation composed beside the unchanged
- * product surfaces. Panels reach the host exclusively through the authorized
- * `/api/desktop/workbench` routes; no kernel slot or service is replaced.
+ * product surfaces. File/git/terminal panels reach the host exclusively
+ * through the authorized `/api/desktop/workbench` routes, and the auxiliary
+ * chat drives real sessions through the shared connection API client; no
+ * kernel slot or service is replaced.
  */
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
@@ -13,16 +15,12 @@ import {
   WORKBENCH_WIDTH_MAX,
   WORKBENCH_WIDTH_MIN,
   WORKBENCH_PANEL_IDS,
+  foldAuxHistory,
+  type AuxConversation,
   type WorkbenchPanelId,
   type WorkbenchSnapshot,
   type WorkbenchState,
 } from './workbench-state.ts'
-
-/**
- * True inside an embedded assistant-chat webview (loaded with ?hxpEmbed=1);
- * the nested page must not render its own dock or caption toggle.
- */
-const WORKBENCH_EMBEDDED = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('hxpEmbed')
 
 /* ------------------------------------------------------------------ */
 /* Localized strings                                                   */
@@ -80,6 +78,12 @@ interface WorkbenchStrings {
   browserForward: string
   browserReload: string
   dragResize: string
+  auxNew: string
+  auxSend: string
+  auxPlaceholder: string
+  auxEmpty: string
+  auxThinking: string
+  auxUnavailable: string
 }
 
 const STRINGS_ZH: WorkbenchStrings = {
@@ -134,6 +138,12 @@ const STRINGS_ZH: WorkbenchStrings = {
   browserForward: '前进',
   browserReload: '刷新页面',
   dragResize: '拖动调整大小',
+  auxNew: '新建辅助对话',
+  auxSend: '发送',
+  auxPlaceholder: '输入消息，回车发送，Shift+Enter 换行…',
+  auxEmpty: '点击 + 新建一个辅助对话。',
+  auxThinking: '思考中…',
+  auxUnavailable: '会话服务尚未就绪，请稍后再试。',
 }
 
 const STRINGS_EN: WorkbenchStrings = {
@@ -188,6 +198,12 @@ const STRINGS_EN: WorkbenchStrings = {
   browserForward: 'Forward',
   browserReload: 'Reload',
   dragResize: 'Drag to resize',
+  auxNew: 'New auxiliary chat',
+  auxSend: 'Send',
+  auxPlaceholder: 'Type a message; Enter sends, Shift+Enter adds a line…',
+  auxEmpty: 'Click + to start an auxiliary chat.',
+  auxThinking: 'Thinking…',
+  auxUnavailable: 'The session service is not ready yet.',
 }
 
 let strings: WorkbenchStrings | undefined
@@ -302,6 +318,19 @@ const ArrowLeftIcon = (
 const ArrowRightIcon = (
   <Icon>
     <path d="M3 8h10M9 4l4 4-4 4" />
+  </Icon>
+)
+
+const PlusIcon = (
+  <Icon>
+    <path d="M8 3.2v9.6M3.2 8h9.6" />
+  </Icon>
+)
+
+const SendIcon = (
+  <Icon>
+    <path d="M14 2 3 6.5l4.5 2L9.5 13z" />
+    <path d="M14 2 7.5 8.5" />
   </Icon>
 )
 
@@ -538,7 +567,22 @@ const WORKBENCH_STYLES = `
 @keyframes hxpWbLoadingSlide { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
 .hxpWbBrowserError { flex: none; margin: 4px 6px; padding: 5px 8px; border-radius: 6px; background: rgba(204,75,66,.08); color: #cc4b42; font-size: 11.5px; word-break: break-all; }
 .hxpWbWebView { flex: 1 1 auto; min-height: 0; width: 100%; border: none; background: #fff; }
-.hxpWbChatView { flex: 1 1 auto; min-height: 0; width: 100%; border: none; background: #fff; }
+.hxpAuxAdd { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 24px; height: 24px; margin-left: 2px; padding: 0; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-tertiary, #888); cursor: pointer; }
+.hxpAuxAdd:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.05)); color: var(--dsw-alias-label-primary, #222); }
+.hxpAuxAdd:disabled { opacity: .4; cursor: default; }
+.hxpAuxEmpty { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 16px; color: var(--dsw-alias-label-tertiary, #999); font-size: 12px; text-align: center; }
+.hxpAuxMessages { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 10px 10px 6px; display: flex; flex-direction: column; gap: 8px; }
+.hxpAuxMsg { max-width: 88%; box-sizing: border-box; padding: 6px 10px; border-radius: 10px; white-space: pre-wrap; word-break: break-word; line-height: 1.55; font-size: 12.5px; }
+.hxpAuxMsg[data-role="user"] { align-self: flex-end; border-bottom-right-radius: 4px; background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.07)); color: var(--dsw-alias-label-primary, #222); }
+.hxpAuxMsg[data-role="assistant"] { align-self: flex-start; border-bottom-left-radius: 4px; border: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.08)); color: var(--dsw-alias-label-primary, #222); }
+.hxpAuxThinking { align-self: flex-start; padding: 0 2px; color: var(--dsw-alias-label-tertiary, #999); font-size: 11px; animation: hxpAuxPulse 1.2s ease-in-out infinite; }
+@keyframes hxpAuxPulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+.hxpAuxForm { flex: none; display: flex; align-items: flex-end; gap: 6px; padding: 6px 8px 8px; border-top: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.06)); }
+.hxpAuxInput { flex: 1 1 auto; resize: none; height: 34px; padding: 7px 9px; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1)); border-radius: 8px; background: transparent; color: var(--dsw-alias-label-primary, #222); font-family: inherit; font-size: 12.5px; line-height: 1.4; outline: none; overflow-y: auto; }
+.hxpAuxInput:focus { border-color: var(--dsw-alias-label-tertiary, #999); }
+.hxpAuxSend { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: none; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.08)); color: var(--dsw-alias-label-primary, #222); cursor: pointer; }
+.hxpAuxSend:hover:not(:disabled) { filter: brightness(.96); }
+.hxpAuxSend:disabled { opacity: .35; cursor: default; }
 `
 
 /** Install the workbench stylesheet once per mount. @returns the style disposer. */
@@ -592,7 +636,6 @@ function pathSegments(path: string): Array<{ label: string; path: string }> {
  */
 /** Square caption-bar button that anchors the dock; the sole entry point while collapsed. */
 export function WorkbenchToggleButton(props: { state: WorkbenchState }): ReactNode {
-  if (WORKBENCH_EMBEDDED) return null
   const state = props.state
   const t = useStrings()
   const subscribe = useCallback((listener: () => void) => state.subscribe(listener), [state])
@@ -615,7 +658,6 @@ export function WorkbenchToggleButton(props: { state: WorkbenchState }): ReactNo
 }
 
 export function WorkbenchDock(props: { state: WorkbenchState }): ReactNode {
-  if (WORKBENCH_EMBEDDED) return null
   const state = props.state
   const t = useStrings()
   const subscribeLayout = useCallback((listener: () => void) => state.subscribe(listener), [state])
@@ -742,7 +784,7 @@ function renderPanel(active: WorkbenchPanelId, browserHome: string | undefined, 
   if (active === 'explorer') return <ExplorerPanel state={state} />
   if (active === 'terminal') return <TerminalPanel state={state} />
   if (active === 'git') return <GitPanel state={state} />
-  if (active === 'chat') return <ChatPanel />
+  if (active === 'chat') return <AuxChatPanel />
   return <BrowserPanel home={browserHome} />
 }
 
@@ -1602,31 +1644,306 @@ function BrowserPanel(props: { home: string | undefined }): ReactNode {
 }
 
 /* ------------------------------------------------------------------ */
-/* Assistant chat panel                                                */
+/* Auxiliary chat panel                                                */
 /* ------------------------------------------------------------------ */
 
+/** Wire face the auxiliary chat needs from the shared connection API client. */
+export interface WorkbenchWireApi {
+  sessions: {
+    create(payload: { cwd?: string }): Promise<{ result: { sessionId: string } }>
+    prompt(payload: {
+      sessionId: string
+      mode: 'queue' | 'steer'
+      content: Array<{ type: 'text'; text: string }>
+      clientTimeZone?: string
+    }): Promise<{ result: unknown }>
+    history(payload: { sessionId: string }): Promise<{
+      result: { events: Array<Record<string, unknown>>; hasMore: boolean }
+    }>
+  }
+}
+
+let workbenchApi: WorkbenchWireApi | undefined
+
+/** Capture the shared API client so the dock can drive real sessions. @param api - connection API face. */
+export function setWorkbenchApiClient(api: WorkbenchWireApi | undefined): void {
+  workbenchApi = api
+}
+
+class AuxChatStore {
+  private readonly listeners = new Set<() => void>()
+  private version = 0
+  private nextIndex = 1
+  private creating = false
+
+  readonly conversations: AuxConversation[] = []
+  activeIndex = -1
+  createError: string | undefined
+
+  subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
+
+  getSnapshot = (): number => this.version
+
+  get active(): AuxConversation | undefined {
+    return this.conversations[this.activeIndex]
+  }
+
+  private emit(): void {
+    this.version += 1
+    for (const listener of [...this.listeners]) listener()
+  }
+
+  busy(conversation: AuxConversation): boolean {
+    return conversation.pendingText !== undefined
+      || conversation.streamingText !== undefined
+      || conversation.awaitingReply
+  }
+
+  /** Open a fresh upstream session and switch to it. */
+  async create(cwd: string | undefined): Promise<void> {
+    if (workbenchApi === undefined || this.creating) return
+    this.creating = true
+    try {
+      const response = await workbenchApi.sessions.create(cwd === undefined ? {} : { cwd })
+      const conversation: AuxConversation = {
+        sessionId: response.result.sessionId,
+        index: this.nextIndex,
+        messages: [],
+        pendingText: undefined,
+        streamingText: undefined,
+        awaitingReply: false,
+        error: undefined,
+      }
+      this.nextIndex += 1
+      this.createError = undefined
+      this.conversations.push(conversation)
+      this.activeIndex = this.conversations.length - 1
+      this.emit()
+    } catch (cause) {
+      this.createError = cause instanceof Error ? cause.message : String(cause)
+      this.emit()
+    } finally {
+      this.creating = false
+    }
+  }
+
+  setActive(index: number): void {
+    if (index < 0 || index >= this.conversations.length || index === this.activeIndex) return
+    this.activeIndex = index
+    this.emit()
+  }
+
+  close(index: number): void {
+    const victim = this.conversations[index]
+    if (victim === undefined) return
+    this.conversations.splice(index, 1)
+    if (this.conversations.length === 0) {
+      this.activeIndex = -1
+    } else if (this.activeIndex > index) {
+      this.activeIndex -= 1
+    } else if (this.activeIndex >= this.conversations.length) {
+      this.activeIndex = this.conversations.length - 1
+    }
+    this.emit()
+  }
+
+  /** Queue one user message on the active conversation's upstream session. */
+  async send(text: string): Promise<void> {
+    const conversation = this.active
+    if (workbenchApi === undefined || conversation === undefined) return
+    conversation.error = undefined
+    conversation.pendingText = text
+    this.emit()
+    try {
+      await workbenchApi.sessions.prompt({
+        sessionId: conversation.sessionId,
+        mode: 'queue',
+        content: [{ type: 'text', text }],
+        clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      })
+      await this.refresh(conversation.sessionId)
+    } catch (cause) {
+      conversation.pendingText = undefined
+      conversation.error = cause instanceof Error ? cause.message : String(cause)
+      this.emit()
+    }
+  }
+
+  /**
+   * Pull the authoritative tail page for one conversation (the active one by
+   * default). Transient poll failures stay silent; the next tick retries.
+   */
+  async refresh(sessionId?: string): Promise<void> {
+    if (workbenchApi === undefined) return
+    const target = sessionId === undefined
+      ? this.active
+      : this.conversations.find(entry => entry.sessionId === sessionId)
+    if (target === undefined) return
+    try {
+      const response = await workbenchApi.sessions.history({ sessionId: target.sessionId })
+      const folded = foldAuxHistory(response.result.events ?? [])
+      // Drop the optimistic echo once history shows the real user message.
+      if (target.pendingText !== undefined
+        && folded.messages.some(entry => entry.role === 'user' && entry.text === target.pendingText)) {
+        target.pendingText = undefined
+      }
+      target.messages = folded.messages
+      target.streamingText = folded.streamingText
+      target.awaitingReply = folded.awaitingReply
+    } catch {
+      return
+    }
+    this.emit()
+  }
+}
+
+const auxChatStore = new AuxChatStore()
+
 /**
- * Embedded assistant chat: the same shell page as the main window, loaded in
- * the default session (shared auth cookie). The hxpEmbed flag suppresses the
- * nested dock inside the webview.
+ * Real auxiliary conversations: each tab is one live upstream session created
+ * through the shared API client; sending queues a prompt and a poll loop folds
+ * the history tail page into bubbles while the panel is open.
  */
-function ChatPanel(): ReactNode {
+function AuxChatPanel(): ReactNode {
   const t = useStrings()
-  const viewRef = useRef<WebviewElement>(null)
-  const [url] = useState(() =>
-    `${window.location.origin}${window.location.pathname}?hxpEmbed=1${window.location.hash}`,
-  )
+  const store = auxChatStore
+  const { workspace } = useWorkspace()
+  const subscribe = useCallback((listener: () => void) => store.subscribe(listener), [store])
+  const readVersion = useCallback(() => store.getSnapshot(), [store])
+  useSyncExternalStore(subscribe, readVersion)
+  const conversation = store.active
+  const activeSessionId = conversation?.sessionId
+  const [draft, setDraft] = useState('')
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const stickToBottom = useRef(true)
+
+  const submit = useCallback(() => {
+    const text = draft.trim()
+    if (text.length === 0 || workbenchApi === undefined) return
+    setDraft('')
+    stickToBottom.current = true
+    void store.send(text)
+  }, [draft, store])
+
+  useEffect(() => { void store.refresh() }, [store, activeSessionId])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => { void store.refresh() }, 1000)
+    return () => { window.clearInterval(timer) }
+  }, [store])
+
+  useEffect(() => {
+    const node = scrollRef.current
+    if (node !== null && stickToBottom.current) node.scrollTop = node.scrollHeight
+  })
+
+  const busy = conversation !== undefined && store.busy(conversation)
+  const serviceReady = workbenchApi !== undefined
+
   return (
     <div className="hxpWbPanel hxpWbChat">
-      <div className="hxpWbToolbar">
-        <span className="hxpWbBranch">{t.chat}</span>
-        <div className="hxpWbSpring" />
-        <button type="button" className="hxpWbToolButton" title={t.refresh} aria-label={t.refresh}
-          onClick={() => { viewRef.current?.reload() }}>
-          {RefreshIcon}
+      <div className="hxpWbTabs" role="tablist">
+        {store.conversations.map((entry, index) => (
+          <div
+            key={entry.sessionId}
+            className="hxpWbTab"
+            role="tab"
+            tabIndex={0}
+            aria-selected={index === store.activeIndex}
+            data-active={index === store.activeIndex || undefined}
+            onClick={() => { store.setActive(index) }}
+            onKeyDown={event => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                store.setActive(index)
+              }
+            }}
+          >
+            <span className="hxpWbTabText">{`${t.chat} ${String(entry.index)}`}</span>
+            <button
+              type="button"
+              className="hxpWbTabClose"
+              title={t.close}
+              aria-label={`${t.close}: ${t.chat} ${String(entry.index)}`}
+              onClick={event => {
+                event.stopPropagation()
+                store.close(index)
+              }}
+            >
+              {CloseIcon}
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          className="hxpAuxAdd"
+          title={t.auxNew}
+          aria-label={t.auxNew}
+          disabled={!serviceReady}
+          onClick={() => { void store.create(workspace) }}
+        >
+          {PlusIcon}
         </button>
       </div>
-      <webview ref={viewRef} className="hxpWbChatView" src={url} />
+      {!serviceReady && <div className="hxpWbNotice">{t.auxUnavailable}</div>}
+      {serviceReady && conversation === undefined && (
+        <div className="hxpAuxEmpty">
+          {store.createError !== undefined && <div className="hxpWbBrowserError">{store.createError}</div>}
+          <p>{t.auxEmpty}</p>
+        </div>
+      )}
+      {serviceReady && conversation !== undefined && (
+        <>
+          <div
+            ref={scrollRef}
+            className="hxpAuxMessages"
+            onScroll={() => {
+              const node = scrollRef.current
+              if (node === null) return
+              stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 64
+            }}
+          >
+            {conversation.messages.map(message => (
+              <div key={message.id} className="hxpAuxMsg" data-role={message.role}>{message.text}</div>
+            ))}
+            {conversation.pendingText !== undefined && (
+              <div className="hxpAuxMsg" data-role="user">{conversation.pendingText}</div>
+            )}
+            {conversation.streamingText !== undefined && (
+              <div className="hxpAuxMsg" data-role="assistant">{conversation.streamingText}</div>
+            )}
+            {busy && <div className="hxpAuxThinking">{t.auxThinking}</div>}
+            {conversation.error !== undefined && <div className="hxpWbBrowserError">{conversation.error}</div>}
+          </div>
+          <form
+            className="hxpAuxForm"
+            onSubmit={event => {
+              event.preventDefault()
+              submit()
+            }}
+          >
+            <textarea
+              className="hxpAuxInput"
+              value={draft}
+              placeholder={t.auxPlaceholder}
+              rows={1}
+              onChange={event => { setDraft(event.target.value) }}
+              onKeyDown={event => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                  event.preventDefault()
+                  submit()
+                }
+              }}
+            />
+            <button type="submit" className="hxpAuxSend" title={t.auxSend} aria-label={t.auxSend} disabled={!draft.trim()}>
+              {SendIcon}
+            </button>
+          </form>
+        </>
+      )}
     </div>
   )
 }

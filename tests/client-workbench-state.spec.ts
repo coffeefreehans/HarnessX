@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   applyWorkbenchPrefs,
+  auxBlockText,
   closeWorkbenchTab,
+  foldAuxHistory,
   getWorkbenchStore,
   openWorkbenchPanel,
   readWorkbenchPrefs,
@@ -155,5 +157,127 @@ describe('workbench prefs round-trip', () => {
       const value = prefs[key]
       expect(value === undefined || value.length > 0).toBe(true)
     }
+  })
+})
+
+describe('auxiliary chat history folding', () => {
+  // Raw SessionEvent records shaped exactly as the wire carries them:
+  // { type, seq, time, data } with data holding the per-type payload.
+  function userMessage(seq: number, id: string, text: string): Record<string, unknown> {
+    return {
+      type: 'user/message',
+      seq,
+      time: 0,
+      data: { id, role: 'user', content: [{ type: 'text', text }], source: { kind: 'human' } },
+    }
+  }
+
+  function assistantMessage(seq: number, id: string, blocks: unknown[]): Record<string, unknown> {
+    return {
+      type: 'assistant/message',
+      seq,
+      time: 0,
+      data: {
+        turn: 1,
+        step: 1,
+        message: { id, role: 'assistant', content: blocks, source: { kind: 'model' } },
+      },
+    }
+  }
+
+  function chunk(seq: number, chunkType: string, text?: string): Record<string, unknown> {
+    return {
+      type: 'assistant/chunk',
+      seq,
+      time: 0,
+      data: { turn: 1, step: 1, chunk: text === undefined ? { type: chunkType, index: 0 } : { type: chunkType, index: 0, text } },
+    }
+  }
+
+  it('auxBlockText keeps only visible text blocks', () => {
+    expect(auxBlockText([
+      { type: 'text', text: 'a' },
+      { type: 'reasoning', text: 'secret' },
+      { type: 'text', text: 'b' },
+      { type: 'tool-call', id: 'c1', name: 'read', arguments: '{}' },
+    ])).toBe('ab')
+    expect(auxBlockText(undefined)).toBe('')
+    expect(auxBlockText('nope')).toBe('')
+  })
+
+  it('folds finalized messages in order and clears the busy flag on each reply', () => {
+    const folded = foldAuxHistory([
+      { type: 'turn/start', seq: 1, time: 0, data: { turn: 1 } },
+      userMessage(2, 'u1', '你好'),
+      assistantMessage(3, 'a1', [{ type: 'text', text: '你好！' }]),
+      userMessage(4, 'u2', '继续'),
+      assistantMessage(5, 'a2', [
+        { type: 'reasoning', text: 'thinking' },
+        { type: 'text', text: '好的' },
+      ]),
+      { type: 'turn/end', seq: 6, time: 0, data: { turn: 1, reason: { kind: 'stop' } } },
+    ])
+    expect(folded.messages).toEqual([
+      { id: 'u1', role: 'user', text: '你好' },
+      { id: 'a1', role: 'assistant', text: '你好！' },
+      { id: 'u2', role: 'user', text: '继续' },
+      { id: 'a2', role: 'assistant', text: '好的' },
+    ])
+    expect(folded.streamingText).toBeUndefined()
+    expect(folded.awaitingReply).toBe(false)
+  })
+
+  it('treats trailing text deltas after the last finalized message as the streaming partial', () => {
+    const folded = foldAuxHistory([
+      userMessage(1, 'u1', '写首诗'),
+      assistantMessage(2, 'a1', [{ type: 'text', text: '旧作' }]),
+      chunk(3, 'block-start'),
+      chunk(4, 'text-delta', '春'),
+      chunk(5, 'reasoning-delta', 'hidden'),
+      chunk(6, 'text-delta', '眠不觉晓'),
+    ])
+    expect(folded.messages).toEqual([
+      { id: 'u1', role: 'user', text: '写首诗' },
+      { id: 'a1', role: 'assistant', text: '旧作' },
+    ])
+    expect(folded.streamingText).toBe('春眠不觉晓')
+    // The turn is still open (no turn/end yet): the panel keeps showing busy.
+    expect(folded.awaitingReply).toBe(true)
+  })
+
+  it('marks an unanswered user message as awaiting even when nothing streams yet', () => {
+    const folded = foldAuxHistory([userMessage(1, 'u1', '在吗')])
+    expect(folded.messages).toEqual([{ id: 'u1', role: 'user', text: '在吗' }])
+    expect(folded.streamingText).toBeUndefined()
+    expect(folded.awaitingReply).toBe(true)
+
+    // A rejected/empty turn closes it without any assistant message.
+    const ended = foldAuxHistory([
+      userMessage(1, 'u1', '在吗'),
+      { type: 'turn/end', seq: 2, time: 0, data: { turn: 1, reason: { kind: 'stop' } } },
+    ])
+    expect(ended.awaitingReply).toBe(false)
+  })
+
+  it('skips tool-call-only steps, drops their partials, and stays busy until turn end', () => {
+    const folded = foldAuxHistory([
+      userMessage(1, 'u1', '看看文件'),
+      chunk(2, 'text-delta', 'partial'),
+      assistantMessage(3, 'a-tool', [{ type: 'tool-call', id: 'c1', name: 'read_file', arguments: '{}' }]),
+    ])
+    expect(folded.messages).toEqual([{ id: 'u1', role: 'user', text: '看看文件' }])
+    // The finalized tool-call step supersedes the streamed partial…
+    expect(folded.streamingText).toBeUndefined()
+    // …but the turn keeps running until its turn/end closes it.
+    expect(folded.awaitingReply).toBe(true)
+  })
+
+  it('returns an empty fold for a blank page and ignores malformed entries', () => {
+    expect(foldAuxHistory([])).toEqual({ messages: [], streamingText: undefined, awaitingReply: false })
+    expect(foldAuxHistory([null as unknown as Record<string, unknown>, {}, { type: 'unknown/x' }])).toEqual({
+      messages: [],
+      streamingText: undefined,
+      awaitingReply: false,
+    })
   })
 })

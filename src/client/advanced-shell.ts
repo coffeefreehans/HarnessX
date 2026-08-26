@@ -8,6 +8,7 @@ import { provideDesktopLayout } from './layout-service.ts'
 import { installAdvancedStyles } from './styles.ts'
 import { DesktopThemePresenter } from './theme-presenter.ts'
 import { getWorkbenchStore } from './workbench-state.ts'
+import { setWorkbenchApiClient, type WorkbenchWireApi } from './workbench.tsx'
 
 /**
  * Provide the advanced layout service and own the desktop root slot.
@@ -21,6 +22,10 @@ export function applyAdvancedShell(ctx: ClientContext, environment: DesktopClien
 
   const desktopLayout = new DesktopLayoutState()
   const workbench = getWorkbenchStore()
+  // The dock's auxiliary chat drives real sessions through the shared API
+  // client; capture it once the connection service is available.
+  const connection = ctx.get('connection') as { api?: WorkbenchWireApi }
+  setWorkbenchApiClient(connection?.api)
   ctx.effect(
     () => provideDesktopLayout(ctx, desktopLayout),
     'desktop: layout service',
