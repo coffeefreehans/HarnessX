@@ -5,12 +5,11 @@
  * `/api/desktop/workbench` routes; no kernel slot or service is replaced.
  */
 
-import { Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { MACOS_TITLEBAR_HEIGHT, WINDOWS_CAPTION_CONTROLS_WIDTH, WINDOWS_TITLEBAR_HEIGHT } from '../window-chrome.ts'
 import { isDesktopPrefsHydrated, schedulePersistDesktopPrefs } from './desktop-prefs.ts'
 import {
-  WORKBENCH_PANE_DEFAULTS,
   WORKBENCH_WIDTH_MAX,
   WORKBENCH_WIDTH_MIN,
   WORKBENCH_PANEL_IDS,
@@ -80,6 +79,7 @@ interface WorkbenchStrings {
   browserBack: string
   browserForward: string
   browserReload: string
+  dragResize: string
 }
 
 const STRINGS_ZH: WorkbenchStrings = {
@@ -133,6 +133,7 @@ const STRINGS_ZH: WorkbenchStrings = {
   browserBack: '后退',
   browserForward: '前进',
   browserReload: '刷新页面',
+  dragResize: '拖动调整大小',
 }
 
 const STRINGS_EN: WorkbenchStrings = {
@@ -186,6 +187,7 @@ const STRINGS_EN: WorkbenchStrings = {
   browserBack: 'Back',
   browserForward: 'Forward',
   browserReload: 'Reload',
+  dragResize: 'Drag to resize',
 }
 
 let strings: WorkbenchStrings | undefined
@@ -436,16 +438,17 @@ const WORKBENCH_STYLES = `
 .hxpWbRailButton:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.05)); color: var(--dsw-alias-label-primary, #222); }
 .hxpWbRailButton[data-active] { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.05)); color: var(--dsw-alias-label-primary, #222); }
 .hxpWbRailLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hxpWbBody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; }
-.hxpWbPane { flex: none; display: flex; flex-direction: column; min-height: 96px; overflow: hidden; border-top: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08)); background: var(--dsw-alias-bg-base, #fff); }
-.hxpWbPane:first-child { border-top: none; }
-.hxpWbPane[data-elastic] { flex: 1 1 auto; }
-.hxpWbPaneHeader { flex: none; display: flex; align-items: center; gap: 5px; padding: 4px 4px 4px 8px; background: rgba(127,127,127,.07); user-select: none; }
-.hxpWbPaneTitle { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; color: var(--dsw-alias-label-secondary, #555); }
+.hxpWbBody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.hxpWbTabs { flex: none; display: flex; align-items: center; gap: 2px; padding: 4px 6px 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.hxpWbTabs::-webkit-scrollbar { display: none; }
+.hxpWbTab { display: inline-flex; align-items: center; flex: none; gap: 5px; height: 28px; padding: 0 5px 0 9px; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-secondary, #555); font-size: 12px; cursor: pointer; user-select: none; }
+.hxpWbTab:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.05)); }
+.hxpWbTab[data-active] { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.08)); color: var(--dsw-alias-label-primary, #222); font-weight: 600; }
+.hxpWbTabText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 110px; }
 .hxpWbTabClose { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; border: none; border-radius: 4px; background: transparent; color: inherit; opacity: .55; cursor: pointer; }
 .hxpWbTabClose:hover { opacity: 1; background: rgba(0,0,0,.08); }
-.hxpWbSplitter { position: relative; z-index: 5; flex: none; height: 6px; margin-top: -3px; margin-bottom: -3px; cursor: row-resize; touch-action: none; }
-.hxpWbSplitter:hover { background: rgba(127,127,127,.18); }
+.hxpWbDivider { position: relative; z-index: 5; flex: none; height: 5px; cursor: row-resize; touch-action: none; }
+.hxpWbDivider:hover { background: rgba(127,127,127,.18); }
 .hxpWbResize { position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; cursor: col-resize; touch-action: none; z-index: 10; }
 .hxpWbToggle { position: absolute; z-index: 60; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-tertiary, #888); cursor: pointer; }
 .dshDesktopFrame[data-desktop-platform="win32"] .hxpWbToggle { top: calc((${WINDOWS_TITLEBAR_HEIGHT}px - 28px) / 2); right: calc(${WINDOWS_CAPTION_CONTROLS_WIDTH}px + 8px); }
@@ -477,15 +480,16 @@ const WORKBENCH_STYLES = `
 .hxpWbAdd { color: #3f8f4a; }
 .hxpWbDel { color: #cc4b42; }
 .hxpWbFileSize { flex: none; color: var(--dsw-alias-label-tertiary, #999); font-size: 11px; }
-.hxpWbPreview { flex: none; max-height: 45%; display: flex; flex-direction: column; border-top: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08)); }
+.hxpWbPreview { flex: none; display: flex; flex-direction: column; overflow: hidden; max-height: calc(100% - 150px); border-top: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08)); }
 .hxpWbPreviewTitle { padding: 5px 8px 2px; color: var(--dsw-alias-label-tertiary, #999); font-size: 11px; }
 .hxpWbPreviewText { flex: 1 1 auto; min-height: 0; margin: 0; padding: 4px 8px 8px; overflow: auto; font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: var(--dsw-alias-label-primary, #222); }
 .hxpWbTerminal { --hxpWbMono: ui-monospace, Consolas, "Cascadia Mono", monospace; }
 .hxpWbTermOutput { flex: 1 1 auto; min-height: 0; margin: 0; padding: 6px 8px; overflow-y: auto; background: transparent; font-family: var(--hxpWbMono); font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-all; color: var(--dsw-alias-label-primary, #222); }
-.hxpWbTermForm { display: flex; padding: 4px 6px 6px; border-top: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.06)); }
-.hxpWbTermInput { flex: 1 1 auto; padding: 4px 8px; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1)); border-radius: 6px; background: transparent; color: var(--dsw-alias-label-primary, #222); font-family: var(--hxpWbMono); font-size: 12px; outline: none; }
+.hxpWbTermForm { flex: none; display: flex; box-sizing: border-box; padding: 4px 6px 6px; border-top: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.06)); }
+.hxpWbTermInput { flex: 1 1 auto; align-self: stretch; resize: none; padding: 4px 8px; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1)); border-radius: 6px; background: transparent; color: var(--dsw-alias-label-primary, #222); font-family: var(--hxpWbMono); font-size: 12px; line-height: 1.5; outline: none; }
 .hxpWbTermInput:focus { border-color: var(--dsw-alias-label-tertiary, #999); }
 .hxpWbGit { gap: 0; }
+.hxpWbGitLower { flex: none; display: flex; flex-direction: column; overflow: hidden; max-height: calc(100% - 170px); border-top: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08)); }
 .hxpWbBranch { padding: 0 4px; font-weight: 600; }
 .hxpWbAhead { color: var(--dsw-alias-label-tertiary, #999); }
 .hxpWbDiffLine { padding: 0 10px 4px; color: var(--dsw-alias-label-tertiary, #999); font-size: 11px; }
@@ -656,78 +660,88 @@ export function WorkbenchDock(props: { state: WorkbenchState }): ReactNode {
             {ChevronRightIcon}
           </button>
         </div>
-        {snapshot.tabs.length > 0 && <PaneStack snapshot={snapshot} state={state} />}
+        {snapshot.tabs.length > 0 && <TabStrip snapshot={snapshot} state={state} />}
+        {snapshot.tabs.length > 0 && snapshot.active !== null && (
+          <div className="hxpWbBody">{renderPanel(snapshot.active, snapshot.browserHome, state)}</div>
+        )}
         <ResizeGrip snapshot={snapshot} state={state} />
       </div>
     </aside>
   )
 }
 
-/** Open panels stacked vertically, separated by draggable splitters. */
-function PaneStack(props: { snapshot: WorkbenchSnapshot; state: WorkbenchState }): ReactNode {
+/** Browser-style tab strip: every open panel is a tab; clicking activates it. */
+function TabStrip(props: { snapshot: WorkbenchSnapshot; state: WorkbenchState }): ReactNode {
   const { snapshot, state } = props
   const t = useStrings()
   return (
-    <div className="hxpWbBody">
-      {snapshot.tabs.map((id, index) => {
-        const elastic = index === snapshot.tabs.length - 1
-        return (
-          <Fragment key={id}>
-            {index > 0 && <Splitter snapshot={snapshot} state={state} pane={id} />}
-            <section
-              className="hxpWbPane"
-              data-active={snapshot.active === id || undefined}
-              {...(elastic ? { 'data-elastic': true } : { style: { height: `${String(paneHeight(snapshot, id))}px` } })}
-            >
-              <header className="hxpWbPaneHeader" onClick={() => { state.setActive(id) }}>
-                <span className="hxpWbTabIcon">{PanelIcons[id]}</span>
-                <span className="hxpWbPaneTitle">{t[id]}</span>
-                <button
-                  type="button"
-                  className="hxpWbTabClose"
-                  title={t.close}
-                  aria-label={`${t.close}: ${t[id]}`}
-                  onClick={event => {
-                    event.stopPropagation()
-                    state.closeTab(id)
-                  }}
-                >
-                  {CloseIcon}
-                </button>
-              </header>
-              <div className="hxpWbPaneBody">{renderPanel(id, snapshot.browserHome)}</div>
-            </section>
-          </Fragment>
-        )
-      })}
+    <div className="hxpWbTabs" role="tablist">
+      {snapshot.tabs.map(id => (
+        <div
+          key={id}
+          className="hxpWbTab"
+          role="tab"
+          tabIndex={0}
+          aria-selected={snapshot.active === id}
+          data-active={snapshot.active === id || undefined}
+          onClick={() => { state.setActive(id) }}
+          onKeyDown={event => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              state.setActive(id)
+            }
+          }}
+        >
+          <span className="hxpWbTabIcon">{PanelIcons[id]}</span>
+          <span className="hxpWbTabText">{t[id]}</span>
+          <button
+            type="button"
+            className="hxpWbTabClose"
+            title={t.close}
+            aria-label={`${t.close}: ${t[id]}`}
+            onClick={event => {
+              event.stopPropagation()
+              state.closeTab(id)
+            }}
+          >
+            {CloseIcon}
+          </button>
+        </div>
+      ))}
     </div>
   )
 }
 
-function paneHeight(snapshot: WorkbenchSnapshot, id: WorkbenchPanelId): number {
-  return snapshot.sizes[id] ?? WORKBENCH_PANE_DEFAULTS[id]
-}
-
-/** Horizontal drag handle resizing the pane directly above it. */
-function Splitter(props: { snapshot: WorkbenchSnapshot; state: WorkbenchState; pane: WorkbenchPanelId }): ReactNode {
+/** Horizontal drag handle; reports movement deltas while the pointer is captured. */
+function HDivider(props: { label: string; onResize: (deltaY: number) => void }): ReactNode {
   const origin = useRef(0)
-  const base = useRef(0)
   const onPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     origin.current = event.clientY
-    base.current = props.snapshot.sizes[props.pane] ?? WORKBENCH_PANE_DEFAULTS[props.pane]
     event.currentTarget.setPointerCapture(event.pointerId)
-  }, [props.snapshot.sizes, props.pane])
+  }, [])
   const onPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
-    props.state.setPaneSize(props.pane, base.current + (event.clientY - origin.current))
+    const delta = event.clientY - origin.current
+    if (delta === 0) return
+    origin.current = event.clientY
+    props.onResize(delta)
   }, [props])
-  return <div className="hxpWbSplitter" onPointerDown={onPointerDown} onPointerMove={onPointerMove} />
+  return (
+    <div
+      className="hxpWbDivider"
+      role="separator"
+      aria-orientation="horizontal"
+      title={props.label}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+    />
+  )
 }
 
-function renderPanel(active: WorkbenchPanelId, browserHome: string | undefined): ReactNode {
-  if (active === 'explorer') return <ExplorerPanel />
-  if (active === 'terminal') return <TerminalPanel />
-  if (active === 'git') return <GitPanel />
+function renderPanel(active: WorkbenchPanelId, browserHome: string | undefined, state: WorkbenchState): ReactNode {
+  if (active === 'explorer') return <ExplorerPanel state={state} />
+  if (active === 'terminal') return <TerminalPanel state={state} />
+  if (active === 'git') return <GitPanel state={state} />
   if (active === 'chat') return <ChatPanel />
   return <BrowserPanel home={browserHome} />
 }
@@ -755,7 +769,10 @@ function ResizeGrip(props: { snapshot: WorkbenchSnapshot; state: WorkbenchState 
 
 let explorerCwd: string | undefined
 
-function ExplorerPanel(): ReactNode {
+const EXPLORER_PREVIEW_DEFAULT = 200
+
+function ExplorerPanel(props: { state: WorkbenchState }): ReactNode {
+  const { state } = props
   const t = useStrings()
   const { workspace } = useWorkspace()
   const [cwd, setCwd] = useState(explorerCwd)
@@ -764,6 +781,12 @@ function ExplorerPanel(): ReactNode {
   const [git, setGit] = useState<WorkspaceGit | undefined>()
   const [previewPath, setPreviewPath] = useState<string | undefined>()
   const [preview, setPreview] = useState<PreviewResponse['preview'] | undefined>()
+  const subscribeLayout = useCallback((listener: () => void) => state.subscribe(listener), [state])
+  const readLayout = useCallback(() => state.getSnapshot(), [state])
+  const layout = useSyncExternalStore(subscribeLayout, readLayout)
+  const previewHeight = layout.sizes.explorer ?? EXPLORER_PREVIEW_DEFAULT
+  const previewHeightRef = useRef(previewHeight)
+  previewHeightRef.current = previewHeight
 
   const load = useCallback(async (dir: string | undefined) => {
     if (dir === undefined) {
@@ -880,19 +903,25 @@ function ExplorerPanel(): ReactNode {
         })}
       </div>
       {previewPath !== undefined && (
-        <div className="hxpWbPreview">
-          <div className="hxpWbPreviewTitle">{basename(previewPath)}</div>
-          {preview === undefined
-            ? undefined
-            : preview.binary
-              ? <div className="hxpWbNotice">{t.previewBinary}</div>
-              : (
-                <pre className="hxpWbPreviewText">
-                  {preview.text}
-                  {preview.truncated && `\n${t.previewTruncated}`}
-                </pre>
-              )}
-        </div>
+        <>
+          <HDivider
+            label={t.dragResize}
+            onResize={delta => { state.setPaneSize('explorer', previewHeightRef.current + delta) }}
+          />
+          <div className="hxpWbPreview" style={{ height: `${String(previewHeight)}px` }}>
+            <div className="hxpWbPreviewTitle">{basename(previewPath)}</div>
+            {preview === undefined
+              ? undefined
+              : preview.binary
+                ? <div className="hxpWbNotice">{t.previewBinary}</div>
+                : (
+                  <pre className="hxpWbPreviewText">
+                    {preview.text}
+                    {preview.truncated && `\n${t.previewTruncated}`}
+                  </pre>
+                )}
+          </div>
+        </>
       )}
     </div>
   )
@@ -948,7 +977,10 @@ function useWorkspace(): { workspace: string | undefined; ready: boolean } {
   return { workspace, ready }
 }
 
-function TerminalPanel(): ReactNode {
+const TERMINAL_INPUT_DEFAULT = 46
+
+function TerminalPanel(props: { state: WorkbenchState }): ReactNode {
+  const { state } = props
   const t = useStrings()
   const { workspace, ready } = useWorkspace()
   const [transcript, setTranscript] = useState(terminalCache.transcript)
@@ -957,6 +989,12 @@ function TerminalPanel(): ReactNode {
   const [epoch, setEpoch] = useState(0)
   const latestRef = useRef(0)
   const preRef = useRef<HTMLPreElement>(null)
+  const subscribeLayout = useCallback((listener: () => void) => state.subscribe(listener), [state])
+  const readLayout = useCallback(() => state.getSnapshot(), [state])
+  const layout = useSyncExternalStore(subscribeLayout, readLayout)
+  const inputHeight = layout.sizes.terminal ?? TERMINAL_INPUT_DEFAULT
+  const inputHeightRef = useRef(inputHeight)
+  inputHeightRef.current = inputHeight
 
   useEffect(() => {
     let cancelled = false
@@ -1036,6 +1074,12 @@ function TerminalPanel(): ReactNode {
     setEpoch(epoch + 1)
   }, [epoch])
 
+  const submitCurrent = (): void => {
+    if (input.trim().length === 0) return
+    send(input)
+    setInput('')
+  }
+
   return (
     <div className="hxpWbPanel hxpWbTerminal">
       <div className="hxpWbToolbar">
@@ -1045,20 +1089,30 @@ function TerminalPanel(): ReactNode {
         {exited && <span className="hxpWbNotice">exit</span>}
       </div>
       <pre ref={preRef} className="hxpWbTermOutput">{transcript}</pre>
+      <HDivider
+        label={t.dragResize}
+        onResize={delta => { state.setPaneSize('terminal', inputHeightRef.current + delta) }}
+      />
       <form
         className="hxpWbTermForm"
+        style={{ height: `${String(inputHeight)}px` }}
         onSubmit={event => {
           event.preventDefault()
-          if (input.trim().length === 0) return
-          send(input)
-          setInput('')
+          submitCurrent()
         }}
       >
-        <input
+        <textarea
           className="hxpWbTermInput"
           value={input}
           placeholder={t.terminalPlaceholder}
           onChange={event => { setInput(event.target.value) }}
+          onKeyDown={event => {
+            // Enter runs the command; Shift+Enter inserts a newline.
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault()
+              submitCurrent()
+            }
+          }}
           spellCheck={false}
         />
       </form>
@@ -1074,7 +1128,10 @@ interface GitBranchEntry { name: string; current: boolean }
 
 let branchesCache: GitBranchEntry[] | undefined
 
-function GitPanel(): ReactNode {
+const GIT_LOWER_DEFAULT = 260
+
+function GitPanel(props: { state: WorkbenchState }): ReactNode {
+  const { state } = props
   const t = useStrings()
   const { workspace, ready } = useWorkspace()
   const [status, setStatus] = useState<StatusResponse | undefined>()
@@ -1088,6 +1145,12 @@ function GitPanel(): ReactNode {
   const [showBranches, setShowBranches] = useState(false)
   const [newBranch, setNewBranch] = useState('')
   const [stashes, setStashes] = useState(0)
+  const subscribeLayout = useCallback((listener: () => void) => state.subscribe(listener), [state])
+  const readLayout = useCallback(() => state.getSnapshot(), [state])
+  const layout = useSyncExternalStore(subscribeLayout, readLayout)
+  const lowerHeight = layout.sizes.git ?? GIT_LOWER_DEFAULT
+  const lowerHeightRef = useRef(lowerHeight)
+  lowerHeightRef.current = lowerHeight
 
   const reload = useCallback(async () => {
     if (!ready) return
@@ -1346,32 +1409,38 @@ function GitPanel(): ReactNode {
             onDiscard={entry.x !== '?' ? () => { discardPaths([entry.path]) } : undefined} />
         ))}
       </div>
-      <form
-        className="hxpWbCommitForm"
-        onSubmit={event => {
-          event.preventDefault()
-          void commit()
-        }}
-      >
-        <textarea
-          className="hxpWbCommitMessage"
-          value={message}
-          placeholder={t.commitPlaceholder}
-          rows={2}
-          onChange={event => { setMessage(event.target.value) }}
-        />
-        <button type="submit" className="hxpWbCommitButton" disabled={busy || message.trim().length === 0 || staged.length === 0}>
-          {t.commit}
-        </button>
-      </form>
-      <SectionTitle label={t.gitHistory} count={log.length} />
-      <div className="hxpWbLogList">
-        {log.map(entry => (
-          <div key={entry.abbrev} className="hxpWbLogRow" title={`${entry.author} · ${new Date(entry.time * 1000).toLocaleString()}`}>
-            <code className="hxpWbLogHash">{entry.abbrev}</code>
-            <span className="hxpWbLogSubject">{entry.subject}</span>
-          </div>
-        ))}
+      <HDivider
+        label={t.dragResize}
+        onResize={delta => { state.setPaneSize('git', lowerHeightRef.current + delta) }}
+      />
+      <div className="hxpWbGitLower" style={{ height: `${String(lowerHeight)}px` }}>
+        <form
+          className="hxpWbCommitForm"
+          onSubmit={event => {
+            event.preventDefault()
+            void commit()
+          }}
+        >
+          <textarea
+            className="hxpWbCommitMessage"
+            value={message}
+            placeholder={t.commitPlaceholder}
+            rows={2}
+            onChange={event => { setMessage(event.target.value) }}
+          />
+          <button type="submit" className="hxpWbCommitButton" disabled={busy || message.trim().length === 0 || staged.length === 0}>
+            {t.commit}
+          </button>
+        </form>
+        <SectionTitle label={t.gitHistory} count={log.length} />
+        <div className="hxpWbLogList">
+          {log.map(entry => (
+            <div key={entry.abbrev} className="hxpWbLogRow" title={`${entry.author} · ${new Date(entry.time * 1000).toLocaleString()}`}>
+              <code className="hxpWbLogHash">{entry.abbrev}</code>
+              <span className="hxpWbLogSubject">{entry.subject}</span>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   )
