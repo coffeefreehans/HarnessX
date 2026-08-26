@@ -335,3 +335,22 @@ export function foldAuxHistory(events: ReadonlyArray<Record<string, unknown>>): 
     awaitingReply: awaiting,
   }
 }
+
+/** Render classification of one unified-diff line. */
+export type DiffLineKind = 'meta' | 'add' | 'del' | 'hunk' | 'plain'
+
+/**
+ * Classify one unified-diff line so the explorer's per-file diff renders with
+ * add/remove colors instead of a flat wall of text.
+ * @param line - one raw diff line.
+ * @returns the render kind.
+ */
+export function diffLineKind(line: string): DiffLineKind {
+  if (line.startsWith('diff ') || line.startsWith('index ')
+    || line.startsWith('--- ') || line.startsWith('+++ ')
+    || line.startsWith('---\t') || line.startsWith('+++\t')) return 'meta'
+  if (line.startsWith('+')) return 'add'
+  if (line.startsWith('-')) return 'del'
+  if (line.startsWith('@@')) return 'hunk'
+  return 'plain'
+}

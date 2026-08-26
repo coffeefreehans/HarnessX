@@ -15,6 +15,7 @@ import {
   WORKBENCH_WIDTH_MAX,
   WORKBENCH_WIDTH_MIN,
   WORKBENCH_PANEL_IDS,
+  diffLineKind,
   foldAuxHistory,
   type AuxConversation,
   type WorkbenchPanelId,
@@ -443,6 +444,10 @@ interface PreviewResponse {
   preview: { text: string; truncated: boolean; binary: boolean }
 }
 
+interface PatchResponse {
+  patch: string
+}
+
 interface StatusResponse {
   branch?: string | undefined
   ahead?: number | undefined
@@ -522,6 +527,11 @@ const WORKBENCH_STYLES = `
 .hxpWbPreview { flex: none; display: flex; flex-direction: column; overflow: hidden; max-height: calc(100% - 150px); border-top: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08)); }
 .hxpWbPreviewTitle { padding: 5px 8px 2px; color: var(--dsw-alias-label-tertiary, #999); font-size: 11px; }
 .hxpWbPreviewText { flex: 1 1 auto; min-height: 0; margin: 0; padding: 4px 8px 8px; overflow: auto; font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-all; color: var(--dsw-alias-label-primary, #222); }
+.hxpWbDiffLine { display: block; min-height: 1em; }
+.hxpWbDiffLine[data-kind="add"] { color: #3f8f4a; background: rgba(63,143,74,.10); }
+.hxpWbDiffLine[data-kind="del"] { color: #cc4b42; background: rgba(204,75,66,.10); }
+.hxpWbDiffLine[data-kind="hunk"] { color: #4a7fb5; }
+.hxpWbDiffLine[data-kind="meta"] { color: var(--dsw-alias-label-tertiary, #999); }
 .hxpWbTerminal { --hxpWbMono: ui-monospace, Consolas, "Cascadia Mono", monospace; }
 .hxpWbTermOutput { flex: 1 1 auto; min-height: 0; margin: 0; padding: 6px 8px; overflow-y: auto; background: transparent; font-family: var(--hxpWbMono); font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-all; color: var(--dsw-alias-label-primary, #222); }
 .hxpWbTermForm { flex: none; display: flex; box-sizing: border-box; padding: 4px 6px 6px; border-top: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.06)); }
@@ -845,6 +855,7 @@ function ExplorerPanel(props: { state: WorkbenchState }): ReactNode {
   const [git, setGit] = useState<WorkspaceGit | undefined>()
   const [previewPath, setPreviewPath] = useState<string | undefined>()
   const [preview, setPreview] = useState<PreviewResponse['preview'] | undefined>()
+  const [patch, setPatch] = useState<string | undefined>()
   const subscribeLayout = useCallback((listener: () => void) => state.subscribe(listener), [state])
   const readLayout = useCallback(() => state.getSnapshot(), [state])
   const layout = useSyncExternalStore(subscribeLayout, readLayout)
@@ -891,16 +902,31 @@ function ExplorerPanel(props: { state: WorkbenchState }): ReactNode {
     return () => { cancelled = true }
   }, [workspace])
 
-  const openFile = useCallback(async (file: string) => {
+  /** Open a file below the list: git-changed files show their diff, others their content. */
+  const openFile = useCallback(async (file: string, rel: string | undefined, changed: boolean) => {
     setPreviewPath(file)
     setPreview(undefined)
+    setPatch(undefined)
+    if (changed && rel !== undefined && workspace !== undefined) {
+      try {
+        const value = await requestJson<PatchResponse>(
+          `/api/desktop/workbench/git/patch?path=${encodeURIComponent(workspace)}&file=${encodeURIComponent(rel)}`,
+        )
+        if (value.patch.trim().length > 0) {
+          setPatch(value.patch)
+          return
+        }
+      } catch {
+        // Route hiccups fall through to the plain content preview.
+      }
+    }
     try {
       const value = await requestJson<PreviewResponse>(`/api/desktop/workbench/file?path=${encodeURIComponent(file)}`)
       setPreview(value.preview)
     } catch (cause) {
       setPreview({ text: cause instanceof Error ? cause.message : String(cause), truncated: false, binary: false })
     }
-  }, [])
+  }, [workspace])
 
   const segments = cwd !== undefined ? pathSegments(cwd) : []
 
@@ -954,7 +980,7 @@ function ExplorerPanel(props: { state: WorkbenchState }): ReactNode {
                 if (cwd === undefined) return
                 const child = `${cwd}${cwd.endsWith('\\') || cwd.endsWith('/') ? '' : (cwd.includes('\\') ? '\\' : '/')}${entry.name}`
                 if (entry.kind === 'directory') setCwd(child)
-                else void openFile(child)
+                else void openFile(child, relPath, kind !== undefined)
               }}
             >
               <span className="hxpWbFileIcon">{entry.kind === 'directory' ? FolderIcon : undefined}</span>
@@ -978,20 +1004,28 @@ function ExplorerPanel(props: { state: WorkbenchState }): ReactNode {
         <>
           <HDivider
             label={t.dragResize}
-            onResize={delta => { state.setPaneSize('explorer', previewHeightRef.current + delta) }}
+            onResize={delta => { state.setPaneSize('explorer', previewHeightRef.current - delta) }}
           />
-          <div className="hxpWbPreview" style={{ height: `${String(previewHeight)}px` }}>
+          <div className="hxpWbPreview" style={{ height: `${String(Math.max(96, previewHeight))}px` }}>
             <div className="hxpWbPreviewTitle">{basename(previewPath)}</div>
-            {preview === undefined
-              ? undefined
-              : preview.binary
-                ? <div className="hxpWbNotice">{t.previewBinary}</div>
-                : (
-                  <pre className="hxpWbPreviewText">
-                    {preview.text}
-                    {preview.truncated && `\n${t.previewTruncated}`}
-                  </pre>
-                )}
+            {patch !== undefined
+              ? (
+                <pre className="hxpWbPreviewText">
+                  {patch.split('\n').map((line, index) => (
+                    <span key={index} className="hxpWbDiffLine" data-kind={diffLineKind(line)}>{line}</span>
+                  ))}
+                </pre>
+              )
+              : preview === undefined
+                ? undefined
+                : preview.binary
+                  ? <div className="hxpWbNotice">{t.previewBinary}</div>
+                  : (
+                    <pre className="hxpWbPreviewText">
+                      {preview.text}
+                      {preview.truncated && `\n${t.previewTruncated}`}
+                    </pre>
+                  )}
           </div>
         </>
       )}
@@ -1225,7 +1259,7 @@ function TerminalPanel(props: { state: WorkbenchState }): ReactNode {
       <pre ref={preRef} className="hxpWbTermOutput">{transcript}</pre>
       <HDivider
         label={t.dragResize}
-        onResize={delta => { state.setPaneSize('terminal', inputHeightRef.current + delta) }}
+        onResize={delta => { state.setPaneSize('terminal', inputHeightRef.current - delta) }}
       />
       <form
         className="hxpWbTermForm"
@@ -1545,7 +1579,7 @@ function GitPanel(props: { state: WorkbenchState }): ReactNode {
       </div>
       <HDivider
         label={t.dragResize}
-        onResize={delta => { state.setPaneSize('git', lowerHeightRef.current + delta) }}
+        onResize={delta => { state.setPaneSize('git', lowerHeightRef.current - delta) }}
       />
       <div className="hxpWbGitLower" style={{ height: `${String(lowerHeight)}px` }}>
         <form

@@ -7,6 +7,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import {
   apply,
+  buildUntrackedPatch,
+  countTextLines,
   listDirectory,
   mergeNumstat,
   parseGitBranches,
@@ -15,6 +17,7 @@ import {
   parseNumstat,
   readPreview,
   requireAbsolutePath,
+  requireRelPath,
   resolveSessionWorkspace,
   routeWorkbench,
   summarizeNumstat,
@@ -143,6 +146,36 @@ describe('path and parsing helpers', () => {
       { name: 'main', current: true },
       { name: 'feature/x', current: false },
     ])
+  })
+
+  it('countTextLines counts rendered lines like numstat additions', () => {
+    expect(countTextLines('')).toBe(0)
+    expect(countTextLines('one')).toBe(1)
+    expect(countTextLines('one\ntwo')).toBe(2)
+    expect(countTextLines('one\ntwo\n')).toBe(2)
+  })
+
+  it('buildUntrackedPatch presents the whole file as additions', () => {
+    const patch = buildUntrackedPatch('temp/new.ts', 'alpha\nbeta\n')
+    expect(patch.split('\n')).toEqual([
+      '--- /dev/null',
+      '+++ b/temp/new.ts',
+      '@@ -0,0 +1,2 @@',
+      '+alpha',
+      '+beta',
+    ])
+    expect(buildUntrackedPatch('empty.txt', '')).toBe('')
+  })
+
+  it('requireRelPath accepts only safe repository-relative paths', () => {
+    expect(requireRelPath('src/client/workbench.tsx')).toBe('src/client/workbench.tsx')
+    expect(requireRelPath('\\temp\\new.ts')).toBe('temp/new.ts')
+    expect(requireRelPath('/leading/slash')).toBe('leading/slash')
+    expect(() => requireRelPath('')).toThrow('repository-relative')
+    expect(() => requireRelPath('../secrets')).toThrow('repository-relative')
+    expect(() => requireRelPath('a/../../b')).toThrow('repository-relative')
+    expect(() => requireRelPath('a//b')).toThrow('repository-relative')
+    expect(() => requireRelPath(42)).toThrow('repository-relative')
   })
 })
 
@@ -431,12 +464,12 @@ describe('routeWorkbench dispatch', () => {
     execSync('git commit -q -m init', { cwd: dir })
     await writeFile(join(dir, 'tracked.txt'), 'one\n')
     const terminals = new TerminalRegistry()
-    const call = async (method: 'GET' | 'POST', subroute: string, body?: unknown): Promise<{ status: number; json: () => any }> => {
+    const call = async (method: 'GET' | 'POST', subroute: string, body?: unknown, extraQuery?: Record<string, string>): Promise<{ status: number; json: () => any }> => {
       const captured = jsonResponse()
       await routeWorkbench({
         method,
         pathname: `/api/desktop/workbench/git/${subroute}`,
-        query: method === 'GET' ? new URLSearchParams({ path: dir }) : new URLSearchParams(),
+        query: method === 'GET' ? new URLSearchParams({ path: dir, ...extraQuery }) : new URLSearchParams(),
         ...(method === 'POST' ? { body } : { body: undefined }),
         response: captured.response,
         terminals,
@@ -479,6 +512,32 @@ describe('routeWorkbench dispatch', () => {
     const counted = await call('GET', 'status')
     const countedBody = counted.json() as { counts: Record<string, { additions: number; deletions: number }> }
     expect(countedBody.counts['tracked.txt']).toEqual({ additions: 1, deletions: 0 })
+
+    // Untracked directories expand into their files (-uall), each carrying
+    // synthesized "every line is an addition" counters.
+    await mkdir(join(dir, 'temp', 'nested'), { recursive: true })
+    await writeFile(join(dir, 'temp', 'nested', 'new.ts'), 'alpha\nbeta\n')
+    const expanded = await call('GET', 'status')
+    const expandedBody = expanded.json() as {
+      entries: Array<{ x: string; path: string }>
+      counts: Record<string, { additions: number; deletions: number }>
+    }
+    expect(expandedBody.entries.some(entry => entry.x === '?' && entry.path === 'temp/nested/new.ts')).toBe(true)
+    expect(expandedBody.counts['temp/nested/new.ts']).toEqual({ additions: 2, deletions: 0 })
+
+    // Per-file patches: modified file diffs against HEAD, untracked file is a
+    // synthesized whole-file patch, untouched file comes back empty.
+    const modifiedPatch = await call('GET', 'patch', undefined, { file: 'tracked.txt' })
+    const modifiedBody = modifiedPatch.json() as { patch: string }
+    expect(modifiedBody.patch).toContain('--- a/tracked.txt')
+    expect(modifiedBody.patch).toContain('+two')
+    const untrackedPatch = await call('GET', 'patch', undefined, { file: 'temp/nested/new.ts' })
+    const untrackedBody = untrackedPatch.json() as { patch: string }
+    expect(untrackedBody.patch).toContain('+++ b/temp/nested/new.ts')
+    expect(untrackedBody.patch).toContain('+alpha')
+    const cleanPatch = await call('GET', 'patch', undefined, { file: 'hello.txt' })
+    expect((cleanPatch.json() as { patch: string }).patch).toBe('')
+    await expect(call('GET', 'patch', undefined, { file: '../escape' })).rejects.toThrow()
 
     // Branch creation, listing, and switching through the dedicated routes.
     const initialBranch = typeof cleanBody.branch === 'string' ? cleanBody.branch : 'main'

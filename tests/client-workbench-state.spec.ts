@@ -4,6 +4,7 @@ import {
   auxBlockText,
   closeWorkbenchTab,
   collapseWorkbench,
+  diffLineKind,
   foldAuxHistory,
   getWorkbenchStore,
   openWorkbenchPanel,
@@ -292,5 +293,19 @@ describe('auxiliary chat history folding', () => {
       streamingText: undefined,
       awaitingReply: false,
     })
+  })
+})
+
+describe('explorer diff line classification', () => {
+  it('sorts unified-diff lines into colored render kinds', () => {
+    expect(diffLineKind('diff --git a/a b/a')).toBe('meta')
+    expect(diffLineKind('index 1234..5678 100644')).toBe('meta')
+    expect(diffLineKind('--- a/a.txt')).toBe('meta')
+    expect(diffLineKind('+++ b/a.txt')).toBe('meta')
+    expect(diffLineKind('@@ -1,3 +1,4 @@')).toBe('hunk')
+    expect(diffLineKind('+added line')).toBe('add')
+    expect(diffLineKind('-removed line')).toBe('del')
+    expect(diffLineKind(' unchanged line')).toBe('plain')
+    expect(diffLineKind('')).toBe('plain')
   })
 })

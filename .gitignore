@@ -13,3 +13,4 @@ dist/
 lib/
 .zcode/
 nul
+temp_macos/

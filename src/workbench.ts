@@ -340,6 +340,53 @@ export function mergeNumstat(primary: Map<string, GitFileCount>, secondary: Map<
   return merged
 }
 
+/**
+ * Count rendered text lines the way numstat would count additions.
+ * @param text - file content.
+ * @returns the number of newline-terminated or trailing lines.
+ */
+export function countTextLines(text: string): number {
+  if (text.length === 0) return 0
+  return text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
+}
+
+/**
+ * Build a unified-diff-shaped patch that presents a whole untracked file as
+ * additions, since `git diff` has no record of files it does not track.
+ * @param relPath - repository-relative file path (forward slashes).
+ * @param content - file text.
+ * @returns the synthesized patch text.
+ */
+export function buildUntrackedPatch(relPath: string, content: string): string {
+  if (content.length === 0) return ''
+  const lines = content.split('\n')
+  if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  return [
+    '--- /dev/null',
+    `+++ b/${relPath}`,
+    `@@ -0,0 +1,${String(lines.length)} @@`,
+    ...lines.map(line => `+${line}`),
+  ].join('\n')
+}
+
+/**
+ * Validate an untrusted repository-relative path argument.
+ * @param value - raw query value.
+ * @returns the normalized forward-slash relative path.
+ * @throws when the value escapes the repository or is not a relative path.
+ */
+export function requireRelPath(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.includes('\0')) {
+    throw new Error('a repository-relative path is required')
+  }
+  const normalized = value.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '')
+  if (normalized.length === 0 || isAbsolute(normalized)
+    || normalized.split('/').some(segment => segment === '..' || segment.length === 0)) {
+    throw new Error('a repository-relative path is required')
+  }
+  return normalized
+}
+
 function runGit(cwd: string, args: readonly string[], timeoutMs = GIT_TIMEOUT_MS): Promise<string> {
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn('git', args, { cwd, windowsHide: true })
@@ -361,6 +408,31 @@ function runGit(cwd: string, args: readonly string[], timeoutMs = GIT_TIMEOUT_MS
       else rejectPromise(new Error(stderr.trim().length > 0 ? stderr.trim() : `git exited with code ${String(code)}`))
     })
   })
+}
+
+/**
+ * Unified patch of one file: staged plus worktree changes, and for untracked
+ * files a synthesized whole-file-as-additions patch the explorer can render.
+ * @param cwd - repository working tree.
+ * @param rel - repository-relative file path (forward slashes).
+ * @returns the patch text, empty when the file is unchanged.
+ */
+async function readGitPatch(cwd: string, rel: string): Promise<string> {
+  const [worktree, index, status] = await Promise.all([
+    runGit(cwd, ['diff', '--', rel]).catch(() => ''),
+    runGit(cwd, ['diff', '--cached', '--', rel]).catch(() => ''),
+    runGit(cwd, ['status', '--porcelain=v2', '-uall', '--', rel]).catch(() => ''),
+  ])
+  const patch = `${worktree}${index}`
+  if (patch.trim().length > 0) return patch
+  if (!status.split('\n').some(line => line.startsWith('? '))) return ''
+  try {
+    const preview = await readPreview(join(cwd, ...rel.split('/')))
+    if (preview.binary) return ''
+    return buildUntrackedPatch(rel, preview.text)
+  } catch {
+    return ''
+  }
 }
 
 /** Spawn function shape so tests can substitute a fake shell process. */
@@ -682,15 +754,32 @@ export async function routeWorkbench(request: WorkbenchRequest): Promise<void> {
   }
   if (method === 'GET' && subroute === '/git/status') {
     const cwd = await requireDirectory(request.query.get('path'))
-    const raw = await runGit(cwd, ['status', '--porcelain=v2', '--branch'])
+    // -uall expands untracked directories into their files so the explorer can
+    // decorate and count every changed file, not just the top folder.
+    const raw = await runGit(cwd, ['status', '--porcelain=v2', '--branch', '-uall'])
     const [worktree, index] = await Promise.all([
       runGit(cwd, ['diff', '--numstat']).catch(() => ''),
       runGit(cwd, ['diff', '--cached', '--numstat']).catch(() => ''),
     ])
-    sendJson(response, 200, {
-      ...parseGitStatus(raw),
-      counts: mergeNumstat(parseNumstat(worktree), parseNumstat(index)),
-    })
+    const parsed = parseGitStatus(raw)
+    const counts = mergeNumstat(parseNumstat(worktree), parseNumstat(index))
+    // Untracked files have no numstat record; every rendered line is an addition.
+    await Promise.all(parsed.entries.map(async entry => {
+      if (entry.x !== '?' || entry.y !== '?' || counts[entry.path] !== undefined) return
+      try {
+        const preview = await readPreview(join(cwd, ...entry.path.split('/')))
+        if (!preview.binary) counts[entry.path] = { additions: countTextLines(preview.text), deletions: 0 }
+      } catch {
+        // An unreadable untracked file simply carries no counters.
+      }
+    }))
+    sendJson(response, 200, { ...parsed, counts })
+    return
+  }
+  if (method === 'GET' && subroute === '/git/patch') {
+    const cwd = await requireDirectory(request.query.get('path'))
+    const rel = requireRelPath(request.query.get('file'))
+    sendJson(response, 200, { patch: await readGitPatch(cwd, rel) })
     return
   }
   if (method === 'GET' && subroute === '/git/branches') {
