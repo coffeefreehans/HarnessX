@@ -755,16 +755,24 @@ export async function routeWorkbench(request: WorkbenchRequest): Promise<void> {
   if (method === 'GET' && subroute === '/git/status') {
     const cwd = await requireDirectory(request.query.get('path'))
     // -uall expands untracked directories into their files so the explorer can
-    // decorate and count every changed file, not just the top folder.
+    // decorate and count every changed file, not just the top folder. Status
+    // paths print relative to the queried directory; rows escaping it (../)
+    // are dropped. --relative makes numstat paths match that same base.
     const raw = await runGit(cwd, ['status', '--porcelain=v2', '--branch', '-uall'])
     const [worktree, index] = await Promise.all([
-      runGit(cwd, ['diff', '--numstat']).catch(() => ''),
-      runGit(cwd, ['diff', '--cached', '--numstat']).catch(() => ''),
+      runGit(cwd, ['diff', '--relative', '--numstat']).catch(() => ''),
+      runGit(cwd, ['diff', '--relative', '--cached', '--numstat']).catch(() => ''),
     ])
+    const escapes = (path: string): boolean => path.split('/').some(segment => segment === '..')
     const parsed = parseGitStatus(raw)
-    const counts = mergeNumstat(parseNumstat(worktree), parseNumstat(index))
+    const entries = parsed.entries
+      .filter(entry => !escapes(entry.path) && (entry.origPath === undefined || !escapes(entry.origPath)))
+    const counts: Record<string, GitFileCount> = {}
+    for (const [path, count] of Object.entries(mergeNumstat(parseNumstat(worktree), parseNumstat(index)))) {
+      if (!escapes(path)) counts[path] = count
+    }
     // Untracked files have no numstat record; every rendered line is an addition.
-    await Promise.all(parsed.entries.map(async entry => {
+    await Promise.all(entries.map(async entry => {
       if (entry.x !== '?' || entry.y !== '?' || counts[entry.path] !== undefined) return
       try {
         const preview = await readPreview(join(cwd, ...entry.path.split('/')))
@@ -773,7 +781,7 @@ export async function routeWorkbench(request: WorkbenchRequest): Promise<void> {
         // An unreadable untracked file simply carries no counters.
       }
     }))
-    sendJson(response, 200, { ...parsed, counts })
+    sendJson(response, 200, { ...parsed, entries, counts })
     return
   }
   if (method === 'GET' && subroute === '/git/patch') {

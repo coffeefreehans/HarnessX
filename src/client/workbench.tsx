@@ -7,7 +7,7 @@
  * kernel slot or service is replaced.
  */
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { MACOS_TITLEBAR_HEIGHT, WINDOWS_CAPTION_CONTROLS_WIDTH, WINDOWS_TITLEBAR_HEIGHT } from '../window-chrome.ts'
 import { isDesktopPrefsHydrated, schedulePersistDesktopPrefs } from './desktop-prefs.ts'
@@ -856,6 +856,7 @@ function ExplorerPanel(props: { state: WorkbenchState }): ReactNode {
   const [previewPath, setPreviewPath] = useState<string | undefined>()
   const [preview, setPreview] = useState<PreviewResponse['preview'] | undefined>()
   const [patch, setPatch] = useState<string | undefined>()
+  const [gitEpoch, setGitEpoch] = useState(0)
   const subscribeLayout = useCallback((listener: () => void) => state.subscribe(listener), [state])
   const readLayout = useCallback(() => state.getSnapshot(), [state])
   const layout = useSyncExternalStore(subscribeLayout, readLayout)
@@ -896,11 +897,19 @@ function ExplorerPanel(props: { state: WorkbenchState }): ReactNode {
       setCwd(workspace)
     }
     let cancelled = false
-    void fetchWorkspaceGit(workspace).then(value => {
-      if (!cancelled) setGit(value)
-    })
-    return () => { cancelled = true }
-  }, [workspace])
+    const pull = (): void => {
+      void fetchWorkspaceGit(workspace).then(value => {
+        if (!cancelled) setGit(value)
+      })
+    }
+    pull()
+    // Keep decorations live while the session edits the workspace under us.
+    const timer = window.setInterval(pull, 5000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [workspace, gitEpoch])
 
   /** Open a file below the list: git-changed files show their diff, others their content. */
   const openFile = useCallback(async (file: string, rel: string | undefined, changed: boolean) => {
@@ -930,6 +939,24 @@ function ExplorerPanel(props: { state: WorkbenchState }): ReactNode {
 
   const segments = cwd !== undefined ? pathSegments(cwd) : []
 
+  // Directories never appear in git status themselves; aggregate descendant
+  // counters per folder so a folder holding changes lights up like its files.
+  const folderChanges = useMemo(() => {
+    const aggregated = new Map<string, GitFileCount>()
+    if (git === undefined) return aggregated
+    for (const [path, count] of git.counts) {
+      const segments = path.split('/')
+      for (let depth = 1; depth < segments.length; depth += 1) {
+        const dir = segments.slice(0, depth).join('/')
+        const existing = aggregated.get(dir)
+        aggregated.set(dir, existing === undefined
+          ? { ...count }
+          : { additions: existing.additions + count.additions, deletions: existing.deletions + count.deletions })
+      }
+    }
+    return aggregated
+  }, [git])
+
   return (
     <div className="hxpWbPanel hxpWbExplorer">
       <div className="hxpWbToolbar">
@@ -942,7 +969,11 @@ function ExplorerPanel(props: { state: WorkbenchState }): ReactNode {
           {HomeIcon}
         </button>
         <button type="button" className="hxpWbToolButton" title={t.refresh} aria-label={t.refresh}
-          disabled={cwd === undefined} onClick={() => { if (cwd !== undefined) void load(cwd) }}>
+          disabled={cwd === undefined}
+          onClick={() => {
+            if (cwd !== undefined) void load(cwd)
+            setGitEpoch(epoch => epoch + 1)
+          }}>
           {RefreshIcon}
         </button>
         <button type="button" className="hxpWbToolButton" title={t.explorerOpen} aria-label={t.explorerOpen}
@@ -967,8 +998,15 @@ function ExplorerPanel(props: { state: WorkbenchState }): ReactNode {
         {entries?.map(entry => {
           const decorated = cwd !== undefined && workspace !== undefined && isWithin(cwd, workspace)
           const relPath = decorated ? relativePosix(workspace, cwd, entry.name) : undefined
-          const kind = relPath !== undefined ? git?.kinds.get(relPath) : undefined
-          const count = relPath !== undefined ? git?.counts.get(relPath) : undefined
+          let kind = relPath !== undefined ? git?.kinds.get(relPath) : undefined
+          let count = relPath !== undefined ? git?.counts.get(relPath) : undefined
+          if (entry.kind === 'directory' && relPath !== undefined) {
+            const aggregated = folderChanges.get(relPath)
+            if (aggregated !== undefined && (aggregated.additions > 0 || aggregated.deletions > 0)) {
+              kind = kind ?? 'modified'
+              count = count ?? aggregated
+            }
+          }
           return (
             <button
               key={entry.name}

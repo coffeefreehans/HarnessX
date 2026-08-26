@@ -579,6 +579,38 @@ describe('routeWorkbench dispatch', () => {
     expect((afterDelete.json() as { branches: Array<{ name: string }> }).branches.map(b => b.name))
       .not.toContain('doomed')
   })
+
+  it('keys status rows workspace-relative when the workspace is a repo subdirectory', async () => {
+    if (!hasGit) return
+    const dir = await makeWorkspace()
+    execSync('git init -q', { cwd: dir })
+    execSync('git config user.email test@example.com', { cwd: dir })
+    execSync('git config user.name test', { cwd: dir })
+    await mkdir(join(dir, 'pkg', 'inner'), { recursive: true })
+    await writeFile(join(dir, 'pkg', 'inner', 'mod.txt'), 'base\n')
+    execSync('git add -A', { cwd: dir })
+    execSync('git commit -q -m init', { cwd: dir })
+    await writeFile(join(dir, 'pkg', 'inner', 'mod.txt'), 'changed\n')
+    await writeFile(join(dir, 'pkg', 'inner', 'fresh.txt'), 'one\n')
+    const captured = jsonResponse()
+    await routeWorkbench({
+      method: 'GET',
+      pathname: '/api/desktop/workbench/git/status',
+      query: new URLSearchParams({ path: join(dir, 'pkg') }),
+      body: undefined,
+      response: captured.response,
+      terminals: new TerminalRegistry(),
+    })
+    const body = JSON.parse(captured.result().body) as {
+      entries: Array<{ path: string }>
+      counts: Record<string, { additions: number; deletions: number }>
+    }
+    // Porcelain paths arrive repo-root-relative ('pkg/inner/...') and must be
+    // reported relative to the queried workspace, with outside rows dropped.
+    expect(body.entries.map(entry => entry.path).sort()).toEqual(['inner/fresh.txt', 'inner/mod.txt'])
+    expect(body.counts['inner/mod.txt']).toEqual({ additions: 1, deletions: 1 })
+    expect(body.counts['inner/fresh.txt']).toEqual({ additions: 1, deletions: 0 })
+  })
 })
 
 describe('plugin registration', () => {
