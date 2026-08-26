@@ -35,7 +35,7 @@ interface Harness {
   /** Native confirmation spy. */
   readonly confirmDownload: ReturnType<typeof vi.fn>
   /** Invoke one settings API and parse its JSON response. */
-  invoke(path: string, method: 'GET' | 'POST'): Promise<{ status: number; body: Record<string, unknown> }>
+  invoke(path: string, method: 'GET' | 'POST', body?: unknown): Promise<{ status: number; body: Record<string, unknown> }>
   /** Dispose the plugin effect. */
   dispose(): Promise<void>
 }
@@ -112,17 +112,24 @@ async function createHarness(options: {
     tray,
     downloadAndOpen,
     confirmDownload,
-    invoke: async (path, method) => {
+    invoke: async (path, method, body) => {
       const handler = routes.get(path)
       if (handler === undefined) throw new Error('route not found: ' + path)
       let status = 0
-      let body = ''
+      let bodyText = ''
       const response = {
         writeHead: (nextStatus: number) => { status = nextStatus },
-        end: (value: string) => { body = value },
+        end: (value: string) => { bodyText = value },
       } as unknown as ServerResponse
-      await handler({ method } as IncomingMessage, response)
-      return { status, body: JSON.parse(body) as Record<string, unknown> }
+      const request = {
+        method,
+        on: (event: string, listener: (value?: Buffer) => void) => {
+          if (event === 'data') listener(Buffer.from(JSON.stringify(body ?? {})))
+          if (event === 'end') listener()
+        },
+      } as unknown as IncomingMessage
+      await handler(request, response)
+      return { status, body: JSON.parse(bodyText) as Record<string, unknown> }
     },
     dispose: async () => {
       await disposeEffect?.()
@@ -135,6 +142,7 @@ const temporaryRoots: string[] = []
 
 afterEach(async () => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
   await Promise.all(temporaryRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
 })
 
@@ -217,6 +225,71 @@ describe('desktop update Host plugin', () => {
         error: '无法检查更新，请稍后重试。',
       },
     })
+    await harness.dispose()
+  })
+
+  it('relays validated feedback to the maintainer mailbox without exposing it', async () => {
+    const relay = vi.fn(async () => Response.json({ success: 'true' }))
+    vi.stubGlobal('fetch', relay)
+    const harness = await createHarness()
+    const response = await harness.invoke('/api/desktop/updates/feedback', 'POST', {
+      email: 'user@example.com',
+      subject: '闪退',
+      message: '打开设置时闪退了。',
+    })
+    expect(response).toEqual({ status: 200, body: { ok: true } })
+    expect(relay).toHaveBeenCalledTimes(1)
+    const [url, init] = relay.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('https://formsubmit.co/ajax/coffeefreehans@gmail.com')
+    const payload = JSON.parse(String(init.body)) as Record<string, unknown>
+    expect(payload).toMatchObject({
+      _subject: '[HarnessX] 闪退',
+      email: 'user@example.com',
+      message: '打开设置时闪退了。',
+    })
+    await harness.dispose()
+  })
+
+  it('rejects incomplete feedback without touching the relay', async () => {
+    const relay = vi.fn(async () => Response.json({ success: 'true' }))
+    vi.stubGlobal('fetch', relay)
+    const harness = await createHarness()
+    const response = await harness.invoke('/api/desktop/updates/feedback', 'POST', {
+      email: 'not-an-email',
+      subject: '',
+      message: '内容',
+    })
+    expect(response.status).toBe(409)
+    expect(response.body.error).toBe('请填写有效的邮箱、标题和内容。')
+    expect(relay).not.toHaveBeenCalled()
+    await harness.dispose()
+  })
+
+  it('maps relay failures to a safe message that hides the destination', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ success: 'false' })))
+    const harness = await createHarness()
+    const response = await harness.invoke('/api/desktop/updates/feedback', 'POST', {
+      email: 'user@example.com',
+      subject: '标题',
+      message: '内容',
+    })
+    expect(response.status).toBe(409)
+    expect(response.body.error).toBe('反馈发送失败，请稍后重试。')
+    expect(JSON.stringify(response.body)).not.toContain('gmail')
+    await harness.dispose()
+  })
+
+  it('rejects feedback without the per-launch local API session', async () => {
+    const relay = vi.fn(async () => Response.json({ success: 'true' }))
+    vi.stubGlobal('fetch', relay)
+    const harness = await createHarness({ authorized: false })
+    const response = await harness.invoke('/api/desktop/updates/feedback', 'POST', {
+      email: 'user@example.com',
+      subject: '标题',
+      message: '内容',
+    })
+    expect(response).toEqual({ status: 401, body: { error: 'unauthorized' } })
+    expect(relay).not.toHaveBeenCalled()
     await harness.dispose()
   })
 })

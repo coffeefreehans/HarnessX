@@ -20,7 +20,16 @@ export const inject = ['desktopRuntime', 'webServer']
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647
 const MAX_STATE_BYTES = 4 * 1024
+const MAX_FEEDBACK_BODY_BYTES = 64 * 1024
 const UPDATE_ROUTE = '/api/desktop/updates'
+
+/**
+ * Relay that forwards user feedback to the maintainer mailbox. The address
+ * lives here on the Host side only and is never sent to the renderer.
+ */
+const FEEDBACK_ENDPOINT = 'https://formsubmit.co/ajax/coffeefreehans@gmail.com'
+const FEEDBACK_INVALID = '请填写有效的邮箱、标题和内容。'
+const FEEDBACK_FAILED = '反馈发送失败，请稍后重试。'
 
 /** Scheduled update policy. */
 export interface Config {
@@ -340,6 +349,26 @@ export function apply(ctx: Context, config: Config): void {
     const disposeStatus = registerApi(UPDATE_ROUTE + '/status', 'GET', snapshot)
     const disposeCheck = registerApi(UPDATE_ROUTE + '/check', 'POST', runSettingsCheck)
     const disposeDownload = registerApi(UPDATE_ROUTE + '/download', 'POST', runSettingsDownload)
+    const disposeFeedback = ctx.webServer.register({
+      kind: 'exact',
+      path: UPDATE_ROUTE + '/feedback',
+      handler: async (request: IncomingMessage, response: ServerResponse) => {
+        if (!ctx.desktopRuntime.authorizeLocalApiRequest(request)) {
+          sendJson(response, 401, { error: 'unauthorized' })
+          return
+        }
+        if (request.method !== 'POST') {
+          sendJson(response, 405, { error: 'method not allowed' })
+          return
+        }
+        try {
+          await deliverFeedback(await readJsonBody(request), config.requestTimeoutMs)
+          sendJson(response, 200, { ok: true })
+        } catch (cause) {
+          sendJson(response, 409, { error: errorMessage(cause) })
+        }
+      },
+    })
 
     const isZh = (process.env.LANG ?? process.env.LC_ALL ?? '').toLowerCase().startsWith('zh')
       || Intl.DateTimeFormat().resolvedOptions().locale.toLowerCase().startsWith('zh')
@@ -369,6 +398,7 @@ export function apply(ctx: Context, config: Config): void {
       disposeStatus()
       disposeCheck()
       disposeDownload()
+      disposeFeedback()
       registration.dispose()
       const pending: Promise<unknown>[] = [stateReady]
       if (inFlight !== undefined) pending.push(inFlight)
@@ -409,6 +439,65 @@ function renderState(state: UpdateStateV2): string {
 function sendJson(response: ServerResponse, status: number, value: unknown): void {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
   response.end(JSON.stringify(value))
+}
+
+function readJsonBody(request: IncomingMessage): Promise<unknown> {
+  return new Promise((resolveBody, reject) => {
+    const chunks: Buffer[] = []
+    let received = 0
+    request.on('data', (chunk: Buffer) => {
+      received += chunk.length
+      if (received > MAX_FEEDBACK_BODY_BYTES) {
+        reject(new Error(FEEDBACK_INVALID))
+        request.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+    request.on('end', () => {
+      try {
+        resolveBody(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+      } catch {
+        reject(new Error(FEEDBACK_INVALID))
+      }
+    })
+    request.on('error', cause => reject(cause instanceof Error ? cause : new Error(String(cause))))
+  })
+}
+
+/**
+ * Validate a feedback submission and relay it to the maintainer mailbox.
+ * @param value - raw request body carrying email, subject, and message.
+ * @param timeoutMs - relay request budget before caller-visible failure.
+ * @throws with a safe user-facing message on invalid input or relay failure.
+ */
+async function deliverFeedback(value: unknown, timeoutMs: number): Promise<void> {
+  if (!isRecord(value)) throw new Error(FEEDBACK_INVALID)
+  const email = typeof value.email === 'string' ? value.email.trim() : ''
+  const subject = typeof value.subject === 'string' ? value.subject.trim() : ''
+  const message = typeof value.message === 'string' ? value.message.trim() : ''
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || subject.length === 0 || message.length === 0) {
+    throw new Error(FEEDBACK_INVALID)
+  }
+  let success: unknown
+  try {
+    const response = await fetch(FEEDBACK_ENDPOINT, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({
+        _captcha: 'false',
+        _subject: '[HarnessX] ' + subject.slice(0, 200),
+        _template: 'table',
+        email,
+        message: message.slice(0, 20000),
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    success = (await response.json() as { success?: unknown }).success
+  } catch {
+    throw new Error(FEEDBACK_FAILED)
+  }
+  if (success !== 'true' && success !== true) throw new Error(FEEDBACK_FAILED)
 }
 
 function errorMessage(cause: unknown): string {
