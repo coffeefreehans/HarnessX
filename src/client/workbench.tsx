@@ -38,6 +38,7 @@ interface WorkbenchStrings {
   parentDirectory: string
   workspaceRoot: string
   refresh: string
+  explorerOpen: string
   nameColumn: string
   sizeColumn: string
   previewUnavailable: string
@@ -98,6 +99,7 @@ const STRINGS_ZH: WorkbenchStrings = {
   parentDirectory: '上一级目录',
   workspaceRoot: '回到工作区根目录',
   refresh: '刷新',
+  explorerOpen: '打开工作区文件夹',
   nameColumn: '名称',
   sizeColumn: '大小',
   previewUnavailable: '无法读取该文件。',
@@ -158,6 +160,7 @@ const STRINGS_EN: WorkbenchStrings = {
   parentDirectory: 'Parent directory',
   workspaceRoot: 'Workspace root',
   refresh: 'Refresh',
+  explorerOpen: 'Open the workspace folder',
   nameColumn: 'Name',
   sizeColumn: 'Size',
   previewUnavailable: 'This file cannot be read.',
@@ -239,6 +242,13 @@ function Icon(props: { children: ReactNode }): ReactNode {
 const FolderIcon = (
   <Icon>
     <path d="M2 4.5a1 1 0 0 1 1-1h3.2l1.6 1.8H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1Z" />
+  </Icon>
+)
+
+const FolderOpenIcon = (
+  <Icon>
+    <path d="M13.5 6.7V6a1 1 0 0 0-1-1H7.8L6.2 3.2H3a1 1 0 0 0-1 1V12" />
+    <path d="m2.4 12.9 1.6-3.8a1 1 0 0 1 .92-.6h8.9c.48 0 .81.47.66.92l-.94 2.88a1 1 0 0 1-.95.7H3.14a.8.8 0 0 1-.74-1.1z" />
   </Icon>
 )
 
@@ -904,8 +914,16 @@ function ExplorerPanel(props: { state: WorkbenchState }): ReactNode {
           {HomeIcon}
         </button>
         <button type="button" className="hxpWbToolButton" title={t.refresh} aria-label={t.refresh}
-          disabled={cwd === undefined} onClick={() => { void load(cwd) }}>
+          disabled={cwd === undefined} onClick={() => { if (cwd !== undefined) void load(cwd) }}>
           {RefreshIcon}
+        </button>
+        <button type="button" className="hxpWbToolButton" title={t.explorerOpen} aria-label={t.explorerOpen}
+          disabled={workspace === undefined}
+          onClick={() => {
+            if (workspace === undefined) return
+            workbenchApi?.host.openPath({ path: workspace }).catch(() => undefined)
+          }}>
+          {FolderOpenIcon}
         </button>
       </div>
       <div className="hxpWbBreadcrumb">
@@ -1679,6 +1697,9 @@ export interface WorkbenchWireApi {
     history(payload: { sessionId: string }): Promise<{
       result: { events: Array<Record<string, unknown>>; hasMore: boolean }
     }>
+  }
+  host: {
+    openPath(payload: { path: string }): Promise<{ result: { opened: true } }>
   }
 }
 
