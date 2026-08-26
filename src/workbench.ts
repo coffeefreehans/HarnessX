@@ -7,7 +7,7 @@
  * kernel service is touched.
  */
 
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { readdir, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { homedir } from 'node:os'
@@ -436,7 +436,7 @@ async function readGitPatch(cwd: string, rel: string): Promise<string> {
 }
 
 /** Spawn function shape so tests can substitute a fake shell process. */
-export type TerminalSpawner = (shell: string, args: readonly string[], cwd: string | undefined) => Pick<ChildProcess, 'stdin' | 'stdout'> & Partial<Pick<ChildProcess, 'pid'>> & {
+export type TerminalSpawner = (shell: string, args: readonly string[], cwd: string | undefined) => Pick<ChildProcess, 'stdin' | 'stdout' | 'stderr'> & Partial<Pick<ChildProcess, 'pid'>> & {
   killed: boolean
   kill(): boolean
   exitCode: number | null
@@ -471,12 +471,50 @@ function defaultShellCommand(): { shell: string; args: string[] } {
   return { shell: process.env.SHELL ?? '/bin/bash', args: [] }
 }
 
+let cachedTerminalEncoding: string | undefined
+
+/** WHATWG decoder label for a Windows console output code page. */
+export function windowsCodePageDecoderLabel(codePage: number): string {
+  if (codePage === 65001) return 'utf-8'
+  if (codePage === 936) return 'gbk'
+  if (codePage === 950) return 'big5'
+  if (codePage === 932) return 'shift_jis'
+  if (codePage === 949) return 'euc-kr'
+  if (codePage === 866) return 'ibm866'
+  if (codePage === 874) return 'windows-874'
+  return 'windows-1252'
+}
+
+/**
+ * Decoding label for piped shell output. Windows consoles emit the active
+ * code page (GBK on zh-CN), never UTF-8, so raw UTF-8 decoding garbles every
+ * localized byte. Probed once through `chcp`; digits survive any locale.
+ * @returns a WHATWG label understood by TextDecoder.
+ */
+export function resolveTerminalEncoding(): string {
+  if (cachedTerminalEncoding !== undefined) return cachedTerminalEncoding
+  cachedTerminalEncoding = 'utf-8'
+  if (process.platform === 'win32') {
+    try {
+      const raw = execFileSync('chcp.com', [], { timeout: 3000, windowsHide: true }).toString('utf8')
+      const match = /(\d+)\s*\.?\s*$/.exec(raw.trim())
+      if (match?.[1] !== undefined) cachedTerminalEncoding = windowsCodePageDecoderLabel(Number(match[1]))
+    } catch {
+      // Without the console tooling, UTF-8 remains the safe default.
+    }
+  }
+  return cachedTerminalEncoding
+}
+
 /** Owns live terminal sessions with bounded ring-buffered output. */
 export class TerminalRegistry {
   private readonly sessions = new Map<string, TerminalSession>()
   private nextId = 1
 
-  constructor(private readonly spawner: TerminalSpawner = defaultTerminalSpawner) {}
+  constructor(
+    private readonly spawner: TerminalSpawner = defaultTerminalSpawner,
+    private readonly encoding: string = resolveTerminalEncoding(),
+  ) {}
 
   /** @returns currently live session descriptors. */
   list(): Array<{ id: string; cwd: string; exited: boolean }> {
@@ -499,17 +537,24 @@ export class TerminalRegistry {
     const session: TerminalSession = { id, cwd, chunks: [], nextSeq: 1, bytes: 0, exited: false, process }
     this.sessions.set(id, session)
     const push = (text: string): void => this.append(session, text)
+    // The console code page carries the shell's bytes; stream-decode so a
+    // multi-byte character split across read events still renders whole.
+    const decoder = new TextDecoder(this.encoding)
+    const decode = (chunk: Buffer | string): string => (typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true }))
     const stdout = process.stdout
     if (stdout !== null && stdout !== undefined) {
-      stdout.on('data', (chunk: Buffer | string) => {
-        push(typeof chunk === 'string' ? chunk : chunk.toString('utf8'))
-      })
+      stdout.on('data', (chunk: Buffer | string) => { push(decode(chunk)) })
+    }
+    const stderr = process.stderr
+    if (stderr !== null && stderr !== undefined) {
+      stderr.on('data', (chunk: Buffer | string) => { push(decode(chunk)) })
     }
     process.on('error', cause => {
       push(`\r\n[harnessx] failed to start shell: ${cause instanceof Error ? cause.message : String(cause)}\r\n`)
       session.exited = true
     })
     process.on('close', code => {
+      push(decoder.decode())
       push(`\r\n[harnessx] shell exited with code ${String(code)}\r\n`)
       session.exited = true
     })

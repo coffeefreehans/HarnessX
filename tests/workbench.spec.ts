@@ -22,6 +22,7 @@ import {
   routeWorkbench,
   summarizeNumstat,
   TerminalRegistry,
+  windowsCodePageDecoderLabel,
   type TerminalSpawner,
 } from '../src/workbench.ts'
 
@@ -182,14 +183,14 @@ describe('path and parsing helpers', () => {
 describe('TerminalRegistry with a fake spawner', () => {
   interface FakeProcess {
     stdinWrites: string[]
-    emitData(chunk: string): void
+    emitData(chunk: string | Buffer): void
     emitClose(code: number | null): void
     emitError(cause: Error): void
     killed: boolean
   }
 
   /** Build a registry whose shells are controllable fakes. */
-  function makeHarness(): { registry: TerminalRegistry; processes: FakeProcess[] } {
+  function makeHarness(encoding?: string): { registry: TerminalRegistry; processes: FakeProcess[] } {
     const processes: FakeProcess[] = []
     const spawner = (_shell: string, _args: readonly string[], _cwd: string | undefined) => {
       const dataListeners: Array<(chunk: Buffer | string) => void> = []
@@ -225,7 +226,12 @@ describe('TerminalRegistry with a fake spawner', () => {
       processes.push(fake)
       return process as unknown as ReturnType<TerminalSpawner>
     }
-    return { registry: new TerminalRegistry(spawner as ConstructorParameters<typeof TerminalRegistry>[0]), processes }
+    return {
+      registry: encoding === undefined
+        ? new TerminalRegistry(spawner as ConstructorParameters<typeof TerminalRegistry>[0])
+        : new TerminalRegistry(spawner as ConstructorParameters<typeof TerminalRegistry>[0], encoding),
+      processes,
+    }
   }
 
   it('drains output chunks by sequence and reports exit', () => {
@@ -264,6 +270,27 @@ describe('TerminalRegistry with a fake spawner', () => {
     const output = registry.output(session.id, 0)
     expect(output.exited).toBe(true)
     expect(output.chunks.map(chunk => chunk.text).join('')).toContain('no such shell')
+  })
+
+  it('decodes console-code-page bytes split across chunks (GBK)', () => {
+    const { registry, processes } = makeHarness('gbk')
+    const session = registry.start('/tmp')
+    const shell = processes[0]
+    // "你好" in GBK; the two characters arrive in separate read events.
+    shell?.emitData(Buffer.from([0xc4, 0xe3]))
+    shell?.emitData(Buffer.from([0xba, 0xc3]))
+    const output = registry.output(session.id, 0)
+    expect(output.chunks.map(chunk => chunk.text).join('')).toBe('你好')
+  })
+
+  it('maps console code pages to decoder labels', () => {
+    expect(windowsCodePageDecoderLabel(65001)).toBe('utf-8')
+    expect(windowsCodePageDecoderLabel(936)).toBe('gbk')
+    expect(windowsCodePageDecoderLabel(950)).toBe('big5')
+    expect(windowsCodePageDecoderLabel(932)).toBe('shift_jis')
+    expect(windowsCodePageDecoderLabel(949)).toBe('euc-kr')
+    expect(windowsCodePageDecoderLabel(866)).toBe('ibm866')
+    expect(windowsCodePageDecoderLabel(1252)).toBe('windows-1252')
   })
 
   it('kills sessions individually and on disposeAll', () => {
