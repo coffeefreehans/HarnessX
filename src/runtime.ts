@@ -169,6 +169,13 @@ export interface DesktopRuntime {
   show(): void
 
   /**
+   * Open one auxiliary chat window loading the same advanced shell as the
+   * main window. Windows are independent of the tray lifecycle and close
+   * like ordinary windows.
+   */
+  openAssistantWindow(): Promise<void>
+
+  /**
    * Contribute one command to the native tray for the current Cordis lifetime.
    * @param item - dynamic label, state, and invocation owned by the caller.
    * @returns a refreshable, idempotent registration handle.

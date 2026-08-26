@@ -66,6 +66,9 @@ export function advancedWindowOptions(
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
+      // The advanced shell's workbench browser tab embeds guest pages through
+      // the <webview> tag; guests keep the sandboxed defaults.
+      webviewTag: true,
     },
   }
   if (platform === 'darwin') {

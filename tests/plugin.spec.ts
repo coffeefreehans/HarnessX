@@ -64,6 +64,7 @@ function createHarness(platform: DesktopRuntime['platform'] = 'darwin'): PluginH
     },
     mountScheduled: async () => {},
     show: () => {},
+    openAssistantWindow: async () => {},
     registerTrayItem: () => ({ refresh: () => {}, dispose: () => {} }),
     openTerminal: () => {},
     setThemeSource,

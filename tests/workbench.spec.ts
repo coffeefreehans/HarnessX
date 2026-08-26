@@ -1,0 +1,512 @@
+import { execSync } from 'node:child_process'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { describe, expect, it, vi } from 'vitest'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { Context } from '@deepseek-ai/cordis'
+import {
+  apply,
+  listDirectory,
+  mergeNumstat,
+  parseGitBranches,
+  parseGitLog,
+  parseGitStatus,
+  parseNumstat,
+  readPreview,
+  requireAbsolutePath,
+  routeWorkbench,
+  summarizeNumstat,
+  TerminalRegistry,
+  type TerminalSpawner,
+} from '../src/workbench.ts'
+
+function jsonResponse(): { response: ServerResponse; result: () => { status: number; body: string } } {
+  const capture = { status: 0, body: '' }
+  const response = {
+    writeHead: vi.fn((status: number) => { capture.status = status }),
+    end: vi.fn((body?: string) => { capture.body = body ?? '' }),
+  } as unknown as ServerResponse
+  return { response, result: () => capture }
+}
+
+function getRequest(pathname: string): IncomingMessage {
+  return { method: 'GET', url: `http://127.0.0.1${pathname}`, headers: {} } as unknown as IncomingMessage
+}
+
+const hasGit = (() => {
+  try {
+    execSync('git --version', { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+})()
+
+async function makeWorkspace(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'workbench-'))
+  await writeFile(join(dir, 'hello.txt'), 'hello workbench')
+  await mkdir(join(dir, 'sub'), { recursive: true })
+  return dir
+}
+
+describe('path and parsing helpers', () => {
+  it('requireAbsolutePath accepts only absolute path strings', () => {
+    expect(requireAbsolutePath(join('D:\\', 'x', 'y'))).toBe(resolve('D:\\', 'x', 'y'))
+    expect(requireAbsolutePath('/tmp/x')).toBe(resolve('/tmp/x'))
+    expect(() => requireAbsolutePath('relative/path')).toThrow('absolute path')
+    expect(() => requireAbsolutePath('D:\\x\0y')).toThrow('absolute path')
+    expect(() => requireAbsolutePath(42)).toThrow('absolute path')
+  })
+
+  it('listDirectory sorts directories before files', async () => {
+    const dir = await makeWorkspace()
+    const entries = await listDirectory(dir)
+    expect(entries.map(entry => entry.name)).toEqual(['sub', 'hello.txt'])
+    expect(entries[0]?.kind).toBe('directory')
+    expect(entries[1]?.kind).toBe('file')
+  })
+
+  it('readPreview returns bounded text', async () => {
+    const dir = await makeWorkspace()
+    const preview = await readPreview(join(dir, 'hello.txt'))
+    expect(preview.text).toBe('hello workbench')
+    expect(preview.truncated).toBe(false)
+    expect(preview.binary).toBe(false)
+
+    await writeFile(join(dir, 'blob.bin'), Buffer.from([0x00, 0x01, 0x02]))
+    const binary = await readPreview(join(dir, 'blob.bin'))
+    expect(binary.binary).toBe(true)
+    expect(binary.text).toBe('')
+  })
+
+  it('parseGitStatus reads the v2 branch header, renames, and untracked rows', () => {
+    const status = parseGitStatus([
+      '# branch.oid abc123',
+      '# branch.head main',
+      '# branch.ab +2 -1',
+      '1 A. N... 000000 000000 1234567 0000000 1234567 src/a.ts',
+      '2 R. N... 100644 100644 100644 oldsha newsha R100 space in name.ts\told name.ts',
+      '? notes.md',
+      '',
+    ].join('\n'))
+
+    expect(status.branch).toBe('main')
+    expect(status.ahead).toBe(2)
+    expect(status.behind).toBe(1)
+    expect(status.entries).toEqual([
+      { x: 'A', y: ' ', path: 'src/a.ts' },
+      { x: 'R', y: ' ', path: 'space in name.ts', origPath: 'old name.ts' },
+      { x: '?', y: '?', path: 'notes.md' },
+    ])
+  })
+
+  it('parseGitLog splits unit/record separators into rows', () => {
+    const log = parseGitLog(['h1\x1ffirst\x1fann\x1f1700000000\x1e', '', 'h2\x1fsecond\x1fbob\x1f1700000100\x1e', ''].join('\n'))
+    expect(log).toEqual([
+      { abbrev: 'h1', subject: 'first', author: 'ann', time: 1700000000 },
+      { abbrev: 'h2', subject: 'second', author: 'bob', time: 1700000100 },
+    ])
+  })
+
+  it('summarizeNumstat treats binary dashes as zero', () => {
+    const summary = summarizeNumstat(['10\t2\ta.ts', '-\t-\tb.png', ''].join('\n'))
+    expect(summary).toEqual({ files: 2, additions: 10, deletions: 2 })
+  })
+
+  it('parseNumstat keys renames by destination and keeps binary rows as zero', () => {
+    const counts = parseNumstat([
+      '10\t2\tsrc/a.ts',
+      '-\t-\timg.png',
+      '3\t1\told.ts => new.ts',
+      '4\t0\tnested/{old => new}/deep.ts',
+      '',
+    ].join('\n'))
+    expect(counts.get('src/a.ts')).toEqual({ additions: 10, deletions: 2 })
+    expect(counts.get('img.png')).toEqual({ additions: 0, deletions: 0 })
+    expect(counts.get('new.ts')).toEqual({ additions: 3, deletions: 1 })
+    expect(counts.get('nested/new/deep.ts')).toEqual({ additions: 4, deletions: 0 })
+  })
+
+  it('mergeNumstat sums counters for files present on both sides', () => {
+    const merged = mergeNumstat(
+      new Map([['a.ts', { additions: 10, deletions: 2 }], ['b.ts', { additions: 1, deletions: 0 }]]),
+      new Map([['a.ts', { additions: 5, deletions: 1 }]]),
+    )
+    expect(merged['a.ts']).toEqual({ additions: 15, deletions: 3 })
+    expect(merged['b.ts']).toEqual({ additions: 1, deletions: 0 })
+  })
+
+  it('parseGitBranches marks the checked-out branch', () => {
+    expect(parseGitBranches(['main\t*', 'feature/x\t ', ''].join('\n'))).toEqual([
+      { name: 'main', current: true },
+      { name: 'feature/x', current: false },
+    ])
+  })
+})
+
+describe('TerminalRegistry with a fake spawner', () => {
+  interface FakeProcess {
+    stdinWrites: string[]
+    emitData(chunk: string): void
+    emitClose(code: number | null): void
+    emitError(cause: Error): void
+    killed: boolean
+  }
+
+  /** Build a registry whose shells are controllable fakes. */
+  function makeHarness(): { registry: TerminalRegistry; processes: FakeProcess[] } {
+    const processes: FakeProcess[] = []
+    const spawner = (_shell: string, _args: readonly string[], _cwd: string | undefined) => {
+      const dataListeners: Array<(chunk: Buffer | string) => void> = []
+      const closeListeners: Array<(code: number | null) => void> = []
+      const errorListeners: Array<(cause: Error) => void> = []
+      const writes: string[] = []
+      let killed = false
+      const process = {
+        stdin: { write: (data: string): void => { writes.push(data) } },
+        stdout: {
+          on: (event: 'data', listener: (chunk: Buffer | string) => void): void => {
+            if (event === 'data') dataListeners.push(listener)
+          },
+          emit: (chunk: string): void => { for (const listener of dataListeners) listener(chunk) },
+        },
+        get killed(): boolean { return killed },
+        kill: (): boolean => {
+          killed = true
+          for (const listener of closeListeners) listener(null)
+          return true
+        },
+        exitCode: null,
+        on: (event: 'error' | 'close', listener: never): void => {
+          if (event === 'error') errorListeners.push(listener as unknown as (cause: Error) => void)
+          else closeListeners.push(listener as unknown as (code: number | null) => void)
+        },
+      }
+      const fake = process as unknown as FakeProcess & typeof process
+      fake.stdinWrites = writes
+      fake.emitData = process.stdout.emit
+      fake.emitClose = code => { for (const listener of closeListeners) listener(code) }
+      fake.emitError = cause => { for (const listener of errorListeners) listener(cause) }
+      processes.push(fake)
+      return process as unknown as ReturnType<TerminalSpawner>
+    }
+    return { registry: new TerminalRegistry(spawner as ConstructorParameters<typeof TerminalRegistry>[0]), processes }
+  }
+
+  it('drains output chunks by sequence and reports exit', () => {
+    const { registry, processes } = makeHarness()
+    const session = registry.start('/tmp')
+    expect(registry.list()).toEqual([{ id: session.id, cwd: '/tmp', exited: false }])
+    expect(session.exited).toBe(false)
+
+    // Writes gain a trailing newline.
+    registry.write(session.id, 'echo hi')
+
+    const shell = processes[0]
+    expect(shell?.stdinWrites).toEqual(['echo hi\n'])
+
+    shell?.emitData('hello ')
+    shell?.emitData('world\n')
+    const all = registry.output(session.id, 0)
+    expect(all.chunks.map(chunk => chunk.text).join('')).toBe('hello world\n')
+    expect(all.exited).toBe(false)
+
+    // after=<latest> returns only fresher chunks.
+    shell?.emitData('more\n')
+    const fresh = registry.output(session.id, all.latest)
+    expect(fresh.chunks.map(chunk => chunk.text).join('')).toBe('more\n')
+    expect(fresh.latest).toBeGreaterThan(all.latest)
+
+    shell?.emitClose(0)
+    expect(registry.output(session.id, 0).exited).toBe(true)
+    expect(() => registry.write(session.id, 'again')).toThrow('exited')
+  })
+
+  it('surfaces spawn failures as transcript text and an exited flag', () => {
+    const { registry, processes } = makeHarness()
+    const session = registry.start('/tmp')
+    processes[0]?.emitError(new Error('no such shell'))
+    const output = registry.output(session.id, 0)
+    expect(output.exited).toBe(true)
+    expect(output.chunks.map(chunk => chunk.text).join('')).toContain('no such shell')
+  })
+
+  it('kills sessions individually and on disposeAll', () => {
+    const { registry, processes } = makeHarness()
+    const first = registry.start('/tmp')
+    const second = registry.start('/tmp')
+    expect(second.id).not.toBe(first.id)
+
+    registry.kill(first.id)
+    expect(processes[0]?.killed).toBe(true)
+    expect(processes[1]?.killed).toBe(false)
+    expect(() => registry.output(first.id, 0)).toThrow('unknown terminal session')
+
+    registry.kill(first.id) // idempotent
+    registry.disposeAll()
+    expect(processes[1]?.killed).toBe(true)
+    expect(registry.list()).toEqual([])
+  })
+
+  it('caps concurrent sessions', () => {
+    const { registry } = makeHarness()
+    for (let index = 0; index < 8; index += 1) registry.start('/tmp')
+    expect(() => registry.start('/tmp')).toThrow('at most 8')
+  })
+
+  it('routes the terminal lifecycle over HTTP against the real shell', async () => {
+    const real = new TerminalRegistry()
+    const started = jsonResponse()
+    await routeWorkbench({
+      method: 'POST',
+      pathname: '/api/desktop/workbench/term/start',
+      query: new URLSearchParams(),
+      body: {},
+      response: started.response,
+      terminals: real,
+    })
+    expect(started.result().status).toBe(200)
+    const id = (JSON.parse(started.result().body) as { id: string }).id
+
+    await routeWorkbench({
+      method: 'POST',
+      pathname: '/api/desktop/workbench/term/write',
+      query: new URLSearchParams(),
+      body: { id, data: 'exit\r\n' },
+      response: jsonResponse().response,
+      terminals: real,
+    })
+
+    // Wait briefly for the shell to exit so the poll observes liveness flips.
+    await new Promise(resolve => setTimeout(resolve, 400))
+    const polled = jsonResponse()
+    await routeWorkbench({
+      method: 'GET',
+      pathname: '/api/desktop/workbench/term/output',
+      query: new URLSearchParams({ id }),
+      body: undefined,
+      response: polled.response,
+      terminals: real,
+    })
+    const payload = JSON.parse(polled.result().body) as { exited: boolean; latest: number }
+    expect(payload.exited).toBe(true)
+    expect(payload.latest).toBeGreaterThan(0)
+    real.disposeAll()
+  })
+})
+
+describe('routeWorkbench dispatch', () => {
+  it('answers meta, fs listing, and 404 for unknown subroutes', async () => {
+    const terminals = new TerminalRegistry()
+
+    const meta = jsonResponse()
+    await routeWorkbench({ method: 'GET', pathname: '/api/desktop/workbench/meta', query: new URLSearchParams(), body: undefined, response: meta.response, terminals })
+    expect(meta.result().status).toBe(200)
+    const metaBody = JSON.parse(meta.result().body) as { platform: string; home: string; sep: string }
+    expect(metaBody.platform).toBe(process.platform)
+    expect(metaBody.home.length).toBeGreaterThan(0)
+    expect(['/','\\']).toContain(metaBody.sep)
+
+    const dir = await makeWorkspace()
+    const fs = jsonResponse()
+    await routeWorkbench({
+      method: 'GET',
+      pathname: '/api/desktop/workbench/fs',
+      query: new URLSearchParams({ path: dir }),
+      body: undefined,
+      response: fs.response,
+      terminals,
+    })
+    expect(fs.result().status).toBe(200)
+    const fsBody = JSON.parse(fs.result().body) as { entries: Array<{ name: string }> }
+    expect(fsBody.entries.map(entry => entry.name)).toEqual(['sub', 'hello.txt'])
+
+    const missing = jsonResponse()
+    await routeWorkbench({
+      method: 'GET',
+      pathname: '/api/desktop/workbench/nothing',
+      query: new URLSearchParams(),
+      body: undefined,
+      response: missing.response,
+      terminals,
+    })
+    expect(missing.result().status).toBe(404)
+
+    const badPath = jsonResponse()
+    await expect(routeWorkbench({
+      method: 'GET',
+      pathname: '/api/desktop/workbench/fs',
+      query: new URLSearchParams({ path: 'nope' }),
+      body: undefined,
+      response: badPath.response,
+      terminals,
+    })).rejects.toThrow('an absolute path is required')
+    // The router stays pure: nothing was written for a rejected request.
+    expect(badPath.result().status).toBe(0)
+  })
+
+  it('reports the host workspace and only opens aux windows when supported', async () => {
+    const terminals = new TerminalRegistry()
+
+    const present = jsonResponse()
+    await routeWorkbench({
+      method: 'GET',
+      pathname: '/api/desktop/workbench/workspace',
+      query: new URLSearchParams(),
+      body: undefined,
+      response: present.response,
+      terminals,
+      workspace: () => join('D:\\', 'code'),
+    })
+    expect(present.result().status).toBe(200)
+    expect(JSON.parse(present.result().body)).toEqual({ path: resolve('D:\\', 'code') })
+
+    const absent = jsonResponse()
+    await routeWorkbench({
+      method: 'GET',
+      pathname: '/api/desktop/workbench/workspace',
+      query: new URLSearchParams(),
+      body: undefined,
+      response: absent.response,
+      terminals,
+      workspace: () => undefined,
+    })
+    expect(absent.result().status).toBe(200)
+    expect(JSON.parse(absent.result().body)).toEqual({})
+
+    const opened: string[] = []
+    const aux = jsonResponse()
+    await routeWorkbench({
+      method: 'POST',
+      pathname: '/api/desktop/workbench/aux',
+      query: new URLSearchParams(),
+      body: {},
+      response: aux.response,
+      terminals,
+      openAssistant: async () => { opened.push('aux') },
+    })
+    expect(aux.result().status).toBe(200)
+    expect(opened).toEqual(['aux'])
+
+    const unsupported = jsonResponse()
+    await expect(routeWorkbench({
+      method: 'POST',
+      pathname: '/api/desktop/workbench/aux',
+      query: new URLSearchParams(),
+      body: {},
+      response: unsupported.response,
+      terminals,
+    })).rejects.toThrow('assistant windows are unavailable')
+    expect(unsupported.result().status).toBe(0)
+  })
+
+  it('runs a full git cycle against a scratch repository', async () => {
+    if (!hasGit) return
+    const dir = await makeWorkspace()
+    execSync('git init -q', { cwd: dir })
+    execSync('git config user.email test@example.com', { cwd: dir })
+    execSync('git config user.name test', { cwd: dir })
+    execSync('git add -A', { cwd: dir })
+    execSync('git commit -q -m init', { cwd: dir })
+    await writeFile(join(dir, 'tracked.txt'), 'one\n')
+    const terminals = new TerminalRegistry()
+    const call = async (method: 'GET' | 'POST', subroute: string, body?: unknown): Promise<{ status: number; json: () => any }> => {
+      const captured = jsonResponse()
+      await routeWorkbench({
+        method,
+        pathname: `/api/desktop/workbench/git/${subroute}`,
+        query: method === 'GET' ? new URLSearchParams({ path: dir }) : new URLSearchParams(),
+        ...(method === 'POST' ? { body } : { body: undefined }),
+        response: captured.response,
+        terminals,
+      })
+      const result = captured.result()
+      return { status: result.status, json: () => JSON.parse(result.body) }
+    }
+
+    const staged = await call('POST', 'stage', { cwd: dir, paths: ['tracked.txt'] })
+    expect(staged.status).toBe(200)
+
+    const status = await call('GET', 'status')
+    expect(status.status).toBe(200)
+    const statusBody = status.json() as { entries: Array<{ x: string; path: string }> }
+    expect(statusBody.entries[0]).toMatchObject({ x: 'A', path: 'tracked.txt' })
+
+    const committed = await call('POST', 'commit', { cwd: dir, message: 'add tracked file' })
+    expect(committed.status).toBe(200)
+
+    const clean = await call('GET', 'status')
+    const cleanBody = clean.json() as { entries: unknown[]; branch?: string }
+    expect(cleanBody.entries).toEqual([])
+    expect(typeof cleanBody.branch).toBe('string')
+
+    const log = await call('GET', 'log')
+    const logBody = log.json() as { entries: Array<{ subject: string }> }
+    expect(logBody.entries.map(entry => entry.subject)).toContain('add tracked file')
+
+    const diff = await call('GET', 'diff')
+    const diffBody = diff.json() as { total: { files: number } }
+    expect(diffBody.total.files).toBe(0)
+
+    await writeFile(join(dir, 'tracked.txt'), 'one\ntwo\n')
+    const unstaged = await call('GET', 'diff')
+    const unstagedBody = unstaged.json() as { total: { files: number; additions: number } }
+    expect(unstagedBody.total.files).toBe(1)
+    expect(unstagedBody.total.additions).toBe(1)
+
+    // Per-file +/- counters ride along with the status payload.
+    const counted = await call('GET', 'status')
+    const countedBody = counted.json() as { counts: Record<string, { additions: number; deletions: number }> }
+    expect(countedBody.counts['tracked.txt']).toEqual({ additions: 1, deletions: 0 })
+
+    // Branch creation, listing, and switching through the dedicated routes.
+    const initialBranch = typeof cleanBody.branch === 'string' ? cleanBody.branch : 'main'
+    const created = await call('POST', 'checkout', { cwd: dir, branch: 'feature/x', create: true })
+    expect(created.status).toBe(200)
+    const branches = await call('GET', 'branches')
+    const branchesBody = branches.json() as { branches: Array<{ name: string; current: boolean }> }
+    expect(branchesBody.branches.find(branch => branch.name === 'feature/x')?.current).toBe(true)
+    const back = await call('POST', 'checkout', { cwd: dir, branch: initialBranch })
+    expect(back.status).toBe(200)
+    await expect(call('POST', 'checkout', { cwd: dir, branch: '-oProxyCommand=evil' })).rejects.toThrow()
+  })
+})
+
+describe('plugin registration', () => {
+  it('registers one authorized prefix route and rejects unauthenticated calls', async () => {
+    type Route = { kind: string; path: string; handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> | void }
+    const registered: Route[] = []
+    let disposeEffect = (): void => {}
+    const ctx = {
+      webServer: {
+        register: vi.fn((route: Route) => {
+          registered.push(route)
+          return () => {}
+        }),
+      },
+      desktopRuntime: {
+        authorizeLocalApiRequest: vi.fn(() => false),
+      },
+      effect: vi.fn((factory: () => () => void) => {
+        disposeEffect = factory()
+        return disposeEffect
+      }),
+    } as unknown as Context
+
+    apply(ctx)
+    expect(vi.mocked(ctx.effect)).toHaveBeenCalledTimes(1)
+    expect(registered).toHaveLength(1)
+    expect(registered[0]).toMatchObject({ kind: 'prefix', path: '/api/desktop/workbench' })
+    expect(typeof disposeEffect).toBe('function')
+
+    // The handler must reject requests that fail local authorization.
+    const captured = jsonResponse()
+    await registered[0]?.handler(getRequest('/api/desktop/workbench/meta'), captured.response)
+    expect(captured.result().status).toBe(401)
+    expect(JSON.parse(captured.result().body)).toEqual({ error: 'unauthorized' })
+
+    // Disposal must not throw even though no terminal ever started.
+    expect(() => disposeEffect()).not.toThrow()
+  })
+})

@@ -114,6 +114,23 @@ describe('compatibility BrowserWindow options', () => {
     }))
   })
 
+  it('keeps renderer isolation while enabling the workbench webview tag', () => {
+    const darwin = advancedWindowOptions({ ...spec, mode: 'advanced' }, {} as NativeImage, 'darwin')
+    const win32 = advancedWindowOptions({ ...spec, mode: 'advanced' }, {} as NativeImage, 'win32')
+    const expected = {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      webviewTag: true,
+    }
+
+    expect(darwin.webPreferences).toEqual(expected)
+    expect(win32.webPreferences).toEqual(expected)
+    // Compatibility mode must not gain the tag.
+    expect(compatibilityWindowOptions(spec, {} as NativeImage, 'win32').webPreferences).not.toHaveProperty('webviewTag')
+  })
+
   it('rejects advanced mode on Linux', () => {
     expect(() => advancedWindowOptions(
       { ...spec, mode: 'advanced' },

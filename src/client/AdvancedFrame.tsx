@@ -8,6 +8,12 @@ import {
   computeDesktopColumns, DesktopLayoutState, MACOS_SIDEBAR_COLLAPSED,
   SIDEBAR_AUTO_COLLAPSE, SIDEBAR_COLLAPSED, SIDEBAR_DEFAULT,
 } from './layout-state.ts'
+import { WorkbenchDock, WorkbenchToggleButton } from './workbench.tsx'
+import {
+  WORKBENCH_WIDTH_MAX,
+  WORKBENCH_WIDTH_MIN,
+  type WorkbenchState,
+} from './workbench-state.ts'
 
 /** Private values assembled by the advanced-shell registration. */
 export interface AdvancedFrameInjected {
@@ -15,6 +21,8 @@ export interface AdvancedFrameInjected {
   layout: DesktopLayoutState
   /** Host platform controlling native title-bar spacing. */
   platform: DesktopClientPlatform
+  /** Right-hand tool dock state (explorer/terminal/git/browser). */
+  workbench: WorkbenchState
 }
 
 /** Full advanced root slot props. */
@@ -28,10 +36,13 @@ export function DesktopBrandName(_props: PropsRuntime<'sidebar.brand.name'>): Re
 }
 
 /** Desktop-owned transparent frame around the unchanged product surfaces. */
-export function AdvancedFrame({ layout, platform, renderSlot, useSessions }: AdvancedFrameProps) {
+export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSessions }: AdvancedFrameProps) {
   const subscribeLayout = useCallback((listener: () => void) => layout.subscribe(listener), [layout])
   const readLayout = useCallback(() => layout.getSnapshot(), [layout])
   const panels = useSyncExternalStore(subscribeLayout, readLayout)
+  const subscribeWorkbench = useCallback((listener: () => void) => workbench.subscribe(listener), [workbench])
+  const readWorkbench = useCallback(() => workbench.getSnapshot(), [workbench])
+  const bench = useSyncExternalStore(subscribeWorkbench, readWorkbench)
   const frameRef = useRef<HTMLDivElement>(null)
   const [viewport, setViewport] = useState(() => window.innerWidth)
   const detailsSession = useSessions((state) => {
@@ -62,8 +73,13 @@ export function AdvancedFrame({ layout, platform, renderSlot, useSessions }: Adv
 
   const collapsed = panels.narrow ? !panels.narrowExpanded : panels.sidebar === 0
   const sidebarPreference = collapsed ? 0 : panels.sidebar === 0 ? SIDEBAR_DEFAULT : panels.sidebar
+  const workbenchWidth = bench.open
+    ? Math.min(WORKBENCH_WIDTH_MAX, Math.max(WORKBENCH_WIDTH_MIN, Math.round(bench.width)))
+    : 0
+  // The workbench dock owns the fourth column; the three product columns lay
+  // out within whatever width remains.
   const columns = computeDesktopColumns(
-    viewport,
+    viewport - workbenchWidth,
     sidebarPreference,
     detailsSession === undefined ? 0 : panels.details,
     platform === 'darwin' ? MACOS_SIDEBAR_COLLAPSED : SIDEBAR_COLLAPSED,
@@ -75,10 +91,11 @@ export function AdvancedFrame({ layout, platform, renderSlot, useSessions }: Adv
       className="dshDesktopFrame"
       data-desktop-platform={platform}
       data-sidebar-collapsed={collapsed || undefined}
-      style={{ gridTemplateColumns: `${columns.sidebar}px minmax(0, 1fr) ${columns.details}px` }}
+      style={{ gridTemplateColumns: `${columns.sidebar}px minmax(0, 1fr) ${columns.details}px ${workbenchWidth}px` }}
     >
       {platform === 'darwin' && <div className="dshDesktopMacCaptionRow" aria-hidden="true" />}
       {platform === 'win32' && <div className="dshDesktopWindowsCaptionRow" aria-hidden="true" />}
+      <WorkbenchToggleButton state={workbench} />
       <aside className="dshDesktopSidebarSurface">
         <div className="dshDesktopUpstreamSidebar">
           {renderSlot('sidebar', { collapsed, width: columns.sidebar })}
@@ -86,6 +103,7 @@ export function AdvancedFrame({ layout, platform, renderSlot, useSessions }: Adv
       </aside>
       <main className="dshDesktopConversationSurface">{renderSlot('conversation', {})}</main>
       <aside className="dshDesktopDetailsSurface">{renderSlot('details', {})}</aside>
+      <WorkbenchDock state={workbench} />
       <div className="dshDesktopOverlay" data-shell-overlay>
         {renderSlot('shell.overlay', {})}
       </div>

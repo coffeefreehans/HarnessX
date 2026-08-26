@@ -16,6 +16,8 @@
       name: harnessx-desktop/vision-caption
     - id: desktop-prefs
       name: harnessx-desktop/desktop-prefs
+    - id: desktop-workbench
+      name: harnessx-desktop/workbench
     - id: desktop-updates
       name: harnessx-desktop/updates
     - id: desktop-sync

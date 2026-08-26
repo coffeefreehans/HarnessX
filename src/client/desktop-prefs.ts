@@ -9,16 +9,27 @@
 
 import { getNotificationSettingsStore, DEFAULT_NOTIFICATION_SETTINGS, type NotificationSettings } from './notifications.ts'
 import { getVisionFallbackStore, sanitizeTextOnlyMap, type VisionFallbackSettings } from './vision-models-state.ts'
+import { applyWorkbenchPrefs, readWorkbenchPrefs } from './workbench-state.ts'
 
 const PREFS_URL = '/api/desktop/prefs'
 
 interface PrefsFile {
   vision?: Partial<VisionFallbackSettings>
   notifications?: Partial<NotificationSettings>
+  workbench?: unknown
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined
 let saving = false
+let hydrated = false
+
+/**
+ * Whether hydration finished. Writers gate persistence on this so a slow
+ * host fetch cannot be clobbered by freshly-mounted defaults.
+ */
+export function isDesktopPrefsHydrated(): boolean {
+  return hydrated
+}
 
 function readStoredPrefs(): PrefsFile {
   try {
@@ -78,6 +89,8 @@ export async function hydrateDesktopPrefs(): Promise<void> {
       ...(typeof notifications.onlyWhenBlurred === 'boolean' ? { onlyWhenBlurred: notifications.onlyWhenBlurred } : {}),
     })
   }
+  applyWorkbenchPrefs(prefs.workbench)
+  hydrated = true
 }
 
 /**
@@ -92,8 +105,13 @@ export function schedulePersistDesktopPrefs(): void {
     const body = JSON.stringify({
       vision: getVisionFallbackStore().getSnapshot(),
       notifications: getNotificationSettingsStore().getSnapshot(),
+      workbench: readWorkbenchPrefs(),
     })
-    cachePrefs({ vision: getVisionFallbackStore().getSnapshot(), notifications: getNotificationSettingsStore().getSnapshot() })
+    cachePrefs({
+      vision: getVisionFallbackStore().getSnapshot(),
+      notifications: getNotificationSettingsStore().getSnapshot(),
+      workbench: readWorkbenchPrefs(),
+    })
     void fetch(PREFS_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

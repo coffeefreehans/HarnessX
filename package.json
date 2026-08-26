@@ -37,6 +37,10 @@
       "types": "./lib/types/terminal.d.ts",
       "default": "./lib/terminal.js"
     },
+    "./workbench": {
+      "types": "./lib/types/workbench.d.ts",
+      "default": "./lib/workbench.js"
+    },
     "./pnpm": {
       "types": "./lib/types/pnpm.d.ts",
       "default": "./lib/pnpm.js"

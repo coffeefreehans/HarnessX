@@ -97,6 +97,7 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
   private readonly trayItems = new Map<symbol, DesktopTrayItem>()
   private terminalSpec: DesktopTerminalSpec | undefined
   private localApiSession: LocalApiSession | undefined
+  private readonly assistantWindows = new Set<BrowserWindow>()
 
   constructor(private readonly restart: () => Promise<void>) {
     if (process.platform !== 'darwin' && process.platform !== 'win32' && process.platform !== 'linux') {
@@ -170,6 +171,68 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
     }
     window.moveTop()
     window.focus()
+  }
+
+  /** @inheritdoc */
+  async openAssistantWindow(): Promise<void> {
+    const spec = this.scheduled
+    if (spec === undefined) {
+      throw new Error('harnessx-desktop: no shell generation is registered for an assistant window')
+    }
+    const origin = new URL(spec.url).origin
+    const localApiSession = this.localApiSession
+    if (localApiSession === undefined || localApiSession.origin !== origin) {
+      throw new Error('harnessx-desktop: local API session was not prepared for the renderer origin')
+    }
+    const icon = nativeImage.createFromPath(spec.iconPath)
+    if (icon.isEmpty()) {
+      throw new Error(`harnessx-desktop: failed to load application icon ${spec.iconPath}`)
+    }
+    const window = new BrowserWindow(desktopWindowOptions({
+      ...spec,
+      width: 540,
+      height: 820,
+      minWidth: 380,
+      minHeight: 480,
+      windowTitle: spec.productName,
+    }, icon, this.platform))
+    this.assistantWindows.add(window)
+    window.on('closed', () => { this.assistantWindows.delete(window) })
+    if (this.platform === 'win32') window.removeMenu()
+    await window.webContents.session.cookies.set({
+      url: origin,
+      name: LOCAL_API_COOKIE_NAME,
+      value: localApiSession.token,
+      path: '/',
+      httpOnly: true,
+      secure: false,
+      sameSite: 'strict',
+    })
+    this.setupContextMenu(window)
+    const navigate = (event: Electron.Event<{ url: string }>): void => {
+      let targetOrigin: string | undefined
+      try {
+        targetOrigin = new URL(event.url).origin
+      } catch {
+        targetOrigin = undefined
+      }
+      if (targetOrigin !== origin) event.preventDefault()
+    }
+    window.webContents.on('will-frame-navigate', navigate)
+    window.webContents.on('will-redirect', navigate)
+    window.webContents.setWindowOpenHandler(({ url }) => {
+      try {
+        const target = new URL(url)
+        if (target.protocol === 'https:' || target.protocol === 'http:' || target.protocol === 'mailto:') {
+          void shell.openExternal(target.href).catch(() => undefined)
+        }
+      } catch {
+        // A malformed target is rejected with the same deny result.
+      }
+      return { action: 'deny' }
+    })
+    window.once('ready-to-show', () => { window.show() })
+    await window.loadURL(spec.url)
   }
 
   /** @inheritdoc */

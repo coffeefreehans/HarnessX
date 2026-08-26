@@ -29,6 +29,7 @@ export interface DesktopPrefs {
     probeResults?: unknown
   }
   notifications?: { sound?: unknown; systemNotification?: unknown; onlyWhenBlurred?: unknown }
+  workbench?: { open?: unknown; width?: unknown; browserHome?: unknown }
 }
 
 /**
@@ -81,6 +82,17 @@ export function normalizePrefs(value: unknown): DesktopPrefs {
       ...(typeof n.onlyWhenBlurred === 'boolean' ? { onlyWhenBlurred: n.onlyWhenBlurred } : {}),
     }
   }
+  const workbench = source.workbench
+  if (typeof workbench === 'object' && workbench !== null) {
+    const w = workbench as Record<string, unknown>
+    const section = {
+      ...(typeof w.open === 'boolean' ? { open: w.open } : {}),
+      ...(typeof w.width === 'number' && Number.isFinite(w.width) && w.width > 0 ? { width: w.width } : {}),
+      ...(optionalString(w.browserHome) !== undefined ? { browserHome: optionalString(w.browserHome) } : {}),
+    }
+    // An all-empty section never materializes in the file.
+    if (Object.keys(section).length > 0) result.workbench = section
+  }
   return result
 }
 
@@ -89,6 +101,9 @@ export function mergePrefs(base: DesktopPrefs, patch: DesktopPrefs): DesktopPref
   return normalizePrefs({
     vision: { ...base.vision, ...patch.vision },
     notifications: { ...base.notifications, ...patch.notifications },
+    ...(base.workbench !== undefined || patch.workbench !== undefined
+      ? { workbench: { ...base.workbench, ...patch.workbench } }
+      : {}),
   })
 }
 

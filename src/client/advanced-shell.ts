@@ -7,6 +7,7 @@ import { DesktopLayoutState } from './layout-state.ts'
 import { provideDesktopLayout } from './layout-service.ts'
 import { installAdvancedStyles } from './styles.ts'
 import { DesktopThemePresenter } from './theme-presenter.ts'
+import { getWorkbenchStore } from './workbench-state.ts'
 
 /**
  * Provide the advanced layout service and own the desktop root slot.
@@ -19,6 +20,7 @@ export function applyAdvancedShell(ctx: ClientContext, environment: DesktopClien
   }
 
   const desktopLayout = new DesktopLayoutState()
+  const workbench = getWorkbenchStore()
   ctx.effect(
     () => provideDesktopLayout(ctx, desktopLayout),
     'desktop: layout service',
@@ -53,7 +55,7 @@ export function applyAdvancedShell(ctx: ClientContext, environment: DesktopClien
       'details': { kind: 'single', scope: 'session' },
       'shell.overlay': { kind: 'list', scope: 'root' },
     },
-    inject: () => ({ layout: desktopLayout, platform: environment.platform }),
+    inject: () => ({ layout: desktopLayout, platform: environment.platform, workbench }),
   }, AdvancedFrame), 'desktop: advanced root slot')
 
   // Occupy the sidebar's documented brand-name seat with the product name.
