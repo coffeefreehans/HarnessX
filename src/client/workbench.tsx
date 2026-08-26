@@ -724,7 +724,9 @@ export function WorkbenchDock(props: { state: WorkbenchState }): ReactNode {
         </div>
         {snapshot.tabs.length > 0 && <TabStrip snapshot={snapshot} state={state} />}
         {snapshot.tabs.length > 0 && snapshot.active !== null && (
-          <div className="hxpWbBody">{renderPanel(snapshot.active, snapshot.browserHome, state)}</div>
+          // Re-mount the active panel on workspace change so every panel
+          // re-roots at the new workspace instead of keeping stale state.
+          <div className="hxpWbBody" key={workspace ?? ''}>{renderPanel(snapshot.active, snapshot.browserHome, workspace, state)}</div>
         )}
         <ResizeGrip snapshot={snapshot} state={state} />
       </div>
@@ -800,12 +802,12 @@ function HDivider(props: { label: string; onResize: (deltaY: number) => void }):
   )
 }
 
-function renderPanel(active: WorkbenchPanelId, browserHome: string | undefined, state: WorkbenchState): ReactNode {
+function renderPanel(active: WorkbenchPanelId, browserHome: string | undefined, workspace: string | undefined, state: WorkbenchState): ReactNode {
   if (active === 'explorer') return <ExplorerPanel state={state} />
   if (active === 'terminal') return <TerminalPanel state={state} />
   if (active === 'git') return <GitPanel state={state} />
   if (active === 'chat') return <AuxChatPanel />
-  return <BrowserPanel home={browserHome} />
+  return <BrowserPanel home={browserHome} workspace={workspace} />
 }
 
 function ResizeGrip(props: { snapshot: WorkbenchSnapshot; state: WorkbenchState }): ReactNode {
@@ -1019,6 +1021,26 @@ interface TerminalCache {
 
 const terminalCache: TerminalCache = { id: undefined, exited: false, transcript: '', cwd: undefined }
 
+/**
+ * Drop every dock panel's stale view state so they all re-root at `workspace`
+ * when the user switches workspaces. Called synchronously on a workspace
+ * change, before the panels re-render, so a remount reads fresh caches.
+ * @param workspace - the workspace the dock should follow.
+ */
+function resetWorkbenchCaches(workspace: string): void {
+  explorerCwd = workspace
+  branchesCache = undefined
+  browserUrl = undefined
+  if (terminalCache.id !== undefined && !terminalCache.exited) {
+    // Retire the shell bound to the previous workspace.
+    void postJson('/api/desktop/workbench/term/kill', { id: terminalCache.id }).catch(() => undefined)
+  }
+  terminalCache.id = undefined
+  terminalCache.exited = false
+  terminalCache.transcript = ''
+  terminalCache.cwd = undefined
+}
+
 /** Session the main window currently shows; the workspace follows it. */
 let activeSessionId: string | undefined
 
@@ -1041,6 +1063,8 @@ export function noteWorkbenchSession(sessionId: string | undefined): void {
 export function noteWorkbenchSessionCwd(cwd: string | undefined): void {
   if (cwd === activeSessionCwd) return
   activeSessionCwd = cwd
+  // Re-root every dock panel at the new session directory.
+  if (cwd !== undefined) resetWorkbenchCaches(cwd)
   for (const listener of [...activeCwdListeners]) listener()
 }
 
@@ -1066,6 +1090,11 @@ function useWorkspace(): { workspace: string | undefined; ready: boolean } {
         if (cancelled) return
         const next = typeof value.path === 'string' && value.path.length > 0 ? value.path : undefined
         workspaceCache = next
+        // When the client store has no cwd, the host route is the workspace
+        // source; re-root the panels if it resolved somewhere new.
+        if (next !== hostWorkspace && activeSessionCwd === undefined && next !== undefined) {
+          resetWorkbenchCaches(next)
+        }
         setHostWorkspace(next)
       } catch {
         // Keep the previous value; the route may be briefly unavailable.
@@ -1609,8 +1638,8 @@ interface WebviewElement extends HTMLElement {
 
 let browserUrl: string | undefined
 
-function BrowserPanel(props: { home: string | undefined }): ReactNode {
-  const { home } = props
+function BrowserPanel(props: { home: string | undefined; workspace: string | undefined }): ReactNode {
+  const { home, workspace } = props
   const t = useStrings()
   const [url, setUrl] = useState(browserUrl ?? home ?? DEFAULT_BROWSER_HOME)
   const [input, setInput] = useState(browserUrl ?? home ?? DEFAULT_BROWSER_HOME)
@@ -1618,6 +1647,16 @@ function BrowserPanel(props: { home: string | undefined }): ReactNode {
   const [loading, setLoading] = useState(false)
   const [failed, setFailed] = useState<string | undefined>()
   const viewRef = useRef<WebviewElement>(null)
+
+  // Re-root the browser at its home page whenever the workspace switches.
+  useEffect(() => {
+    const target = home ?? DEFAULT_BROWSER_HOME
+    setUrl(target)
+    setInput(target)
+    setTitle('')
+    setFailed(undefined)
+    browserUrl = undefined
+  }, [workspace, home])
 
   const navigate = useCallback((raw: string) => {
     const trimmed = raw.trim()
