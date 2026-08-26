@@ -1022,15 +1022,41 @@ const terminalCache: TerminalCache = { id: undefined, exited: false, transcript:
 /** Session the main window currently shows; the workspace follows it. */
 let activeSessionId: string | undefined
 
+/** Working directory of the current session, straight from the session store. */
+let activeSessionCwd: string | undefined
+
+const activeCwdListeners = new Set<() => void>()
+
 /** Note which session the main window is showing so dock panels follow it. @param sessionId - current session id. */
 export function noteWorkbenchSession(sessionId: string | undefined): void {
   activeSessionId = sessionId
 }
 
-/** Hook resolving the host workspace root; polls so a workspace switch propagates live. */
+/**
+ * Publish the current session's working directory. This client-side value is
+ * the primary workspace source — it flips the instant the user switches
+ * conversations, with no host round-trip.
+ * @param cwd - the current session's directory, when known.
+ */
+export function noteWorkbenchSessionCwd(cwd: string | undefined): void {
+  if (cwd === activeSessionCwd) return
+  activeSessionCwd = cwd
+  for (const listener of [...activeCwdListeners]) listener()
+}
+
+/**
+ * Hook resolving the workspace root the dock should follow: the current
+ * session's own directory when the store knows it, else a polled host route
+ * (registry row owning the session, first row as the last fallback).
+ */
 function useWorkspace(): { workspace: string | undefined; ready: boolean } {
-  const [workspace, setWorkspace] = useState(workspaceCache)
+  const [hostWorkspace, setHostWorkspace] = useState(workspaceCache)
   const [ready, setReady] = useState(false)
+  const subscribeCwd = useCallback((listener: () => void) => {
+    activeCwdListeners.add(listener)
+    return () => { activeCwdListeners.delete(listener) }
+  }, [])
+  const sessionCwd = useSyncExternalStore(subscribeCwd, () => activeSessionCwd)
   useEffect(() => {
     let cancelled = false
     const tick = async (): Promise<void> => {
@@ -1040,7 +1066,7 @@ function useWorkspace(): { workspace: string | undefined; ready: boolean } {
         if (cancelled) return
         const next = typeof value.path === 'string' && value.path.length > 0 ? value.path : undefined
         workspaceCache = next
-        setWorkspace(next)
+        setHostWorkspace(next)
       } catch {
         // Keep the previous value; the route may be briefly unavailable.
       }
@@ -1053,7 +1079,7 @@ function useWorkspace(): { workspace: string | undefined; ready: boolean } {
       clearInterval(timer)
     }
   }, [])
-  return { workspace, ready }
+  return { workspace: sessionCwd ?? hostWorkspace, ready }
 }
 
 const TERMINAL_INPUT_DEFAULT = 46

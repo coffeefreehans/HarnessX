@@ -8,7 +8,7 @@ import {
   computeDesktopColumns, DesktopLayoutState, MACOS_SIDEBAR_COLLAPSED,
   SIDEBAR_AUTO_COLLAPSE, SIDEBAR_COLLAPSED, SIDEBAR_DEFAULT,
 } from './layout-state.ts'
-import { noteWorkbenchSession, WorkbenchDock, WorkbenchToggleButton } from './workbench.tsx'
+import { noteWorkbenchSession, noteWorkbenchSessionCwd, WorkbenchDock, WorkbenchToggleButton } from './workbench.tsx'
 import {
   WORKBENCH_WIDTH_MAX,
   WORKBENCH_WIDTH_MIN,
@@ -53,6 +53,13 @@ export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSess
   // window is showing.
   const currentSession = useSessions((state) => state.current)
   useEffect(() => { noteWorkbenchSession(currentSession) }, [currentSession])
+  // The session store carries the live working directory; feeding it straight
+  // to the dock flips the workspace the instant the user switches conversations.
+  const currentSessionCwd = useSessions((state) => {
+    const current = state.current
+    return current !== undefined ? state.byId[current]?.cwd : undefined
+  })
+  useEffect(() => { noteWorkbenchSessionCwd(currentSessionCwd) }, [currentSessionCwd])
 
   useEffect(() => {
     const element = frameRef.current
