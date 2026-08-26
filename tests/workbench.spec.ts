@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process'
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -470,6 +470,35 @@ describe('routeWorkbench dispatch', () => {
     const back = await call('POST', 'checkout', { cwd: dir, branch: initialBranch })
     expect(back.status).toBe(200)
     await expect(call('POST', 'checkout', { cwd: dir, branch: '-oProxyCommand=evil' })).rejects.toThrow()
+
+    // Discard resets tracked worktree edits back to the committed content
+    // ('one\n'; the 'two' edit was never staged or committed).
+    await writeFile(join(dir, 'tracked.txt'), 'destroyed\n')
+    const discarded = await call('POST', 'discard', { cwd: dir, paths: ['tracked.txt'] })
+    expect(discarded.status).toBe(200)
+    // autocrlf may check the content back out with CRLF line endings.
+    expect((await readFile(join(dir, 'tracked.txt'), 'utf8')).replace(/\r\n/g, '\n')).toBe('one\n')
+
+    // Stash push clears the worktree; pop restores it.
+    await writeFile(join(dir, 'tracked.txt'), 'stashed\n')
+    const stashed = await call('POST', 'stash', { cwd: dir })
+    expect(stashed.status).toBe(200)
+    const stashList = await call('GET', 'stash/list')
+    expect((stashList.json() as { entries: unknown[] }).entries).toHaveLength(1)
+    expect(((await call('GET', 'status')).json() as { entries: unknown[] }).entries).toEqual([])
+    const popped = await call('POST', 'stash/pop', { cwd: dir })
+    expect(popped.status).toBe(200)
+    expect((await readFile(join(dir, 'tracked.txt'), 'utf8')).replace(/\r\n/g, '\n')).toBe('stashed\n')
+    await call('POST', 'discard', { cwd: dir, paths: ['tracked.txt'] })
+
+    // Force-deleting a branch removes it from the listing.
+    await call('POST', 'checkout', { cwd: dir, branch: 'doomed', create: true })
+    await call('POST', 'checkout', { cwd: dir, branch: initialBranch })
+    const deleted = await call('POST', 'branch/delete', { cwd: dir, branch: 'doomed' })
+    expect(deleted.status).toBe(200)
+    const afterDelete = await call('GET', 'branches')
+    expect((afterDelete.json() as { branches: Array<{ name: string }> }).branches.map(b => b.name))
+      .not.toContain('doomed')
   })
 })
 

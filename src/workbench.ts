@@ -711,6 +711,52 @@ export async function routeWorkbench(request: WorkbenchRequest): Promise<void> {
     sendJson(response, 200, { ok: true })
     return
   }
+  if (method === 'POST' && subroute === '/git/fetch') {
+    const cwd = requireCwd((request.body ?? {}) as unknown)
+    await runGit(cwd, ['fetch', '--prune'], GIT_NETWORK_TIMEOUT_MS)
+    sendJson(response, 200, { ok: true })
+    return
+  }
+  if (method === 'POST' && subroute === '/git/discard') {
+    const { cwd, paths } = await requireGitMutation(request.body)
+    // checkout -- resets tracked worktree edits; untracked files stay untouched.
+    await runGit(cwd, ['checkout', '--', ...paths])
+    sendJson(response, 200, { ok: true })
+    return
+  }
+  if (method === 'POST' && subroute === '/git/stash') {
+    const body = (request.body ?? {}) as { cwd?: unknown }
+    const cwd = requireCwd(body.cwd)
+    await runGit(cwd, ['stash', 'push', '--include-untracked', '-m', 'harnessx-desktop'])
+    sendJson(response, 200, { ok: true })
+    return
+  }
+  if (method === 'GET' && subroute === '/git/stash/list') {
+    const cwd = await requireDirectory(request.query.get('path'))
+    // `stash list` speaks pretty-format, which does support %xNN escapes.
+    const raw = await runGit(cwd, ['stash', 'list', '--format=%gd%x09%gs'])
+    const entries = raw.split('\n').map(line => line.replace(/\r$/, '')).filter(line => line.length > 0).map(line => {
+      const [name = '', subject = ''] = line.split('\t')
+      return { name, subject }
+    })
+    sendJson(response, 200, { entries })
+    return
+  }
+  if (method === 'POST' && subroute === '/git/stash/pop') {
+    const body = (request.body ?? {}) as { cwd?: unknown }
+    const cwd = requireCwd(body.cwd)
+    await runGit(cwd, ['stash', 'pop'])
+    sendJson(response, 200, { ok: true })
+    return
+  }
+  if (method === 'POST' && subroute === '/git/branch/delete') {
+    const body = (request.body ?? {}) as { cwd?: unknown; branch?: unknown }
+    const cwd = requireCwd(body.cwd)
+    const branch = requireBranchName(body.branch)
+    await runGit(cwd, ['branch', '-D', branch])
+    sendJson(response, 200, { ok: true })
+    return
+  }
   if (method === 'POST' && subroute === '/git/stage') {
     const { cwd, paths } = await requireGitMutation(request.body)
     await runGit(cwd, ['add', '--', ...paths])

@@ -6,7 +6,7 @@
  */
 
 /** Panel identities exposed by the top icon rail. */
-export type WorkbenchPanelId = 'explorer' | 'terminal' | 'git' | 'browser'
+export type WorkbenchPanelId = 'explorer' | 'terminal' | 'git' | 'browser' | 'chat'
 
 /** Immutable dock snapshot published on every change. */
 export interface WorkbenchSnapshot {
@@ -14,23 +14,41 @@ export interface WorkbenchSnapshot {
   open: boolean
   /** Dock width in CSS pixels while expanded. */
   width: number
-  /** Opened tabs in click order, rendered browser-style. */
+  /** Opened panels in click order, stacked vertically inside the body. */
   tabs: readonly WorkbenchPanelId[]
-  /** Focused tab; null when nothing is open. */
+  /** Focused panel; null when nothing is open. */
   active: WorkbenchPanelId | null
   /** Start URL used by the embedded browser panel. */
   browserHome: string | undefined
+  /** Pane heights in CSS pixels; absent entries use per-panel defaults. */
+  sizes: Readonly<Partial<Record<WorkbenchPanelId, number>>>
 }
 
 export const WORKBENCH_WIDTH_DEFAULT = 400
 export const WORKBENCH_WIDTH_MIN = 280
 export const WORKBENCH_WIDTH_MAX = 640
 
+export const WORKBENCH_PANE_MIN = 96
+export const WORKBENCH_PANE_MAX = 4000
+
+/** Default pane height per panel until the user drags its splitter. */
+export const WORKBENCH_PANE_DEFAULTS: Readonly<Record<WorkbenchPanelId, number>> = {
+  explorer: 240,
+  terminal: 200,
+  git: 260,
+  browser: 280,
+  chat: 320,
+}
+
 /** Ordered rail entries; the array order is the button order. */
-export const WORKBENCH_PANEL_IDS: readonly WorkbenchPanelId[] = ['explorer', 'terminal', 'git', 'browser']
+export const WORKBENCH_PANEL_IDS: readonly WorkbenchPanelId[] = ['explorer', 'terminal', 'git', 'browser', 'chat']
 
 function clampWidth(width: number): number {
   return Math.min(WORKBENCH_WIDTH_MAX, Math.max(WORKBENCH_WIDTH_MIN, Math.round(width)))
+}
+
+function clampPane(size: number): number {
+  return Math.min(WORKBENCH_PANE_MAX, Math.max(WORKBENCH_PANE_MIN, Math.round(size)))
 }
 
 /**
@@ -48,9 +66,9 @@ export function toggleWorkbench(snapshot: WorkbenchSnapshot): WorkbenchSnapshot 
 }
 
 /**
- * Focus a rail icon: opens its tab when missing and focuses it otherwise,
- * browser-style. Multiple tabs stay open; only the caption toggle or the
- * in-dock collapse button hides the dock.
+ * Focus a rail icon: reveals its pane when missing and focuses it otherwise.
+ * Several panes stay visible at once, stacked vertically; only the caption
+ * toggle or the in-dock collapse button hides the dock.
  * @param snapshot - current snapshot.
  * @param id - panel identity from the rail.
  * @returns the next snapshot.
@@ -58,6 +76,17 @@ export function toggleWorkbench(snapshot: WorkbenchSnapshot): WorkbenchSnapshot 
 export function openWorkbenchPanel(snapshot: WorkbenchSnapshot, id: WorkbenchPanelId): WorkbenchSnapshot {
   const tabs = snapshot.tabs.includes(id) ? snapshot.tabs : [...snapshot.tabs, id]
   return { ...snapshot, open: true, tabs, active: id }
+}
+
+/**
+ * Set one pane's height after a splitter drag.
+ * @param snapshot - current snapshot.
+ * @param id - pane to resize.
+ * @param size - requested height in CSS pixels.
+ * @returns the next snapshot.
+ */
+export function resizeWorkbenchPane(snapshot: WorkbenchSnapshot, id: WorkbenchPanelId, size: number): WorkbenchSnapshot {
+  return { ...snapshot, sizes: { ...snapshot.sizes, [id]: clampPane(size) } }
 }
 
 /**
@@ -95,6 +124,7 @@ export class WorkbenchState {
     tabs: [],
     active: null,
     browserHome: undefined,
+    sizes: {},
   })
   private readonly listeners = new Set<() => void>()
 
@@ -114,7 +144,7 @@ export class WorkbenchState {
     this.publish(toggleWorkbench(this.snapshot))
   }
 
-  /** Open or focus a rail panel; clicking the focused panel collapses the dock. */
+  /** Open or focus a rail panel; clicking an already-visible one is a no-op focus. */
   openPanel(id: WorkbenchPanelId): void {
     this.publish(openWorkbenchPanel(this.snapshot, id))
   }
@@ -127,6 +157,11 @@ export class WorkbenchState {
   /** Focus one opened tab. */
   setActive(id: WorkbenchPanelId): void {
     this.publish(activateWorkbenchTab(this.snapshot, id))
+  }
+
+  /** @param id - pane to resize. @param size - requested height from a splitter drag. */
+  setPaneSize(id: WorkbenchPanelId, size: number): void {
+    this.publish(resizeWorkbenchPane(this.snapshot, id, size))
   }
 
   /** @param width - requested dock width from a resize gesture. */
@@ -145,7 +180,7 @@ export class WorkbenchState {
   }
 
   private publish(next: WorkbenchSnapshot): void {
-    this.snapshot = Object.freeze({ ...next, tabs: [...next.tabs] })
+    this.snapshot = Object.freeze({ ...next, tabs: [...next.tabs], sizes: { ...next.sizes } })
     for (const listener of this.listeners) listener()
   }
 }

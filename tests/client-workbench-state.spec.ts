@@ -5,8 +5,12 @@ import {
   getWorkbenchStore,
   openWorkbenchPanel,
   readWorkbenchPrefs,
+  resizeWorkbenchPane,
   toggleWorkbench,
   WorkbenchState,
+  WORKBENCH_PANEL_IDS,
+  WORKBENCH_PANE_MAX,
+  WORKBENCH_PANE_MIN,
   WORKBENCH_WIDTH_MAX,
   WORKBENCH_WIDTH_MIN,
   type WorkbenchSnapshot,
@@ -19,10 +23,15 @@ function base(): WorkbenchSnapshot {
     tabs: [],
     active: null,
     browserHome: undefined,
+    sizes: {},
   }
 }
 
 describe('workbench pure transitions', () => {
+  it('exposes five rail panels with chat right after the browser', () => {
+    expect(WORKBENCH_PANEL_IDS).toEqual(['explorer', 'terminal', 'git', 'browser', 'chat'])
+  })
+
   it('toggle reveals an explorer tab on the empty dock and keeps tabs after collapse', () => {
     const opened = toggleWorkbench(base())
     expect(opened.open).toBe(true)
@@ -98,6 +107,21 @@ describe('workbench pure transitions', () => {
     expect(state.getSnapshot().width).toBe(WORKBENCH_WIDTH_MIN)
     state.setWidth(99_999)
     expect(state.getSnapshot().width).toBe(WORKBENCH_WIDTH_MAX)
+  })
+
+  it('pane sizes clamp and persist per panel across other mutations', () => {
+    let snapshot = openWorkbenchPanel(base(), 'explorer')
+    snapshot = openWorkbenchPanel(snapshot, 'git')
+    snapshot = resizeWorkbenchPane(snapshot, 'explorer', 180)
+    snapshot = resizeWorkbenchPane(snapshot, 'git', 1)
+    snapshot = resizeWorkbenchPane(snapshot, 'explorer', 99_999)
+    expect(snapshot.sizes.explorer).toBe(WORKBENCH_PANE_MAX)
+    expect(snapshot.sizes.git).toBe(WORKBENCH_PANE_MIN)
+
+    // Closing a tab keeps its stored height so reopening restores it.
+    snapshot = closeWorkbenchTab(snapshot, 'explorer')
+    expect(snapshot.sizes.explorer).toBe(WORKBENCH_PANE_MAX)
+    expect(snapshot.sizes.git).toBe(WORKBENCH_PANE_MIN)
   })
 })
 

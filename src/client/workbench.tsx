@@ -5,11 +5,12 @@
  * `/api/desktop/workbench` routes; no kernel slot or service is replaced.
  */
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { MACOS_TITLEBAR_HEIGHT, WINDOWS_CAPTION_CONTROLS_WIDTH, WINDOWS_TITLEBAR_HEIGHT } from '../window-chrome.ts'
 import { isDesktopPrefsHydrated, schedulePersistDesktopPrefs } from './desktop-prefs.ts'
 import {
+  WORKBENCH_PANE_DEFAULTS,
   WORKBENCH_WIDTH_MAX,
   WORKBENCH_WIDTH_MIN,
   WORKBENCH_PANEL_IDS,
@@ -17,6 +18,12 @@ import {
   type WorkbenchSnapshot,
   type WorkbenchState,
 } from './workbench-state.ts'
+
+/**
+ * True inside an embedded assistant-chat webview (loaded with ?hxpEmbed=1);
+ * the nested page must not render its own dock or caption toggle.
+ */
+const WORKBENCH_EMBEDDED = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('hxpEmbed')
 
 /* ------------------------------------------------------------------ */
 /* Localized strings                                                   */
@@ -48,10 +55,21 @@ interface WorkbenchStrings {
   gitBranches: string
   newBranch: string
   createBranch: string
+  deleteBranch: string
   push: string
   pull: string
   pushOk: string
   pullOk: string
+  fetchLabel: string
+  fetchOk: string
+  stashSave: string
+  stashRestore: string
+  stashOk: string
+  unstashOk: string
+  discard: string
+  discardAll: string
+  stageAll: string
+  confirmDiscard(count: number): string
   stage: string
   unstage: string
   commitPlaceholder: string
@@ -90,10 +108,21 @@ const STRINGS_ZH: WorkbenchStrings = {
   gitBranches: '分支',
   newBranch: '新建分支…',
   createBranch: '创建',
+  deleteBranch: '删除',
   push: '推送',
   pull: '拉取',
   pushOk: '已推送到远端。',
   pullOk: '已拉取最新代码。',
+  fetchLabel: '获取',
+  fetchOk: '已获取远端更新。',
+  stashSave: '贮藏',
+  stashRestore: '恢复',
+  stashOk: '已贮藏当前更改。',
+  unstashOk: '已恢复最近一次贮藏。',
+  discard: '放弃',
+  discardAll: '全部放弃',
+  stageAll: '全部暂存',
+  confirmDiscard: count => `确定放弃 ${String(count)} 个文件的未提交更改吗？此操作不可撤销。`,
   stage: '暂存',
   unstage: '取消暂存',
   commitPlaceholder: '提交说明…',
@@ -132,10 +161,21 @@ const STRINGS_EN: WorkbenchStrings = {
   gitBranches: 'Branches',
   newBranch: 'New branch…',
   createBranch: 'Create',
+  deleteBranch: 'Delete',
   push: 'Push',
   pull: 'Pull',
   pushOk: 'Pushed to the remote.',
   pullOk: 'Pulled the latest changes.',
+  fetchLabel: 'Fetch',
+  fetchOk: 'Fetched from the remote.',
+  stashSave: 'Stash',
+  stashRestore: 'Unstash',
+  stashOk: 'Changes stashed.',
+  unstashOk: 'Latest stash restored.',
+  discard: 'Discard',
+  discardAll: 'Discard all',
+  stageAll: 'Stage all',
+  confirmDiscard: count => `Discard uncommitted changes in ${String(count)} file(s)? This cannot be undone.`,
   stage: 'Stage',
   unstage: 'Unstage',
   commitPlaceholder: 'Commit message…',
@@ -268,6 +308,7 @@ const PanelIcons: Record<WorkbenchPanelId, ReactNode> = {
   terminal: TerminalIcon,
   git: GitIcon,
   browser: GlobeIcon,
+  chat: ChatIcon,
 }
 
 /* ------------------------------------------------------------------ */
@@ -307,21 +348,6 @@ interface WorkspaceGit {
 }
 
 let workspaceCache: string | undefined
-
-/** Resolve the read-only workspace root from the host (cached for the session). */
-async function fetchWorkspace(): Promise<string | undefined> {
-  if (workspaceCache !== undefined) return workspaceCache
-  try {
-    const value = await requestJson<{ path?: string | undefined }>('/api/desktop/workbench/workspace')
-    if (typeof value.path === 'string' && value.path.length > 0) {
-      workspaceCache = value.path
-      return workspaceCache
-    }
-  } catch {
-    // Fall through to the undefined case; panels degrade gracefully.
-  }
-  return undefined
-}
 
 function classifyGitStatus(x: string, y: string): GitKind {
   if (x === '?' || y === '?') return 'untracked'
@@ -410,15 +436,16 @@ const WORKBENCH_STYLES = `
 .hxpWbRailButton:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.05)); color: var(--dsw-alias-label-primary, #222); }
 .hxpWbRailButton[data-active] { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.05)); color: var(--dsw-alias-label-primary, #222); }
 .hxpWbRailLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hxpWbTabs { flex: none; display: flex; gap: 4px; padding: 6px 6px 0; overflow-x: auto; scrollbar-width: none; }
-.hxpWbTab { flex: none; display: inline-flex; align-items: center; gap: 5px; max-width: 140px; padding: 3px 4px 3px 8px; border-radius: 7px; background: transparent; color: var(--dsw-alias-label-tertiary, #888); cursor: pointer; user-select: none; white-space: nowrap; }
-.hxpWbTab:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.05)); }
-.hxpWbTab[data-active] { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.07)); color: var(--dsw-alias-label-primary, #222); }
-.hxpWbTabIcon { display: inline-flex; }
-.hxpWbTabLabel { overflow: hidden; text-overflow: ellipsis; font-size: 12px; line-height: 18px; }
+.hxpWbBody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; }
+.hxpWbPane { flex: none; display: flex; flex-direction: column; min-height: 96px; overflow: hidden; border-top: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08)); background: var(--dsw-alias-bg-base, #fff); }
+.hxpWbPane:first-child { border-top: none; }
+.hxpWbPane[data-elastic] { flex: 1 1 auto; }
+.hxpWbPaneHeader { flex: none; display: flex; align-items: center; gap: 5px; padding: 4px 4px 4px 8px; background: rgba(127,127,127,.07); user-select: none; }
+.hxpWbPaneTitle { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; color: var(--dsw-alias-label-secondary, #555); }
 .hxpWbTabClose { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; padding: 0; border: none; border-radius: 4px; background: transparent; color: inherit; opacity: .55; cursor: pointer; }
 .hxpWbTabClose:hover { opacity: 1; background: rgba(0,0,0,.08); }
-.hxpWbBody { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.hxpWbSplitter { position: relative; z-index: 5; flex: none; height: 6px; margin-top: -3px; margin-bottom: -3px; cursor: row-resize; touch-action: none; }
+.hxpWbSplitter:hover { background: rgba(127,127,127,.18); }
 .hxpWbResize { position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; cursor: col-resize; touch-action: none; z-index: 10; }
 .hxpWbToggle { position: absolute; z-index: 60; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-tertiary, #888); cursor: pointer; }
 .dshDesktopFrame[data-desktop-platform="win32"] .hxpWbToggle { top: calc((${WINDOWS_TITLEBAR_HEIGHT}px - 28px) / 2); right: calc(${WINDOWS_CAPTION_CONTROLS_WIDTH}px + 8px); }
@@ -462,7 +489,13 @@ const WORKBENCH_STYLES = `
 .hxpWbBranch { padding: 0 4px; font-weight: 600; }
 .hxpWbAhead { color: var(--dsw-alias-label-tertiary, #999); }
 .hxpWbDiffLine { padding: 0 10px 4px; color: var(--dsw-alias-label-tertiary, #999); font-size: 11px; }
-.hxpWbSectionTitle { padding: 6px 10px 2px; color: var(--dsw-alias-label-tertiary, #999); font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase; }
+.hxpWbSectionTitle { display: flex; align-items: center; padding: 6px 10px 2px; color: var(--dsw-alias-label-tertiary, #999); font-size: 10.5px; letter-spacing: .04em; text-transform: uppercase; }
+.hxpWbSectionActions { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; }
+.hxpWbLinkAction { padding: 1px 6px; border: none; border-radius: 4px; background: transparent; color: var(--dsw-alias-label-secondary, #555); font-size: 10.5px; letter-spacing: normal; text-transform: none; cursor: pointer; }
+.hxpWbLinkAction:hover:not(:disabled) { background: rgba(0,0,0,.06); color: var(--dsw-alias-label-primary, #222); }
+.hxpWbLinkAction:disabled { opacity: .4; cursor: default; }
+.hxpWbDanger { color: #b3493f; }
+.hxpWbGitAction.hxpWbDanger:hover:not(:disabled) { background: rgba(204,75,66,.1); color: #cc4b42; }
 .hxpWbGitRow { display: flex; align-items: center; gap: 6px; padding: 2px 8px; }
 .hxpWbGitBadge { flex: none; min-width: 20px; padding: 0 3px; border-radius: 4px; background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.06)); font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; text-align: center; }
 .hxpWbGitAction { flex: none; padding: 1px 7px; border: none; border-radius: 5px; background: transparent; color: var(--dsw-alias-label-tertiary, #888); font-size: 11px; cursor: pointer; }
@@ -481,6 +514,10 @@ const WORKBENCH_STYLES = `
 .hxpWbBranchRow:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.05)); }
 .hxpWbBranchRow[data-current] { font-weight: 600; }
 .hxpWbBranchMark { margin-left: auto; color: #3f8f4a; font-size: 11px; }
+.hxpWbBranchDelete { flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: 16px; height: 16px; margin-left: auto; margin-right: 2px; padding: 0 2px; border: none; border-radius: 4px; background: transparent; color: var(--dsw-alias-label-tertiary, #999); font-size: 10px; cursor: pointer; }
+.hxpWbBranchDelete:hover:not(:disabled) { background: rgba(204,75,66,.12); color: #cc4b42; }
+.hxpWbBranchDelete:disabled { opacity: .4; cursor: default; }
+.hxpWbBranchRow[data-current] .hxpWbBranchDelete { display: none; }
 .hxpWbBranchForm { flex: none; display: flex; gap: 6px; padding: 6px; border-top: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.06)); }
 .hxpWbBranchInput { flex: 1 1 auto; min-width: 0; padding: 4px 8px; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1)); border-radius: 6px; background: transparent; color: var(--dsw-alias-label-primary, #222); font-size: 11.5px; outline: none; }
 .hxpWbBranchCreate { flex: none; padding: 0 10px; border: none; border-radius: 6px; background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.08)); color: var(--dsw-alias-label-primary, #222); font-size: 11.5px; cursor: pointer; }
@@ -497,6 +534,7 @@ const WORKBENCH_STYLES = `
 @keyframes hxpWbLoadingSlide { from { transform: translateX(-100%); } to { transform: translateX(350%); } }
 .hxpWbBrowserError { flex: none; margin: 4px 6px; padding: 5px 8px; border-radius: 6px; background: rgba(204,75,66,.08); color: #cc4b42; font-size: 11.5px; word-break: break-all; }
 .hxpWbWebView { flex: 1 1 auto; min-height: 0; width: 100%; border: none; background: #fff; }
+.hxpWbChatView { flex: 1 1 auto; min-height: 0; width: 100%; border: none; background: #fff; }
 `
 
 /** Install the workbench stylesheet once per mount. @returns the style disposer. */
@@ -550,6 +588,7 @@ function pathSegments(path: string): Array<{ label: string; path: string }> {
  */
 /** Square caption-bar button that anchors the dock; the sole entry point while collapsed. */
 export function WorkbenchToggleButton(props: { state: WorkbenchState }): ReactNode {
+  if (WORKBENCH_EMBEDDED) return null
   const state = props.state
   const t = useStrings()
   const subscribe = useCallback((listener: () => void) => state.subscribe(listener), [state])
@@ -572,6 +611,7 @@ export function WorkbenchToggleButton(props: { state: WorkbenchState }): ReactNo
 }
 
 export function WorkbenchDock(props: { state: WorkbenchState }): ReactNode {
+  if (WORKBENCH_EMBEDDED) return null
   const state = props.state
   const t = useStrings()
   const subscribeLayout = useCallback((listener: () => void) => state.subscribe(listener), [state])
@@ -609,16 +649,6 @@ export function WorkbenchDock(props: { state: WorkbenchState }): ReactNode {
           <button
             type="button"
             className="hxpWbRailButton"
-            title={t.chat}
-            aria-label={t.chat}
-            onClick={() => { void openAssistantWindow() }}
-          >
-            {ChatIcon}
-            <span className="hxpWbRailLabel">{t.chat}</span>
-          </button>
-          <button
-            type="button"
-            className="hxpWbRailButton"
             title={t.collapse}
             aria-label={t.collapse}
             onClick={() => { state.toggle() }}
@@ -626,63 +656,80 @@ export function WorkbenchDock(props: { state: WorkbenchState }): ReactNode {
             {ChevronRightIcon}
           </button>
         </div>
-        {snapshot.tabs.length > 0 && <TabStrip snapshot={snapshot} state={state} />}
-        <div className="hxpWbBody">{renderPanel(snapshot.active, snapshot)}</div>
+        {snapshot.tabs.length > 0 && <PaneStack snapshot={snapshot} state={state} />}
         <ResizeGrip snapshot={snapshot} state={state} />
       </div>
     </aside>
   )
 }
 
-function TabStrip(props: { snapshot: WorkbenchSnapshot; state: WorkbenchState }): ReactNode {
+/** Open panels stacked vertically, separated by draggable splitters. */
+function PaneStack(props: { snapshot: WorkbenchSnapshot; state: WorkbenchState }): ReactNode {
   const { snapshot, state } = props
   const t = useStrings()
   return (
-    <div className="hxpWbTabs" role="tablist">
-      {snapshot.tabs.map(id => (
-        <div
-          key={id}
-          role="tab"
-          aria-selected={snapshot.active === id}
-          className="hxpWbTab"
-          data-active={snapshot.active === id || undefined}
-          onClick={() => { state.setActive(id) }}
-        >
-          <span className="hxpWbTabIcon">{PanelIcons[id]}</span>
-          <span className="hxpWbTabLabel">{t[id]}</span>
-          <button
-            type="button"
-            className="hxpWbTabClose"
-            title={t.close}
-            aria-label={`${t.close}: ${t[id]}`}
-            onClick={event => {
-              event.stopPropagation()
-              state.closeTab(id)
-            }}
-          >
-            {CloseIcon}
-          </button>
-        </div>
-      ))}
+    <div className="hxpWbBody">
+      {snapshot.tabs.map((id, index) => {
+        const elastic = index === snapshot.tabs.length - 1
+        return (
+          <Fragment key={id}>
+            {index > 0 && <Splitter snapshot={snapshot} state={state} pane={id} />}
+            <section
+              className="hxpWbPane"
+              data-active={snapshot.active === id || undefined}
+              {...(elastic ? { 'data-elastic': true } : { style: { height: `${String(paneHeight(snapshot, id))}px` } })}
+            >
+              <header className="hxpWbPaneHeader" onClick={() => { state.setActive(id) }}>
+                <span className="hxpWbTabIcon">{PanelIcons[id]}</span>
+                <span className="hxpWbPaneTitle">{t[id]}</span>
+                <button
+                  type="button"
+                  className="hxpWbTabClose"
+                  title={t.close}
+                  aria-label={`${t.close}: ${t[id]}`}
+                  onClick={event => {
+                    event.stopPropagation()
+                    state.closeTab(id)
+                  }}
+                >
+                  {CloseIcon}
+                </button>
+              </header>
+              <div className="hxpWbPaneBody">{renderPanel(id, snapshot.browserHome)}</div>
+            </section>
+          </Fragment>
+        )
+      })}
     </div>
   )
 }
 
-function renderPanel(active: WorkbenchPanelId | null, snapshot: WorkbenchSnapshot): ReactNode {
-  if (!snapshot.open || active === null) return undefined
+function paneHeight(snapshot: WorkbenchSnapshot, id: WorkbenchPanelId): number {
+  return snapshot.sizes[id] ?? WORKBENCH_PANE_DEFAULTS[id]
+}
+
+/** Horizontal drag handle resizing the pane directly above it. */
+function Splitter(props: { snapshot: WorkbenchSnapshot; state: WorkbenchState; pane: WorkbenchPanelId }): ReactNode {
+  const origin = useRef(0)
+  const base = useRef(0)
+  const onPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    origin.current = event.clientY
+    base.current = props.snapshot.sizes[props.pane] ?? WORKBENCH_PANE_DEFAULTS[props.pane]
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }, [props.snapshot.sizes, props.pane])
+  const onPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+    props.state.setPaneSize(props.pane, base.current + (event.clientY - origin.current))
+  }, [props])
+  return <div className="hxpWbSplitter" onPointerDown={onPointerDown} onPointerMove={onPointerMove} />
+}
+
+function renderPanel(active: WorkbenchPanelId, browserHome: string | undefined): ReactNode {
   if (active === 'explorer') return <ExplorerPanel />
   if (active === 'terminal') return <TerminalPanel />
   if (active === 'git') return <GitPanel />
-  return <BrowserPanel home={snapshot.browserHome} />
-}
-
-/** Ask the host to spawn an independent assistant chat window; failures are silent. */
-async function openAssistantWindow(): Promise<void> {
-  try {
-    await postJson('/api/desktop/workbench/aux', {})
-  } catch {
-    // Hosts without window support reject; nothing actionable in-page.
-  }
+  if (active === 'chat') return <ChatPanel />
+  return <BrowserPanel home={browserHome} />
 }
 
 function ResizeGrip(props: { snapshot: WorkbenchSnapshot; state: WorkbenchState }): ReactNode {
@@ -710,7 +757,7 @@ let explorerCwd: string | undefined
 
 function ExplorerPanel(): ReactNode {
   const t = useStrings()
-  const [workspace, setWorkspace] = useState(workspaceCache)
+  const { workspace } = useWorkspace()
   const [cwd, setCwd] = useState(explorerCwd)
   const [entries, setEntries] = useState<FsEntry[] | undefined>()
   const [error, setError] = useState<string | undefined>()
@@ -743,18 +790,9 @@ function ExplorerPanel(): ReactNode {
 
   useEffect(() => { void load(cwd) }, [cwd, load])
 
-  // The workspace root is host-owned and read-only; panels follow it.
-  useEffect(() => {
-    let cancelled = false
-    void fetchWorkspace().then(root => {
-      if (!cancelled && root !== undefined) setWorkspace(root)
-    })
-    return () => { cancelled = true }
-  }, [])
-
   useEffect(() => {
     if (workspace === undefined) return
-    // Default to the workspace root; a remembered directory outside it snaps back.
+    // Default to the workspace root; a directory from another project snaps back.
     if (explorerCwd === undefined || !isWithin(explorerCwd, workspace)) {
       explorerCwd = workspace
       setCwd(workspace)
@@ -876,22 +914,36 @@ interface TerminalCache {
   id: string | undefined
   exited: boolean
   transcript: string
+  /** Working directory the cached session was started in. */
+  cwd: string | undefined
 }
 
-const terminalCache: TerminalCache = { id: undefined, exited: false, transcript: '' }
+const terminalCache: TerminalCache = { id: undefined, exited: false, transcript: '', cwd: undefined }
 
-/** Hook resolving the host workspace root once per session. */
+/** Hook resolving the host workspace root; polls so a workspace switch propagates live. */
 function useWorkspace(): { workspace: string | undefined; ready: boolean } {
   const [workspace, setWorkspace] = useState(workspaceCache)
-  const [ready, setReady] = useState(workspaceCache !== undefined)
+  const [ready, setReady] = useState(false)
   useEffect(() => {
     let cancelled = false
-    void fetchWorkspace().then(root => {
-      if (cancelled) return
-      setWorkspace(root)
-      setReady(true)
-    })
-    return () => { cancelled = true }
+    const tick = async (): Promise<void> => {
+      try {
+        const value = await requestJson<{ path?: string | undefined }>('/api/desktop/workbench/workspace')
+        if (cancelled) return
+        const next = typeof value.path === 'string' && value.path.length > 0 ? value.path : undefined
+        workspaceCache = next
+        setWorkspace(next)
+      } catch {
+        // Keep the previous value; the route may be briefly unavailable.
+      }
+      if (!cancelled) setReady(true)
+    }
+    void tick()
+    const timer = setInterval(() => { void tick() }, 3000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
   }, [])
   return { workspace, ready }
 }
@@ -910,6 +962,11 @@ function TerminalPanel(): ReactNode {
     let cancelled = false
     if (!ready) return () => { cancelled = true }
     const run = async (): Promise<void> => {
+      if (terminalCache.id !== undefined && !terminalCache.exited && terminalCache.cwd !== workspace) {
+        // The host switched workspaces; retire the shell bound to the old one.
+        void postJson('/api/desktop/workbench/term/kill', { id: terminalCache.id }).catch(() => undefined)
+        terminalCache.id = undefined
+      }
       if (terminalCache.id === undefined || terminalCache.exited) {
         try {
           const session = await postJson<{ id: string }>('/api/desktop/workbench/term/start', {
@@ -919,6 +976,7 @@ function TerminalPanel(): ReactNode {
           terminalCache.id = session.id
           terminalCache.exited = false
           terminalCache.transcript = ''
+          terminalCache.cwd = workspace
           latestRef.current = 0
           setTranscript('')
         } catch {
@@ -971,6 +1029,7 @@ function TerminalPanel(): ReactNode {
     terminalCache.id = undefined
     terminalCache.exited = false
     terminalCache.transcript = ''
+    terminalCache.cwd = undefined
     latestRef.current = 0
     setTranscript('')
     setExited(false)
@@ -1028,6 +1087,7 @@ function GitPanel(): ReactNode {
   const [branches, setBranches] = useState<GitBranchEntry[] | undefined>(branchesCache)
   const [showBranches, setShowBranches] = useState(false)
   const [newBranch, setNewBranch] = useState('')
+  const [stashes, setStashes] = useState(0)
 
   const reload = useCallback(async () => {
     if (!ready) return
@@ -1097,6 +1157,20 @@ function GitPanel(): ReactNode {
     }
   }, [workspace])
 
+  const loadStashes = useCallback(async () => {
+    if (workspace === undefined) return
+    try {
+      const value = await requestJson<{ entries: unknown[] }>(
+        `/api/desktop/workbench/git/stash/list?path=${encodeURIComponent(workspace)}`,
+      )
+      setStashes(value.entries.length)
+    } catch {
+      // Stash visibility is best-effort.
+    }
+  }, [workspace])
+
+  useEffect(() => { void loadStashes() }, [loadStashes])
+
   /** Run a git network/checkout mutation, surface the outcome as a notice, refresh. */
   const runAction = useCallback(async (okNotice: string | undefined, run: () => Promise<void>) => {
     if (workspace === undefined) return
@@ -1105,13 +1179,21 @@ function GitPanel(): ReactNode {
     try {
       await run()
       await reload()
+      await loadStashes()
       if (okNotice !== undefined) setNotice(okNotice)
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setBusy(false)
     }
-  }, [workspace, reload])
+  }, [workspace, reload, loadStashes])
+
+  /** Discard worktree edits of tracked files after an explicit confirmation. */
+  const discardPaths = useCallback((paths: string[]) => {
+    if (workspace === undefined || paths.length === 0) return
+    if (!window.confirm(t.confirmDiscard(paths.length))) return
+    void runAction(undefined, () => postJson('/api/desktop/workbench/git/discard', { cwd: workspace, paths }))
+  }, [workspace, t, runAction])
 
   const switchBranch = useCallback((name: string, create: boolean) => {
     void runAction(undefined, async () => {
@@ -1136,6 +1218,8 @@ function GitPanel(): ReactNode {
   const staged = status.entries.filter(entry => entry.x !== ' ' && entry.x !== '?')
   // Any worktree-side change (including untracked "??" rows) counts here.
   const changed = status.entries.filter(entry => entry.y !== ' ')
+  // Untracked files cannot be restored via checkout, so discard only touches these.
+  const discardable = changed.filter(entry => entry.x !== '?').map(entry => entry.path)
 
   return (
     <div className="hxpWbPanel hxpWbGit">
@@ -1157,12 +1241,27 @@ function GitPanel(): ReactNode {
           && <span className="hxpWbAhead">↑{String(status.ahead ?? 0)} ↓{String(status.behind ?? 0)}</span>}
         <div className="hxpWbSpring" />
         <button type="button" className="hxpWbToolButton hxpWbToolText" disabled={busy || workspace === undefined}
+          title={t.fetchOk}
+          onClick={() => { void runAction(t.fetchOk, () => postJson('/api/desktop/workbench/git/fetch', { cwd: workspace })) }}>
+          {t.fetchLabel}
+        </button>
+        <button type="button" className="hxpWbToolButton hxpWbToolText" disabled={busy || workspace === undefined}
           onClick={() => { void runAction(t.pullOk, () => postJson('/api/desktop/workbench/git/pull', { cwd: workspace })) }}>
           {t.pull}
         </button>
         <button type="button" className="hxpWbToolButton hxpWbToolText" disabled={busy || workspace === undefined}
           onClick={() => { void runAction(t.pushOk, () => postJson('/api/desktop/workbench/git/push', { cwd: workspace })) }}>
           {t.push}
+        </button>
+        <button type="button" className="hxpWbToolButton hxpWbToolText" disabled={busy || workspace === undefined || changed.length === 0}
+          title={t.stashSave}
+          onClick={() => { void runAction(t.stashOk, () => postJson('/api/desktop/workbench/git/stash', { cwd: workspace })) }}>
+          {t.stashSave}
+        </button>
+        <button type="button" className="hxpWbToolButton hxpWbToolText" disabled={busy || workspace === undefined || stashes === 0}
+          title={t.unstashOk}
+          onClick={() => { void runAction(t.unstashOk, () => postJson('/api/desktop/workbench/git/stash/pop', { cwd: workspace })) }}>
+          {t.stashRestore}
         </button>
         <button type="button" className="hxpWbToolButton" title={t.refresh} aria-label={t.refresh} onClick={() => { void reload() }}>
           {RefreshIcon}
@@ -1173,13 +1272,32 @@ function GitPanel(): ReactNode {
         <div className="hxpWbBranchMenu">
           <div className="hxpWbBranchList">
             {(branches ?? []).map(branch => (
-              <button key={branch.name} type="button" className="hxpWbBranchRow"
+              <div key={branch.name} className="hxpWbBranchRow" role="button" tabIndex={0}
                 data-current={branch.current || undefined}
-                disabled={busy || branch.current}
-                onClick={() => { switchBranch(branch.name, false) }}>
+                onClick={() => { if (!busy && !branch.current) switchBranch(branch.name, false) }}
+                onKeyDown={event => {
+                  if ((event.key === 'Enter' || event.key === ' ') && !busy && !branch.current) {
+                    event.preventDefault()
+                    switchBranch(branch.name, false)
+                  }
+                }}>
                 <span className="hxpWbRailLabel">{branch.name}</span>
                 {branch.current && <span className="hxpWbBranchMark">✓</span>}
-              </button>
+                {!branch.current && (
+                  <button type="button" className="hxpWbBranchDelete" title={`${t.deleteBranch}: ${branch.name}`}
+                    aria-label={`${t.deleteBranch}: ${branch.name}`}
+                    disabled={busy}
+                    onClick={event => {
+                      event.stopPropagation()
+                      void runAction(undefined, async () => {
+                        await postJson('/api/desktop/workbench/git/branch/delete', { cwd: workspace, branch: branch.name })
+                        await loadBranches()
+                      })
+                    }}>
+                    ✕
+                  </button>
+                )}
+              </div>
             ))}
           </div>
           <form
@@ -1208,11 +1326,24 @@ function GitPanel(): ReactNode {
             disabled={busy} onAction={() => { void mutate('unstage', [entry.path]) }} />
         ))}
       </div>
-      <SectionTitle label={t.gitChanges} count={changed.length} />
+      <SectionTitle label={t.gitChanges} count={changed.length}>
+        <button type="button" className="hxpWbLinkAction" disabled={busy}
+          onClick={() => { void mutate('stage', changed.map(entry => entry.path)) }}>
+          {t.stageAll}
+        </button>
+        {discardable.length > 0 && (
+          <button type="button" className="hxpWbLinkAction hxpWbDanger" disabled={busy}
+            onClick={() => { discardPaths(discardable) }}>
+            {t.discardAll}
+          </button>
+        )}
+      </SectionTitle>
       <div className="hxpWbFileList">
         {changed.map(entry => (
           <GitRow key={`w-${entry.path}`} entry={entry} action="stage" actionLabel={t.stage}
-            disabled={busy} onAction={() => { void mutate('stage', [entry.path]) }} />
+            disabled={busy} onAction={() => { void mutate('stage', [entry.path]) }}
+            discardLabel={t.discard} confirmText={t.confirmDiscard(1)}
+            onDiscard={entry.x !== '?' ? () => { discardPaths([entry.path]) } : undefined} />
         ))}
       </div>
       <form
@@ -1246,9 +1377,14 @@ function GitPanel(): ReactNode {
   )
 }
 
-function SectionTitle(props: { label: string; count: number }): ReactNode {
+function SectionTitle(props: { label: string; count: number; children?: ReactNode }): ReactNode {
   if (props.count === 0) return undefined
-  return <div className="hxpWbSectionTitle">{props.label} ({String(props.count)})</div>
+  return (
+    <div className="hxpWbSectionTitle">
+      {props.label} ({String(props.count)})
+      {props.children !== undefined && <span className="hxpWbSectionActions">{props.children}</span>}
+    </div>
+  )
 }
 
 function GitRow(props: {
@@ -1257,6 +1393,9 @@ function GitRow(props: {
   actionLabel: string
   disabled: boolean
   onAction: () => void
+  discardLabel?: string
+  confirmText?: string
+  onDiscard?: (() => void) | undefined
 }): ReactNode {
   const { entry } = props
   const badge = entry.x === '?' && entry.y === '?' ? '??' : `${entry.x}${entry.y}`.trim()
@@ -1268,6 +1407,14 @@ function GitRow(props: {
       <button type="button" className="hxpWbGitAction" disabled={props.disabled} onClick={props.onAction}>
         {props.actionLabel}
       </button>
+      {props.onDiscard !== undefined && props.discardLabel !== undefined && (
+        <button type="button" className="hxpWbGitAction hxpWbDanger" title={props.confirmText ?? ''} disabled={props.disabled}
+          onClick={() => {
+            if (window.confirm(props.confirmText ?? '')) props.onDiscard?.()
+          }}>
+          {props.discardLabel}
+        </button>
+      )}
     </div>
   )
 }
@@ -1381,6 +1528,36 @@ function BrowserPanel(props: { home: string | undefined }): ReactNode {
         src={url}
         partition="persist:harnessx-workbench"
       />
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/* Assistant chat panel                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Embedded assistant chat: the same shell page as the main window, loaded in
+ * the default session (shared auth cookie). The hxpEmbed flag suppresses the
+ * nested dock inside the webview.
+ */
+function ChatPanel(): ReactNode {
+  const t = useStrings()
+  const viewRef = useRef<WebviewElement>(null)
+  const [url] = useState(() =>
+    `${window.location.origin}${window.location.pathname}?hxpEmbed=1${window.location.hash}`,
+  )
+  return (
+    <div className="hxpWbPanel hxpWbChat">
+      <div className="hxpWbToolbar">
+        <span className="hxpWbBranch">{t.chat}</span>
+        <div className="hxpWbSpring" />
+        <button type="button" className="hxpWbToolButton" title={t.refresh} aria-label={t.refresh}
+          onClick={() => { viewRef.current?.reload() }}>
+          {RefreshIcon}
+        </button>
+      </div>
+      <webview ref={viewRef} className="hxpWbChatView" src={url} />
     </div>
   )
 }
