@@ -251,6 +251,37 @@ export interface AuxMessage {
   text: string
 }
 
+/** Complete model selection for one session (sessions.selectModel wire shape). */
+export interface AuxModelSelection {
+  /** Registered provider route. */
+  provider: string
+  /** Provider-owned model id. */
+  model: string
+  /** Adapter-owned reasoning effort; absence preserves the adapter default. */
+  reasoningEffort?: string
+}
+
+/** One selectable model inside a provider group (wire shape). */
+export interface AuxModelEntry {
+  id: string
+  name: string
+  description?: string
+}
+
+/** One provider and the models it advertised (wire shape). */
+export interface AuxModelGroup {
+  id: string
+  name: string
+  models: AuxModelEntry[]
+}
+
+/** Detached model-directory snapshot for one session (wire shape). */
+export interface AuxSessionModels {
+  current: AuxModelSelection
+  routable: boolean
+  groups: AuxModelGroup[]
+}
+
 /** Auxiliary-conversation view state backed by one real upstream session. */
 export interface AuxConversation {
   sessionId: string
@@ -264,6 +295,26 @@ export interface AuxConversation {
   /** A user message still waits for its turn to finish (or fail). */
   awaitingReply: boolean
   error: string | undefined
+  /** Advisory model directory for this conversation's session. */
+  models: AuxSessionModels | undefined
+  /** The session's current model selection. */
+  selection: AuxModelSelection | undefined
+}
+
+/**
+ * Display name for a session's current model: the catalog's name when the
+ * model is still advertised, else the raw id.
+ * @param models - the session's model directory snapshot.
+ * @param selection - the session's current selection.
+ * @returns a short label for the picker button.
+ */
+export function auxModelDisplayName(models: AuxSessionModels | undefined, selection: AuxModelSelection | undefined): string {
+  if (selection === undefined) return ''
+  for (const group of models?.groups ?? []) {
+    const found = group.models.find(entry => entry.id === selection.model)
+    if (found !== undefined) return found.name
+  }
+  return selection.model
 }
 
 /**

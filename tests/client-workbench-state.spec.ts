@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   applyWorkbenchPrefs,
   auxBlockText,
+  auxModelDisplayName,
   closeWorkbenchTab,
   collapseWorkbench,
   diffLineKind,
@@ -307,5 +308,22 @@ describe('explorer diff line classification', () => {
     expect(diffLineKind('-removed line')).toBe('del')
     expect(diffLineKind(' unchanged line')).toBe('plain')
     expect(diffLineKind('')).toBe('plain')
+  })
+})
+
+describe('auxiliary chat model picker labels', () => {
+  it('prefers the catalog display name and falls back to the raw id', () => {
+    const models = {
+      current: { provider: 'p1', model: 'glm-5.3-flash' },
+      routable: true,
+      groups: [
+        { id: 'p1', name: 'Zhipu', models: [{ id: 'glm-5.3-flash', name: 'GLM-5.3-Flash' }] },
+        { id: 'p2', name: 'Other', models: [{ id: 'other-x', name: 'Other X' }] },
+      ],
+    }
+    expect(auxModelDisplayName(models, models.current)).toBe('GLM-5.3-Flash')
+    expect(auxModelDisplayName(models, { provider: 'p1', model: 'retired-model' })).toBe('retired-model')
+    expect(auxModelDisplayName(undefined, { provider: 'p1', model: 'm' })).toBe('m')
+    expect(auxModelDisplayName(models, undefined)).toBe('')
   })
 })

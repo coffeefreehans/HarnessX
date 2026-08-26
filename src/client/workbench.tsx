@@ -15,9 +15,12 @@ import {
   WORKBENCH_WIDTH_MAX,
   WORKBENCH_WIDTH_MIN,
   WORKBENCH_PANEL_IDS,
+  auxModelDisplayName,
   diffLineKind,
   foldAuxHistory,
   type AuxConversation,
+  type AuxModelSelection,
+  type AuxSessionModels,
   type WorkbenchPanelId,
   type WorkbenchSnapshot,
   type WorkbenchState,
@@ -83,6 +86,8 @@ interface WorkbenchStrings {
   dragResize: string
   auxNew: string
   auxSend: string
+  auxStop: string
+  auxModel: string
   auxPlaceholder: string
   auxEmpty: string
   auxThinking: string
@@ -145,7 +150,9 @@ const STRINGS_ZH: WorkbenchStrings = {
   dragResize: '拖动调整大小',
   auxNew: '新建辅助对话',
   auxSend: '发送',
-  auxPlaceholder: '输入消息，回车发送，Shift+Enter 换行…',
+  auxStop: '停止',
+  auxModel: '模型',
+  auxPlaceholder: '提出后续修改要求…',
   auxEmpty: '点击 + 新建一个辅助对话。',
   auxThinking: '思考中…',
   auxUnavailable: '会话服务尚未就绪，请稍后再试。',
@@ -207,7 +214,9 @@ const STRINGS_EN: WorkbenchStrings = {
   dragResize: 'Drag to resize',
   auxNew: 'New auxiliary chat',
   auxSend: 'Send',
-  auxPlaceholder: 'Type a message; Enter sends, Shift+Enter adds a line…',
+  auxStop: 'Stop',
+  auxModel: 'Model',
+  auxPlaceholder: 'Request a follow-up change…',
   auxEmpty: 'Click + to start an auxiliary chat.',
   auxThinking: 'Thinking…',
   auxUnavailable: 'The session service is not ready yet.',
@@ -346,6 +355,12 @@ const SendIcon = (
     <path d="M14 2 3 6.5l4.5 2L9.5 13z" />
     <path d="M14 2 7.5 8.5" />
   </Icon>
+)
+
+const StopIcon = (
+  <svg viewBox="0 0 16 16" width="15" height="15" fill="none" aria-hidden="true">
+    <rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor" stroke="none" />
+  </svg>
 )
 
 const PanelIcons: Record<WorkbenchPanelId, ReactNode> = {
@@ -600,9 +615,23 @@ const WORKBENCH_STYLES = `
 .hxpAuxMsg[data-role="assistant"] { align-self: flex-start; border-bottom-left-radius: 4px; border: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.08)); color: var(--dsw-alias-label-primary, #222); }
 .hxpAuxThinking { align-self: flex-start; padding: 0 2px; color: var(--dsw-alias-label-tertiary, #999); font-size: 11px; animation: hxpAuxPulse 1.2s ease-in-out infinite; }
 @keyframes hxpAuxPulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
-.hxpAuxForm { flex: none; display: flex; align-items: flex-end; gap: 6px; padding: 6px 8px 8px; border-top: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.06)); }
+.hxpAuxForm { position: relative; flex: none; display: flex; flex-direction: column; gap: 6px; padding: 6px 8px 8px; border-top: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.06)); }
 .hxpAuxInput { flex: 1 1 auto; resize: none; height: 34px; padding: 7px 9px; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1)); border-radius: 8px; background: transparent; color: var(--dsw-alias-label-primary, #222); font-family: inherit; font-size: 12.5px; line-height: 1.4; outline: none; overflow-y: auto; }
 .hxpAuxInput:focus { border-color: var(--dsw-alias-label-tertiary, #999); }
+.hxpAuxToolbar { display: flex; align-items: center; gap: 6px; }
+.hxpAuxModel { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 70%; padding: 3px 8px; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-tertiary, #888); font-family: inherit; font-size: 11.5px; cursor: pointer; }
+.hxpAuxModel:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.05)); color: var(--dsw-alias-label-primary, #222); }
+.hxpAuxModel:disabled { cursor: default; }
+.hxpAuxModelLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hxpAuxModelCaret { flex: none; font-size: 9px; }
+.hxpAuxModelBackdrop { position: fixed; inset: 0; z-index: 19; background: transparent; }
+.hxpAuxModelMenu { position: absolute; left: 8px; right: 8px; bottom: calc(100% - 2px); max-height: 240px; overflow-y: auto; padding: 4px; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1)); border-radius: 10px; background: var(--dsw-alias-bg-base, #fff); box-shadow: 0 8px 24px rgba(0,0,0,.18); z-index: 20; }
+.hxpAuxModelGroup { padding: 5px 8px 2px; color: var(--dsw-alias-label-tertiary, #999); font-size: 10.5px; }
+.hxpAuxModelRow { display: flex; width: 100%; align-items: center; gap: 6px; padding: 5px 8px; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-primary, #222); font-family: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.hxpAuxModelRow:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.05)); }
+.hxpAuxModelRow[data-current] { color: #4a7fb5; }
+.hxpAuxModelName { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hxpAuxModelCheck { flex: none; color: #4a7fb5; font-size: 11px; }
 .hxpAuxSend { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: none; border-radius: 8px; background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.08)); color: var(--dsw-alias-label-primary, #222); cursor: pointer; }
 .hxpAuxSend:hover:not(:disabled) { filter: brightness(.96); }
 .hxpAuxSend:disabled { opacity: .35; cursor: default; }
@@ -1844,6 +1873,14 @@ export interface WorkbenchWireApi {
     history(payload: { sessionId: string }): Promise<{
       result: { events: Array<Record<string, unknown>>; hasMore: boolean }
     }>
+    models(payload: { sessionId: string }): Promise<{ result: AuxSessionModels }>
+    selectModel(payload: {
+      sessionId: string
+      provider: string
+      model: string
+      reasoningEffort?: string
+    }): Promise<{ result: { selected: AuxModelSelection } }>
+    cancel(payload: { sessionId: string }): Promise<{ result: { accepted: true } }>
   }
   host: {
     openPath(payload: { path: string }): Promise<{ result: { opened: true } }>
@@ -1903,12 +1940,15 @@ class AuxChatStore {
         streamingText: undefined,
         awaitingReply: false,
         error: undefined,
+        models: undefined,
+        selection: undefined,
       }
       this.nextIndex += 1
       this.createError = undefined
       this.conversations.push(conversation)
       this.activeIndex = this.conversations.length - 1
       this.emit()
+      void this.loadModels(response.result.sessionId)
     } catch (cause) {
       this.createError = cause instanceof Error ? cause.message : String(cause)
       this.emit()
@@ -1921,6 +1961,10 @@ class AuxChatStore {
     if (index < 0 || index >= this.conversations.length || index === this.activeIndex) return
     this.activeIndex = index
     this.emit()
+    const conversation = this.conversations[index]
+    if (conversation !== undefined && conversation.models === undefined) {
+      void this.loadModels(conversation.sessionId)
+    }
   }
 
   close(index: number): void {
@@ -1985,6 +2029,49 @@ class AuxChatStore {
     }
     this.emit()
   }
+
+  /** Pull the advisory model directory for one conversation's session. */
+  private async loadModels(sessionId: string): Promise<void> {
+    if (workbenchApi === undefined) return
+    const target = this.conversations.find(entry => entry.sessionId === sessionId)
+    if (target === undefined) return
+    try {
+      const response = await workbenchApi.sessions.models({ sessionId })
+      if (this.conversations.find(entry => entry.sessionId === sessionId) !== target) return
+      target.models = response.result
+      target.selection = response.result.current
+    } catch {
+      // The picker falls back to the raw model id; retry on the next open.
+      return
+    }
+    this.emit()
+  }
+
+  /** Select the model that serves the active conversation's next step. */
+  async selectModel(provider: string, model: string): Promise<void> {
+    const conversation = this.active
+    if (workbenchApi === undefined || conversation === undefined) return
+    try {
+      const response = await workbenchApi.sessions.selectModel({ sessionId: conversation.sessionId, provider, model })
+      conversation.selection = response.result.selected
+      conversation.error = undefined
+    } catch (cause) {
+      conversation.error = cause instanceof Error ? cause.message : String(cause)
+    }
+    this.emit()
+  }
+
+  /** Stop the active conversation's running turn. */
+  async stop(): Promise<void> {
+    const conversation = this.active
+    if (workbenchApi === undefined || conversation === undefined) return
+    try {
+      await workbenchApi.sessions.cancel({ sessionId: conversation.sessionId })
+    } catch {
+      // The poll loop settles the visible state either way.
+    }
+    this.emit()
+  }
 }
 
 const auxChatStore = new AuxChatStore()
@@ -2004,6 +2091,7 @@ function AuxChatPanel(): ReactNode {
   const conversation = store.active
   const activeSessionId = conversation?.sessionId
   const [draft, setDraft] = useState('')
+  const [modelMenu, setModelMenu] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
 
@@ -2016,6 +2104,9 @@ function AuxChatPanel(): ReactNode {
   }, [draft, store])
 
   useEffect(() => { void store.refresh() }, [store, activeSessionId])
+
+  // The model menu belongs to one conversation; a tab switch closes it.
+  useEffect(() => { setModelMenu(false) }, [activeSessionId])
 
   useEffect(() => {
     const timer = window.setInterval(() => { void store.refresh() }, 1000)
@@ -2112,6 +2203,45 @@ function AuxChatPanel(): ReactNode {
               submit()
             }}
           >
+            {modelMenu && (
+              <div className="hxpAuxModelBackdrop" onClick={() => { setModelMenu(false) }} />
+            )}
+            {modelMenu && (
+              <div className="hxpAuxModelMenu" role="listbox" aria-label={t.auxModel}>
+                {conversation.models?.routable === false && (
+                  <div className="hxpWbNotice">{t.auxUnavailable}</div>
+                )}
+                {(conversation.models?.groups ?? []).map(group => (
+                  <div key={group.id}>
+                    <div className="hxpAuxModelGroup">{group.name}</div>
+                    {group.models.map(model => (
+                      <button
+                        key={`${group.id}:${model.id}`}
+                        type="button"
+                        role="option"
+                        aria-selected={conversation.selection?.model === model.id && conversation.selection?.provider === group.id}
+                        data-current={conversation.selection?.model === model.id && conversation.selection?.provider === group.id || undefined}
+                        className="hxpAuxModelRow"
+                        title={model.description}
+                        onClick={() => {
+                          setModelMenu(false)
+                          if (conversation.selection?.provider === group.id && conversation.selection?.model === model.id) return
+                          void store.selectModel(group.id, model.id)
+                        }}
+                      >
+                        <span className="hxpAuxModelName">{model.name}</span>
+                        {conversation.selection?.model === model.id && conversation.selection?.provider === group.id && (
+                          <span className="hxpAuxModelCheck">✓</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+                {(conversation.models?.groups ?? []).length === 0 && (
+                  <div className="hxpWbNotice">{t.auxModel}</div>
+                )}
+              </div>
+            )}
             <textarea
               className="hxpAuxInput"
               value={draft}
@@ -2125,9 +2255,32 @@ function AuxChatPanel(): ReactNode {
                 }
               }}
             />
-            <button type="submit" className="hxpAuxSend" title={t.auxSend} aria-label={t.auxSend} disabled={!draft.trim()}>
-              {SendIcon}
-            </button>
+            <div className="hxpAuxToolbar">
+              <button
+                type="button"
+                className="hxpAuxModel"
+                disabled={!busy && conversation.models === undefined && conversation.selection === undefined}
+                onClick={() => { setModelMenu(open => !open) }}
+              >
+                <span className="hxpAuxModelLabel">
+                  {auxModelDisplayName(conversation.models, conversation.selection) || t.auxModel}
+                </span>
+                <span className="hxpAuxModelCaret">▾</span>
+              </button>
+              <div className="hxpWbSpring" />
+              {busy
+                ? (
+                  <button type="button" className="hxpAuxSend" title={t.auxStop} aria-label={t.auxStop}
+                    onClick={() => { void store.stop() }}>
+                    {StopIcon}
+                  </button>
+                )
+                : (
+                  <button type="submit" className="hxpAuxSend" title={t.auxSend} aria-label={t.auxSend} disabled={!draft.trim()}>
+                    {SendIcon}
+                  </button>
+                )}
+            </div>
           </form>
         </>
       )}
