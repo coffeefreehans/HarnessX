@@ -542,6 +542,25 @@ export const name = 'desktop-workbench'
 export const inject = ['webServer', 'desktopRuntime']
 
 /**
+ * Pick the workspace root shown by the dock: the registry row owning the
+ * active session, else the first row (registry order). A session from another
+ * project therefore moves the whole dock instead of pinning it to row one.
+ * @param workspaces - workspaceRegistry rows (path plus member session ids).
+ * @param sessionId - session the main window currently shows, when known.
+ * @returns the resolved absolute directory path.
+ */
+export function resolveSessionWorkspace(
+  workspaces: ReadonlyArray<{ path: string; sessionIds?: readonly string[] }>,
+  sessionId?: string,
+): string | undefined {
+  if (sessionId !== undefined) {
+    const match = workspaces.find(entry => entry.sessionIds?.includes(sessionId) ?? false)
+    if (match !== undefined) return match.path
+  }
+  return workspaces[0]?.path
+}
+
+/**
  * Register the desktop workbench HTTP routes.
  * @param ctx - Host context carrying the Web carrier and desktop services.
  */
@@ -549,11 +568,11 @@ export function apply(ctx: Context): void {
   const terminals = new TerminalRegistry()
   // Read lazily at request time so headless boots without the workspace
   // service still mount the plugin; the explorer falls back to the DSH home.
-  const resolveWorkspace = (): string | undefined => {
+  const resolveWorkspace = (sessionId?: string): string | undefined => {
     const registry = (ctx as unknown as { get(name: string): unknown }).get('workspaceRegistry') as
-      | { list(): Array<{ path: string }> }
+      | { list(): Array<{ path: string; sessionIds?: readonly string[] }> }
       | undefined
-    return registry?.list()[0]?.path
+    return resolveSessionWorkspace(registry?.list() ?? [], sessionId)
   }
   ctx.effect(() => {
     const disposeRoute = ctx.webServer.register({
@@ -596,8 +615,8 @@ export interface WorkbenchRequest {
   body?: unknown
   response: ServerResponse
   terminals: TerminalRegistry
-  /** Resolve the fixed workspace root shown by the explorer. */
-  workspace?: () => string | undefined
+  /** Resolve the workspace root shown by the explorer for the active session. */
+  workspace?: (sessionId?: string) => string | undefined
   /** Open one auxiliary chat window mirroring the main shell. */
   openAssistant?: () => Promise<void>
 }
@@ -615,7 +634,7 @@ export async function routeWorkbench(request: WorkbenchRequest): Promise<void> {
     return
   }
   if (method === 'GET' && subroute === '/workspace') {
-    sendJson(response, 200, { path: request.workspace?.() })
+    sendJson(response, 200, { path: request.workspace?.(request.query.get('sessionId') ?? undefined) })
     return
   }
   if (method === 'POST' && subroute === '/aux') {

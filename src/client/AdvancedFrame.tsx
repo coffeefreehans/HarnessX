@@ -8,7 +8,7 @@ import {
   computeDesktopColumns, DesktopLayoutState, MACOS_SIDEBAR_COLLAPSED,
   SIDEBAR_AUTO_COLLAPSE, SIDEBAR_COLLAPSED, SIDEBAR_DEFAULT,
 } from './layout-state.ts'
-import { WorkbenchDock, WorkbenchToggleButton } from './workbench.tsx'
+import { noteWorkbenchSession, WorkbenchDock, WorkbenchToggleButton } from './workbench.tsx'
 import {
   WORKBENCH_WIDTH_MAX,
   WORKBENCH_WIDTH_MIN,
@@ -49,6 +49,10 @@ export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSess
     const current = state.current
     return current !== undefined && state.byId[current]?.blank === false ? current : undefined
   })
+  // Dock panels (explorer/terminal/git/aux chat) follow the session the main
+  // window is showing.
+  const currentSession = useSessions((state) => state.current)
+  useEffect(() => { noteWorkbenchSession(currentSession) }, [currentSession])
 
   useEffect(() => {
     const element = frameRef.current

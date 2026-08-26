@@ -15,6 +15,7 @@ import {
   parseNumstat,
   readPreview,
   requireAbsolutePath,
+  resolveSessionWorkspace,
   routeWorkbench,
   summarizeNumstat,
   TerminalRegistry,
@@ -362,6 +363,25 @@ describe('routeWorkbench dispatch', () => {
     expect(present.result().status).toBe(200)
     expect(JSON.parse(present.result().body)).toEqual({ path: resolve('D:\\', 'code') })
 
+    // The active session id rides the query so the resolver can follow it.
+    const followed = jsonResponse()
+    const seenSessionIds: Array<string | undefined> = []
+    await routeWorkbench({
+      method: 'GET',
+      pathname: '/api/desktop/workbench/workspace',
+      query: new URLSearchParams({ sessionId: 'sess-b' }),
+      body: undefined,
+      response: followed.response,
+      terminals,
+      workspace: (sessionId) => {
+        seenSessionIds.push(sessionId)
+        return sessionId === 'sess-b' ? join('D:\\', 'other') : join('D:\\', 'code')
+      },
+    })
+    expect(followed.result().status).toBe(200)
+    expect(JSON.parse(followed.result().body)).toEqual({ path: resolve('D:\\', 'other') })
+    expect(seenSessionIds).toEqual(['sess-b'])
+
     const absent = jsonResponse()
     await routeWorkbench({
       method: 'GET',
@@ -537,5 +557,28 @@ describe('plugin registration', () => {
 
     // Disposal must not throw even though no terminal ever started.
     expect(() => disposeEffect()).not.toThrow()
+  })
+})
+
+describe('resolveSessionWorkspace', () => {
+  const rows = [
+    { path: 'C:\proj-a', sessionIds: ['s1', 's2'] },
+    { path: 'C:\proj-b', sessionIds: ['s3'] },
+    { path: 'C:\proj-c' },
+  ]
+
+  it('follows the workspace owning the active session', () => {
+    expect(resolveSessionWorkspace(rows, 's3')).toBe('C:\proj-b')
+    expect(resolveSessionWorkspace(rows, 's1')).toBe('C:\proj-a')
+  })
+
+  it('falls back to the first registry row when nothing owns the session', () => {
+    expect(resolveSessionWorkspace(rows, 'unknown')).toBe('C:\proj-a')
+    expect(resolveSessionWorkspace(rows)).toBe('C:\proj-a')
+  })
+
+  it('returns undefined for an empty registry', () => {
+    expect(resolveSessionWorkspace([], 's1')).toBeUndefined()
+    expect(resolveSessionWorkspace([])).toBeUndefined()
   })
 })

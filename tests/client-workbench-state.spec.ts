@@ -3,6 +3,7 @@ import {
   applyWorkbenchPrefs,
   auxBlockText,
   closeWorkbenchTab,
+  collapseWorkbench,
   foldAuxHistory,
   getWorkbenchStore,
   openWorkbenchPanel,
@@ -91,6 +92,18 @@ describe('workbench pure transitions', () => {
     expect(single.tabs).toEqual([])
     expect(single.active).toBeNull()
     expect(single.open).toBe(false)
+  })
+
+  it('collapseWorkbench hides the dock but keeps every tab for the next reveal', () => {
+    let snapshot = base()
+    for (const id of ['explorer', 'terminal'] as const) snapshot = openWorkbenchPanel(snapshot, id)
+    const collapsed = collapseWorkbench(snapshot)
+    expect(collapsed.open).toBe(false)
+    expect(collapsed.tabs).toEqual(['explorer', 'terminal'])
+    expect(collapsed.active).toBe('terminal')
+    // Collapsing an already-closed dock is a no-op; reopening restores the tabs.
+    expect(collapseWorkbench(collapsed)).toBe(collapsed)
+    expect(openWorkbenchPanel(collapsed, 'explorer').open).toBe(true)
   })
 
   it('closing a non-active tab preserves focus', () => {

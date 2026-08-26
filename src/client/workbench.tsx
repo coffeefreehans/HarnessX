@@ -666,6 +666,16 @@ export function WorkbenchDock(props: { state: WorkbenchState }): ReactNode {
 
   useEffect(() => installWorkbenchStyles(), [])
 
+  // Switching to a session in another workspace gets a clean slate: the dock
+  // tucks itself away and reopens rooted at the new workspace.
+  const { workspace } = useWorkspace()
+  const previousWorkspace = useRef(workspace)
+  useEffect(() => {
+    const previous = previousWorkspace.current
+    previousWorkspace.current = workspace
+    if (previous !== undefined && workspace !== undefined && previous !== workspace) state.collapse()
+  }, [workspace, state])
+
   useEffect(() => {
     // Persist only after hydration so a slow prefs fetch cannot be clobbered
     // by freshly-mounted defaults.
@@ -991,6 +1001,14 @@ interface TerminalCache {
 
 const terminalCache: TerminalCache = { id: undefined, exited: false, transcript: '', cwd: undefined }
 
+/** Session the main window currently shows; the workspace follows it. */
+let activeSessionId: string | undefined
+
+/** Note which session the main window is showing so dock panels follow it. @param sessionId - current session id. */
+export function noteWorkbenchSession(sessionId: string | undefined): void {
+  activeSessionId = sessionId
+}
+
 /** Hook resolving the host workspace root; polls so a workspace switch propagates live. */
 function useWorkspace(): { workspace: string | undefined; ready: boolean } {
   const [workspace, setWorkspace] = useState(workspaceCache)
@@ -999,7 +1017,8 @@ function useWorkspace(): { workspace: string | undefined; ready: boolean } {
     let cancelled = false
     const tick = async (): Promise<void> => {
       try {
-        const value = await requestJson<{ path?: string | undefined }>('/api/desktop/workbench/workspace')
+        const suffix = activeSessionId !== undefined ? `?sessionId=${encodeURIComponent(activeSessionId)}` : ''
+        const value = await requestJson<{ path?: string | undefined }>(`/api/desktop/workbench/workspace${suffix}`)
         if (cancelled) return
         const next = typeof value.path === 'string' && value.path.length > 0 ? value.path : undefined
         workspaceCache = next

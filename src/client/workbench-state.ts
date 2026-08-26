@@ -116,6 +116,15 @@ export function activateWorkbenchTab(snapshot: WorkbenchSnapshot, id: WorkbenchP
   return { ...snapshot, open: true, active: id }
 }
 
+/**
+ * Collapse the dock column, keeping every open tab for the next reveal.
+ * @param snapshot - current snapshot.
+ * @returns the next snapshot.
+ */
+export function collapseWorkbench(snapshot: WorkbenchSnapshot): WorkbenchSnapshot {
+  return snapshot.open ? { ...snapshot, open: false } : snapshot
+}
+
 /** Small observable store owned by the advanced shell and hydrated from prefs. */
 export class WorkbenchState {
   private snapshot: WorkbenchSnapshot = Object.freeze({
@@ -157,6 +166,11 @@ export class WorkbenchState {
   /** Focus one opened tab. */
   setActive(id: WorkbenchPanelId): void {
     this.publish(activateWorkbenchTab(this.snapshot, id))
+  }
+
+  /** Collapse the dock column; open tabs survive for the next reveal. */
+  collapse(): void {
+    this.publish(collapseWorkbench(this.snapshot))
   }
 
   /** @param id - pane to resize. @param size - requested height from a splitter drag. */
