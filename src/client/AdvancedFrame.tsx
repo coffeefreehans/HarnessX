@@ -84,8 +84,11 @@ export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSess
 
   const collapsed = panels.narrow ? !panels.narrowExpanded : panels.sidebar === 0
   const sidebarPreference = collapsed ? 0 : panels.sidebar === 0 ? SIDEBAR_DEFAULT : panels.sidebar
+  // The dock may take most of the window, but the product columns always
+  // keep a usable strip; on small windows the state clamp floor applies.
+  const requestedWorkbenchWidth = Math.round(bench.width)
   const workbenchWidth = bench.open
-    ? Math.min(WORKBENCH_WIDTH_MAX, Math.max(WORKBENCH_WIDTH_MIN, Math.round(bench.width)))
+    ? Math.min(WORKBENCH_WIDTH_MAX, Math.max(WORKBENCH_WIDTH_MIN, Math.min(requestedWorkbenchWidth, viewport - 360)))
     : 0
   // The workbench dock owns the fourth column; the three product columns lay
   // out within whatever width remains.

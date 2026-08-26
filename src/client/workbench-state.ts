@@ -26,7 +26,7 @@ export interface WorkbenchSnapshot {
 
 export const WORKBENCH_WIDTH_DEFAULT = 400
 export const WORKBENCH_WIDTH_MIN = 280
-export const WORKBENCH_WIDTH_MAX = 640
+export const WORKBENCH_WIDTH_MAX = 1200
 
 export const WORKBENCH_PANE_MIN = 96
 export const WORKBENCH_PANE_MAX = 4000

@@ -596,7 +596,7 @@ const WORKBENCH_STYLES = `
 .hxpWbLogRow { display: flex; align-items: baseline; gap: 6px; padding: 2px 6px; }
 .hxpWbLogHash { color: var(--dsw-alias-label-tertiary, #999); font-size: 10.5px; }
 .hxpWbLogSubject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hxpWbBrowser { display: flex; }
+.hxpWbBrowser { display: flex; min-height: 0; min-width: 0; }
 .hxpWbUrlForm { flex: 1 1 auto; display: flex; }
 .hxpWbUrlInput { flex: 1 1 auto; min-width: 0; padding: 3px 8px; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1)); border-radius: 6px; background: transparent; color: var(--dsw-alias-label-primary, #222); font-size: 11.5px; outline: none; }
 .hxpWbPageTitle { padding: 0 10px 3px; color: var(--dsw-alias-label-tertiary, #999); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1739,6 +1739,12 @@ function GitRow(props: {
 
 const DEFAULT_BROWSER_HOME = 'https://www.bing.com'
 
+/**
+ * Sites serve broken layouts to Electron's marker in the user agent; present
+ * the plain Chrome identity so pages adapt to the panel like a real browser.
+ */
+const BROWSER_USER_AGENT = navigator.userAgent.replace(/ Electron\/\S+/, '').trim()
+
 interface WebviewElement extends HTMLElement {
   goBack(): void
   goForward(): void
@@ -1850,6 +1856,7 @@ function BrowserPanel(props: { home: string | undefined; workspace: string | und
         ref={viewRef}
         className="hxpWbWebView"
         src={url}
+        useragent={BROWSER_USER_AGENT}
         partition="persist:harnessx-workbench"
       />
     </div>
