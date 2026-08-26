@@ -54,10 +54,6 @@ function notifyProfileRecovery(runtime: ElectronDesktopRuntime, body: string): v
 /** Start one Electron process and leave lifetime to the mounted desktop plugin. */
 async function start(): Promise<void> {
   app.setName(PRODUCT_NAME)
-  if (!app.requestSingleInstanceLock()) {
-    app.quit()
-    return
-  }
 
   let current: Context | undefined
   let profileStartup: DesktopProfileStartup | undefined
@@ -98,7 +94,6 @@ async function start(): Promise<void> {
   const requestQuit = (code: number): void => { void shutdown.request(code) }
   removeShutdownRequests = installShutdownRequests(process, app, requestQuit)
 
-  app.on('second-instance', () => { runtime.show() })
   await app.whenReady()
   if (process.platform === 'win32') app.setAppUserModelId('io.github.coffeefreehans.harnessx')
   if (app.isPackaged && process.cwd() === '/') process.chdir(app.getPath('home'))
