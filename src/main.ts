@@ -102,9 +102,10 @@ async function start(): Promise<void> {
   removeShutdownRequests = installShutdownRequests(process, app, requestQuit)
 
   app.on('second-instance', () => {
-    // Every shortcut re-launch lands here: give it a fresh shell window on
-    // the running host; if none is mounted yet, just surface the existing one.
-    runtime.openMainWindow().catch(() => { runtime.show() })
+    // Stray duplicate launches happen outside the user's intent (installer
+    // finish page, shell refreshes); they surface the existing shell. In-app
+    // multi-opening lives in the dock's tab rail.
+    runtime.show()
   })
   await app.whenReady()
   if (process.platform === 'win32') app.setAppUserModelId('io.github.coffeefreehans.harnessx')

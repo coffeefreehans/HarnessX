@@ -176,13 +176,6 @@ export interface DesktopRuntime {
   openAssistantWindow(): Promise<void>
 
   /**
-   * Open one more full main shell window bound to the running host. Used for
-   * shortcut re-launches: a second activation yields a fresh window instead
-   * of only focusing the previous one.
-   */
-  openMainWindow(): Promise<void>
-
-  /**
    * Contribute one command to the native tray for the current Cordis lifetime.
    * @param item - dynamic label, state, and invocation owned by the caller.
    * @returns a refreshable, idempotent registration handle.
