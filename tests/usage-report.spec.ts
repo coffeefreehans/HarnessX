@@ -81,6 +81,7 @@ describe('usage log aggregation', () => {
     expect(usage.days.get(usageDayKey(Date.UTC(2026, 7, 20, 8, 0, 30)))).toEqual({
       inputTokens: 100,
       outputTokens: 20,
+      messages: 0,
     })
   })
 
@@ -175,10 +176,18 @@ describe('collectUsageReport over a session tree', () => {
     expect(report.assistantMessages).toBe(1)
     expect(report.totals.inputTokens).toBe(100)
     expect(report.byModel[0]).toMatchObject({ provider: 'nexscp', model: 'stealth-x', totalTokens: 120 })
-    expect(report.daily).toHaveLength(14)
+    expect(report.daily).toHaveLength(30)
     expect(report.daily[report.daily.length - 1]?.day).toBe(usageDayKey(Date.now()))
     expect(report.today?.totalTokens).toBe(0)
     expect(report.last7.totalTokens).toBe(0)
+
+    // Per-model daily rows align with the global window so range filters can
+    // slice them without reshaping.
+    const stealthDaily = report.byModelDaily.find(row => row.model === 'stealth-x')
+    expect(stealthDaily?.daily).toHaveLength(30)
+    expect(stealthDaily?.daily.reduce((sum, entry) => sum + entry.totalTokens, 0)).toBe(120)
+    // The reply lands on its completion day within the range slice.
+    expect(stealthDaily?.daily.some(entry => entry.messages === 1)).toBe(true)
 
     // Unchanged files ride the cache; a rewritten log is re-read.
     const second = await collectUsageReport(dshHome, cache)
@@ -193,6 +202,7 @@ describe('collectUsageReport over a session tree', () => {
     const dshHome = await mkdtemp(join(tmpdir(), 'usage-empty-'))
     const report = await collectUsageReport(dshHome, createUsageCache())
     expect(report.sessions).toBe(0)
-    expect(report.daily).toHaveLength(14)
+    expect(report.daily).toHaveLength(30)
+    expect(report.byModelDaily).toEqual([])
   })
 })

@@ -32,6 +32,13 @@ export interface UsageModelRow {
   totalTokens: number
 }
 
+/** Per-model usage on one local day, aligned to the report's daily window. */
+export interface UsageModelDayRow {
+  provider: string
+  model: string
+  daily: Array<{ day: string; inputTokens: number; outputTokens: number; totalTokens: number; messages: number }>
+}
+
 /** One local-day usage bucket. */
 export interface UsageDayRow {
   day: string
@@ -49,10 +56,18 @@ export interface UsageReport {
   assistantMessages: number
   totals: UsageTotals
   byModel: UsageModelRow[]
-  /** Last 14 local days, ascending, zero-filled. */
+  /** Last 30 local days, ascending, zero-filled. */
   daily: UsageDayRow[]
   today: UsageDayRow | undefined
   last7: UsageDayRow
+  /** Per-model daily split aligned with `daily` for range-filtered views. */
+  byModelDaily: UsageModelDayRow[]
+}
+
+interface DayBucket {
+  inputTokens: number
+  outputTokens: number
+  messages: number
 }
 
 /** Aggregation of one log file, cacheable by file revision. */
@@ -61,7 +76,8 @@ interface FileUsage {
   assistantMessages: number
   totals: UsageTotals
   models: Map<string, UsageModelRow>
-  days: Map<string, { inputTokens: number; outputTokens: number }>
+  days: Map<string, DayBucket>
+  modelDays: Map<string, Map<string, DayBucket>>
 }
 
 interface RawCounters {
@@ -74,6 +90,7 @@ interface RawCounters {
 
 interface ParsedMessageRow {
   seq: number
+  time: number | undefined
   provider: string
   model: string
 }
@@ -91,7 +108,7 @@ export function createUsageCache(): UsageCache {
   return new Map()
 }
 
-const DAILY_WINDOW_DAYS = 14
+const DAILY_WINDOW_DAYS = 30
 const MAX_LOG_BYTES = 256 * 1024 * 1024
 const ZSTD_MAGIC = 0xfd2fb528
 const LOG_FILENAMES = new Set(['session.jsonl.zstd', 'session.jsonl'])
@@ -213,7 +230,8 @@ export function aggregateUsageLog(text: string): FileUsage {
   // is only honored when the file has no chunk-based usage to prefer.
   const legacyTotals = emptyTotals()
   const legacyModels = new Map<string, UsageModelRow>()
-  const legacyDays = new Map<string, { inputTokens: number; outputTokens: number }>()
+  const legacyDays = new Map<string, DayBucket>()
+  const legacyModelDays = new Map<string, Map<string, DayBucket>>()
 
   for (const line of text.split('\n')) {
     const trimmed = line.trim()
@@ -245,6 +263,7 @@ export function aggregateUsageLog(text: string): FileUsage {
         : undefined
       messages.push({
         seq,
+        time,
         provider: typeof source?.provider === 'string' && source.provider.length > 0 ? source.provider : 'unknown',
         model: typeof source?.model === 'string' && source.model.length > 0 ? source.model : 'unknown',
       })
@@ -254,9 +273,12 @@ export function aggregateUsageLog(text: string): FileUsage {
       if (rawUsage !== undefined) {
         const current = messages[messages.length - 1]
         if (current !== undefined) {
-          addAttributed(legacyTotals, legacyModels, legacyDays, providerOf(current), modelOf(current), countersFrom(rawUsage), time)
-          const key = `${current.provider}::${current.model}`
-          const row = legacyModels.get(key)
+          addAttributed(legacyTotals, legacyModels, legacyDays, legacyModelDays, providerOf(current), modelOf(current), countersFrom(rawUsage), time)
+          // Replies live on their own local day for range-filtered views.
+          if (time !== undefined) {
+            modelDayBucket(legacyModelDays, current.provider, current.model)(usageDayKey(time)).messages += 1
+          }
+          const row = legacyModels.get(`${current.provider}::${current.model}`)
           if (row !== undefined) row.messages += 1
         }
       }
@@ -282,6 +304,7 @@ export function aggregateUsageLog(text: string): FileUsage {
     usage.totals = legacyTotals
     usage.models = legacyModels
     usage.days = legacyDays
+    usage.modelDays = legacyModelDays
     return usage
   }
 
@@ -290,8 +313,12 @@ export function aggregateUsageLog(text: string): FileUsage {
   // fall back to the last seen source for aborted trailing steps.
   const replyCounts = new Map<string, number>()
   for (const message of messages) {
+    // Replies are counted on the local day of their own completion.
     const key = `${message.provider}::${message.model}`
     replyCounts.set(key, (replyCounts.get(key) ?? 0) + 1)
+    if (message.time !== undefined) {
+      modelDayBucket(usage.modelDays, message.provider, message.model)(usageDayKey(message.time)).messages += 1
+    }
   }
   let cursor = 0
   let lastProvider = 'unknown'
@@ -307,7 +334,7 @@ export function aggregateUsageLog(text: string): FileUsage {
     const nextMessage = cursor < messages.length ? messages[cursor] : undefined
     const provider = nextMessage !== undefined ? nextMessage.provider : lastProvider
     const model = nextMessage !== undefined ? nextMessage.model : lastModel
-    addAttributed(usage.totals, usage.models, usage.days, provider, model, chunk.counters, chunk.time)
+    addAttributed(usage.totals, usage.models, usage.days, usage.modelDays, provider, model, chunk.counters, chunk.time)
   }
   usage.assistantMessages = assistantMessages
   for (const [key, row] of usage.models) row.messages = replyCounts.get(key) ?? 0
@@ -339,13 +366,34 @@ function emptyFileUsage(): FileUsage {
     totals: emptyTotals(),
     models: new Map(),
     days: new Map(),
+    modelDays: new Map(),
+  }
+}
+
+/** Ensure one per-model day bucket exists. */
+function modelDayBucket(
+  modelDays: Map<string, Map<string, DayBucket>>,
+  provider: string,
+  model: string,
+): (day: string) => DayBucket {
+  const key = `${provider}::${model}`
+  let days = modelDays.get(key)
+  if (days === undefined) {
+    days = new Map()
+    modelDays.set(key, days)
+  }
+  return day => {
+    const bucket = days.get(day) ?? { inputTokens: 0, outputTokens: 0, messages: 0 }
+    days.set(day, bucket)
+    return bucket
   }
 }
 
 function addAttributed(
   totals: UsageTotals,
   models: Map<string, UsageModelRow>,
-  days: Map<string, { inputTokens: number; outputTokens: number }>,
+  days: Map<string, DayBucket>,
+  modelDays: Map<string, Map<string, DayBucket>> | undefined,
   provider: string,
   model: string,
   counters: RawCounters,
@@ -364,10 +412,15 @@ function addAttributed(
   models.set(key, row)
   if (time === undefined) return
   const day = usageDayKey(time)
-  const bucket = days.get(day) ?? { inputTokens: 0, outputTokens: 0 }
+  const bucket = days.get(day) ?? { inputTokens: 0, outputTokens: 0, messages: 0 }
   bucket.inputTokens += counters.inputTokens
   bucket.outputTokens += counters.outputTokens
   days.set(day, bucket)
+  if (modelDays !== undefined) {
+    const dayBucket = modelDayBucket(modelDays, provider, model)(day)
+    dayBucket.inputTokens += counters.inputTokens
+    dayBucket.outputTokens += counters.outputTokens
+  }
 }
 
 /**
@@ -378,7 +431,8 @@ function mergeFileUsage(report: {
   assistantMessages: number
   totals: UsageTotals
   models: Map<string, UsageModelRow>
-  days: Map<string, { inputTokens: number; outputTokens: number }>
+  days: Map<string, DayBucket>
+  modelDays: Map<string, Map<string, DayBucket>>
 }, file: FileUsage): void {
   report.userMessages += file.userMessages
   report.assistantMessages += file.assistantMessages
@@ -406,6 +460,24 @@ function mergeFileUsage(report: {
     }
     existing.inputTokens += bucket.inputTokens
     existing.outputTokens += bucket.outputTokens
+    existing.messages += bucket.messages
+  }
+  for (const [key, days] of file.modelDays) {
+    let reportDays = report.modelDays.get(key)
+    if (reportDays === undefined) {
+      reportDays = new Map()
+      report.modelDays.set(key, reportDays)
+    }
+    for (const [day, bucket] of days) {
+      const existing = reportDays.get(day)
+      if (existing === undefined) {
+        reportDays.set(day, { ...bucket })
+        continue
+      }
+      existing.inputTokens += bucket.inputTokens
+      existing.outputTokens += bucket.outputTokens
+      existing.messages += bucket.messages
+    }
   }
 }
 
@@ -437,7 +509,8 @@ export async function collectUsageReport(dshHome: string, cache: UsageCache): Pr
     assistantMessages: 0,
     totals: emptyTotals(),
     models: new Map<string, UsageModelRow>(),
-    days: new Map<string, { inputTokens: number; outputTokens: number }>,
+    days: new Map<string, DayBucket>(),
+    modelDays: new Map<string, Map<string, DayBucket>>(),
   }
   let sessions = 0
   let entries: Array<{ name: string; isFile: boolean; fullPath: string }>
@@ -470,12 +543,14 @@ export async function collectUsageReport(dshHome: string, cache: UsageCache): Pr
   }
 
   const daily: UsageDayRow[] = []
+  const windowDays: string[] = []
   const today = new Date()
   for (let offset = DAILY_WINDOW_DAYS - 1; offset >= 0; offset -= 1) {
     const date = new Date(today)
     date.setDate(date.getDate() - offset)
     const key = usageDayKey(date.getTime())
-    const bucket = merged.days.get(key) ?? { inputTokens: 0, outputTokens: 0 }
+    windowDays.push(key)
+    const bucket = merged.days.get(key) ?? { inputTokens: 0, outputTokens: 0, messages: 0 }
     daily.push({
       day: key,
       inputTokens: bucket.inputTokens,
@@ -483,6 +558,30 @@ export async function collectUsageReport(dshHome: string, cache: UsageCache): Pr
       totalTokens: bucket.inputTokens + bucket.outputTokens,
     })
   }
+  const byModelDaily: UsageModelDayRow[] = [...merged.modelDays.entries()]
+    .map(([key, days]) => {
+      const separator = key.indexOf('::')
+      const provider = key.slice(0, separator)
+      const model = key.slice(separator + 2)
+      return {
+        provider,
+        model,
+        daily: windowDays.map(day => {
+          const bucket = days.get(day) ?? { inputTokens: 0, outputTokens: 0, messages: 0 }
+          return {
+            day,
+            inputTokens: bucket.inputTokens,
+            outputTokens: bucket.outputTokens,
+            totalTokens: bucket.inputTokens + bucket.outputTokens,
+            messages: bucket.messages,
+          }
+        }),
+      }
+    })
+    .sort((left, right) => {
+      const total = (row: UsageModelDayRow): number => row.daily.reduce((sum, entry) => sum + entry.totalTokens, 0)
+      return total(right) - total(left)
+    })
   const todayRow = daily[daily.length - 1]
   const last7 = daily.slice(-7).reduce((acc, row) => ({
     day: '',
@@ -501,5 +600,6 @@ export async function collectUsageReport(dshHome: string, cache: UsageCache): Pr
     daily,
     today: todayRow,
     last7,
+    byModelDaily,
   }
 }
