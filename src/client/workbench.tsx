@@ -1393,6 +1393,11 @@ function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNod
   const { state } = props
   const t = useStrings()
   const { workspace, ready } = useWorkspace()
+  // Session switches and poll gaps can transiently hide the workspace; once
+  // known, this tab stays bound to its repository until a real one arrives.
+  const lastWorkspace = useRef<string | undefined>(undefined)
+  if (workspace !== undefined) lastWorkspace.current = workspace
+  const activeWorkspace = workspace ?? lastWorkspace.current
   const [status, setStatus] = useState<StatusResponse | undefined>()
   const [log, setLog] = useState<LogResponse['entries']>([])
   const [diff, setDiff] = useState<DiffResponse['total'] | undefined>()
@@ -1413,12 +1418,12 @@ function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNod
 
   const reload = useCallback(async () => {
     if (!ready) return
-    if (workspace === undefined) {
+    if (activeWorkspace === undefined) {
       setStatus({ entries: [] })
       setError(undefined)
       return
     }
-    const query = `path=${encodeURIComponent(workspace)}`
+    const query = `path=${encodeURIComponent(activeWorkspace)}`
     const [statusResult, logResult, diffResult] = await Promise.allSettled([
       requestJson<StatusResponse>(`/api/desktop/workbench/git/status?${query}`),
       requestJson<LogResponse>(`/api/desktop/workbench/git/log?${query}`),
@@ -1433,30 +1438,30 @@ function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNod
     setStatus(statusResult.value)
     setLog(logResult.status === 'fulfilled' ? logResult.value.entries : [])
     setDiff(diffResult.status === 'fulfilled' ? diffResult.value.total : undefined)
-  }, [workspace, ready])
+  }, [activeWorkspace, ready])
 
   useEffect(() => { void reload() }, [reload])
 
   const mutate = useCallback(async (action: 'stage' | 'unstage', paths: string[]) => {
-    if (workspace === undefined) return
+    if (activeWorkspace === undefined) return
     setBusy(true)
     setNotice(undefined)
     try {
-      await postJson(`/api/desktop/workbench/git/${action}`, { cwd: workspace, paths })
+      await postJson(`/api/desktop/workbench/git/${action}`, { cwd: activeWorkspace, paths })
       await reload()
     } catch (cause) {
       setNotice(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setBusy(false)
     }
-  }, [workspace, reload])
+  }, [activeWorkspace, reload])
 
   const commit = useCallback(async () => {
-    if (workspace === undefined || message.trim().length === 0) return
+    if (activeWorkspace === undefined || message.trim().length === 0) return
     setBusy(true)
     setNotice(undefined)
     try {
-      await postJson('/api/desktop/workbench/git/commit', { cwd: workspace, message: message.trim() })
+      await postJson('/api/desktop/workbench/git/commit', { cwd: activeWorkspace, message: message.trim() })
       setMessage('')
       await reload()
     } catch (cause) {
@@ -1464,37 +1469,37 @@ function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNod
     } finally {
       setBusy(false)
     }
-  }, [workspace, message, reload])
+  }, [activeWorkspace, message, reload])
 
   const loadBranches = useCallback(async () => {
-    if (workspace === undefined) return
+    if (activeWorkspace === undefined) return
     try {
       const value = await requestJson<{ branches: GitBranchEntry[] }>(
-        `/api/desktop/workbench/git/branches?path=${encodeURIComponent(workspace)}`,
+        `/api/desktop/workbench/git/branches?path=${encodeURIComponent(activeWorkspace)}`,
       )
       setBranches(value.branches)
     } catch {
       // Keep whatever list we already have.
     }
-  }, [workspace])
+  }, [activeWorkspace])
 
   const loadStashes = useCallback(async () => {
-    if (workspace === undefined) return
+    if (activeWorkspace === undefined) return
     try {
       const value = await requestJson<{ entries: unknown[] }>(
-        `/api/desktop/workbench/git/stash/list?path=${encodeURIComponent(workspace)}`,
+        `/api/desktop/workbench/git/stash/list?path=${encodeURIComponent(activeWorkspace)}`,
       )
       setStashes(value.entries.length)
     } catch {
       // Stash visibility is best-effort.
     }
-  }, [workspace])
+  }, [activeWorkspace])
 
   useEffect(() => { void loadStashes() }, [loadStashes])
 
   /** Run a git network/checkout mutation, surface the outcome as a notice, refresh. */
   const runAction = useCallback(async (okNotice: string | undefined, run: () => Promise<void>) => {
-    if (workspace === undefined) return
+    if (activeWorkspace === undefined) return
     setBusy(true)
     setNotice(undefined)
     try {
@@ -1507,24 +1512,24 @@ function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNod
     } finally {
       setBusy(false)
     }
-  }, [workspace, reload, loadStashes])
+  }, [activeWorkspace, reload, loadStashes])
 
   /** Discard worktree edits of tracked files after an explicit confirmation. */
   const discardPaths = useCallback((paths: string[]) => {
-    if (workspace === undefined || paths.length === 0) return
+    if (activeWorkspace === undefined || paths.length === 0) return
     if (!window.confirm(t.confirmDiscard(paths.length))) return
-    void runAction(undefined, () => postJson('/api/desktop/workbench/git/discard', { cwd: workspace, paths }))
-  }, [workspace, t, runAction])
+    void runAction(undefined, () => postJson('/api/desktop/workbench/git/discard', { cwd: activeWorkspace, paths }))
+  }, [activeWorkspace, t, runAction])
 
   const switchBranch = useCallback((name: string, create: boolean) => {
     void runAction(undefined, async () => {
       await postJson('/api/desktop/workbench/git/checkout', create
-        ? { cwd: workspace, branch: name, create: true }
-        : { cwd: workspace, branch: name })
+        ? { cwd: activeWorkspace, branch: name, create: true }
+        : { cwd: activeWorkspace, branch: name })
       setShowBranches(false)
       setNewBranch('')
     })
-  }, [runAction, workspace])
+  }, [runAction, activeWorkspace])
 
   if (status === undefined) {
     return (
@@ -1549,7 +1554,7 @@ function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNod
           type="button"
           className="hxpWbToolButton hxpWbToolText hxpWbBranch"
           title={t.gitBranches}
-          disabled={busy || workspace === undefined}
+          disabled={busy || activeWorkspace === undefined}
           onClick={() => {
             const next = !showBranches
             setShowBranches(next)
@@ -1561,27 +1566,27 @@ function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNod
         {(status.ahead !== undefined || status.behind !== undefined)
           && <span className="hxpWbAhead">↑{String(status.ahead ?? 0)} ↓{String(status.behind ?? 0)}</span>}
         <div className="hxpWbSpring" />
-        <button type="button" className="hxpWbToolButton hxpWbToolText" disabled={busy || workspace === undefined}
+        <button type="button" className="hxpWbToolButton hxpWbToolText" disabled={busy || activeWorkspace === undefined}
           title={t.fetchOk}
-          onClick={() => { void runAction(t.fetchOk, () => postJson('/api/desktop/workbench/git/fetch', { cwd: workspace })) }}>
+          onClick={() => { void runAction(t.fetchOk, () => postJson('/api/desktop/workbench/git/fetch', { cwd: activeWorkspace })) }}>
           {t.fetchLabel}
         </button>
-        <button type="button" className="hxpWbToolButton hxpWbToolText" disabled={busy || workspace === undefined}
-          onClick={() => { void runAction(t.pullOk, () => postJson('/api/desktop/workbench/git/pull', { cwd: workspace })) }}>
+        <button type="button" className="hxpWbToolButton hxpWbToolText" disabled={busy || activeWorkspace === undefined}
+          onClick={() => { void runAction(t.pullOk, () => postJson('/api/desktop/workbench/git/pull', { cwd: activeWorkspace })) }}>
           {t.pull}
         </button>
-        <button type="button" className="hxpWbToolButton hxpWbToolText" disabled={busy || workspace === undefined}
-          onClick={() => { void runAction(t.pushOk, () => postJson('/api/desktop/workbench/git/push', { cwd: workspace })) }}>
+        <button type="button" className="hxpWbToolButton hxpWbToolText" disabled={busy || activeWorkspace === undefined}
+          onClick={() => { void runAction(t.pushOk, () => postJson('/api/desktop/workbench/git/push', { cwd: activeWorkspace })) }}>
           {t.push}
         </button>
-        <button type="button" className="hxpWbToolButton hxpWbToolText" disabled={busy || workspace === undefined || changed.length === 0}
+        <button type="button" className="hxpWbToolButton hxpWbToolText" disabled={busy || activeWorkspace === undefined || changed.length === 0}
           title={t.stashSave}
-          onClick={() => { void runAction(t.stashOk, () => postJson('/api/desktop/workbench/git/stash', { cwd: workspace })) }}>
+          onClick={() => { void runAction(t.stashOk, () => postJson('/api/desktop/workbench/git/stash', { cwd: activeWorkspace })) }}>
           {t.stashSave}
         </button>
-        <button type="button" className="hxpWbToolButton hxpWbToolText" disabled={busy || workspace === undefined || stashes === 0}
+        <button type="button" className="hxpWbToolButton hxpWbToolText" disabled={busy || activeWorkspace === undefined || stashes === 0}
           title={t.unstashOk}
-          onClick={() => { void runAction(t.unstashOk, () => postJson('/api/desktop/workbench/git/stash/pop', { cwd: workspace })) }}>
+          onClick={() => { void runAction(t.unstashOk, () => postJson('/api/desktop/workbench/git/stash/pop', { cwd: activeWorkspace })) }}>
           {t.stashRestore}
         </button>
         <button type="button" className="hxpWbToolButton" title={t.refresh} aria-label={t.refresh} onClick={() => { void reload() }}>
@@ -1611,7 +1616,7 @@ function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNod
                     onClick={event => {
                       event.stopPropagation()
                       void runAction(undefined, async () => {
-                        await postJson('/api/desktop/workbench/git/branch/delete', { cwd: workspace, branch: branch.name })
+                        await postJson('/api/desktop/workbench/git/branch/delete', { cwd: activeWorkspace, branch: branch.name })
                         await loadBranches()
                       })
                     }}>
@@ -1645,10 +1650,18 @@ function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNod
           <div className="hxpWbGitClean">
             <p>{t.gitClean}</p>
             {(status.ahead ?? 0) > 0 && <p>{t.gitCleanAhead(status.ahead ?? 0)}</p>}
-            <button type="button" className="hxpWbLinkAction" disabled={busy}
-              onClick={() => { void reload() }}>
-              {t.refresh}
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {(status.ahead ?? 0) > 0 && (
+                <button type="button" className="hxpWbLinkAction" disabled={busy}
+                  onClick={() => { void runAction(t.pushOk, () => postJson('/api/desktop/workbench/git/push', { cwd: activeWorkspace })) }}>
+                  {t.push}
+                </button>
+              )}
+              <button type="button" className="hxpWbLinkAction" disabled={busy}
+                onClick={() => { void reload() }}>
+                {t.refresh}
+              </button>
+            </div>
           </div>
         )
         : (
