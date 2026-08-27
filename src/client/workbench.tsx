@@ -52,6 +52,8 @@ interface WorkbenchStrings {
   terminalPlaceholder: string
   terminalRestart: string
   gitNotRepository: string
+  gitClean: string
+  gitCleanAhead(count: number): string
   gitStaged: string
   gitChanges: string
   gitHistory: string
@@ -116,6 +118,8 @@ const STRINGS_ZH: WorkbenchStrings = {
   terminalPlaceholder: '输入命令，回车执行…',
   terminalRestart: '重新开始会话',
   gitNotRepository: '当前工作区不是 Git 仓库。',
+  gitClean: '工作区是干净的，没有未提交的修改。',
+  gitCleanAhead: count => `有 ${String(count)} 个本地提交尚未推送。`,
   gitStaged: '已暂存',
   gitChanges: '更改',
   gitHistory: '历史',
@@ -180,6 +184,8 @@ const STRINGS_EN: WorkbenchStrings = {
   terminalPlaceholder: 'Type a command and press Enter…',
   terminalRestart: 'Restart session',
   gitNotRepository: 'The current workspace is not a Git repository.',
+  gitClean: 'Working tree is clean — nothing to commit.',
+  gitCleanAhead: count => `${String(count)} local commit(s) not pushed yet.`,
   gitStaged: 'Staged',
   gitChanges: 'Changes',
   gitHistory: 'History',
@@ -557,7 +563,9 @@ const WORKBENCH_STYLES = `
 .hxpWbTermInput { flex: 1 1 auto; align-self: stretch; resize: none; padding: 4px 8px; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.1)); border-radius: 6px; background: transparent; color: var(--dsw-alias-label-primary, #222); font-family: var(--hxpWbMono); font-size: 12px; line-height: 1.5; outline: none; }
 .hxpWbTermInput:focus { border-color: var(--dsw-alias-label-tertiary, #999); }
 .hxpWbGit { gap: 0; }
-.hxpWbGitLower { flex: none; display: flex; flex-direction: column; overflow: hidden; max-height: calc(100% - 170px); border-top: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08)); }
+.hxpWbGitClean { flex: 1 1 auto; min-height: 80px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--dsw-alias-label-tertiary, #999); font-size: 12px; text-align: center; }
+.hxpWbGitClean p { margin: 0; }
+.hxpWbGitLower { flex: none; max-height: 62%; display: flex; flex-direction: column; overflow: hidden; max-height: calc(100% - 170px); border-top: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08)); }
 .hxpWbBranch { padding: 0 4px; font-weight: 600; }
 .hxpWbAhead { color: var(--dsw-alias-label-tertiary, #999); }
 .hxpWbDiffLine { padding: 0 10px 4px; color: var(--dsw-alias-label-tertiary, #999); font-size: 11px; }
@@ -1638,6 +1646,19 @@ function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNod
       {diff !== undefined && diff.files > 0 && (
         <div className="hxpWbDiffLine">{t.diffSummary(diff.files, diff.additions, diff.deletions)}</div>
       )}
+      {(staged.length === 0 && changed.length === 0)
+        ? (
+          <div className="hxpWbGitClean">
+            <p>{t.gitClean}</p>
+            {(status.ahead ?? 0) > 0 && <p>{t.gitCleanAhead(status.ahead ?? 0)}</p>}
+            <button type="button" className="hxpWbLinkAction" disabled={busy}
+              onClick={() => { void reload() }}>
+              {t.refresh}
+            </button>
+          </div>
+        )
+        : (
+        <>
       <SectionTitle label={t.gitStaged} count={staged.length}>
         {staged.length > 0 && (
           <button type="button" className="hxpWbLinkAction" disabled={busy}
@@ -1672,6 +1693,8 @@ function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNod
             onDiscard={entry.x !== '?' ? () => { discardPaths([entry.path]) } : undefined} />
         ))}
       </div>
+        </>
+        )}
       <HDivider
         label={t.dragResize}
         onResize={delta => { state.setPaneSize('git', lowerHeightRef.current - delta) }}
