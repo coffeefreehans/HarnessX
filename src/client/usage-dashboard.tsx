@@ -37,6 +37,7 @@ export type DashboardKey =
   | 'cacheWrite'
   | 'reasoning'
   | 'totalTokens'
+  | 'range'
   | 'today'
   | 'last7'
   | 'last30'
@@ -63,6 +64,7 @@ const zh: Record<DashboardKey, string> = {
   cacheWrite: '缓存写入',
   reasoning: '推理 tokens',
   totalTokens: '总 tokens',
+  range: '时间范围',
   today: '今日',
   last7: '近 7 日',
   last30: '近 30 日',
@@ -90,6 +92,7 @@ const en: Record<DashboardKey, string> = {
   cacheWrite: 'Cache write',
   reasoning: 'Reasoning tokens',
   totalTokens: 'Total tokens',
+  range: 'Range',
   today: 'Today',
   last7: 'Last 7 days',
   last30: 'Last 30 days',
@@ -253,27 +256,10 @@ export function UsageDashboardSection(_props: PropsRuntime<'settings.section'> &
           <div className="dshDashboardTitle">{t('title')}</div>
           <div className="dshDashboardDesc">{t('desc')}</div>
         </div>
-        <div className="dshDashboardControls">
-          <div className="dshDashboardSegmented" role="tablist" aria-label={rangeLabel}>
-            {(Object.keys(RANGE_WINDOWS) as RangeKey[]).map(key => (
-              <button
-                key={key}
-                type="button"
-                role="tab"
-                aria-selected={range === key}
-                className="dshDashboardPill"
-                data-active={range === key || undefined}
-                onClick={() => { setRange(key) }}
-              >
-                {key === 'today' ? t('today') : key === 'last7' ? t('last7') : t('last30')}
-              </button>
-            ))}
-          </div>
-          <button type="button" className="dshDashboardRefresh" disabled={loading}
-            onClick={() => { void load(false) }}>
-            {t('refresh')}
-          </button>
-        </div>
+        <button type="button" className="dshDashboardRefresh" disabled={loading}
+          onClick={() => { void load(false) }}>
+          {t('refresh')}
+        </button>
       </div>
 
       {loading && <div className="dshDashboardNotice">{t('loading')}</div>}
@@ -293,6 +279,25 @@ export function UsageDashboardSection(_props: PropsRuntime<'settings.section'> &
             <StatCard label={`${t('inputTokens')} · ${t('allTime')}`} value={formatTokens(totals?.inputTokens ?? 0)} />
             <StatCard label={`${t('outputTokens')} · ${t('allTime')}`} value={formatTokens(totals?.outputTokens ?? 0)} />
             <StatCard label={`${t('totalTokens')} · ${t('allTime')}`} value={formatTokens((totals?.inputTokens ?? 0) + (totals?.outputTokens ?? 0))} />
+          </div>
+
+          <div className="dshDashboardBlockHead">
+            <div className="dshDashboardBlockTitle">{t('range')}</div>
+            <div className="dshDashboardSegmented" role="tablist" aria-label={t('range')}>
+              {(Object.keys(RANGE_WINDOWS) as RangeKey[]).map(key => (
+                <button
+                  key={key}
+                  type="button"
+                  role="tab"
+                  aria-selected={range === key}
+                  className="dshDashboardPill"
+                  data-active={range === key || undefined}
+                  onClick={() => { setRange(key) }}
+                >
+                  {key === 'today' ? t('today') : key === 'last7' ? t('last7') : t('last30')}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="dshDashboardCards">
