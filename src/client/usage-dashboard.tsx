@@ -290,15 +290,9 @@ export function UsageDashboardSection(_props: PropsRuntime<'settings.section'> &
             <StatCard label={t('sessions')} value={String(report.sessions)} />
             <StatCard label={t('userMessages')} value={formatTokens(report.userMessages)} />
             <StatCard label={t('assistantMessages')} value={formatTokens(report.assistantMessages)} />
-            <StatCard label={`${t('totalTokens')} · ${t('allTime')}`} value={formatTokens((totals?.inputTokens ?? 0) + (totals?.outputTokens ?? 0))} />
-          </div>
-
-          <div className="dshDashboardCards">
             <StatCard label={`${t('inputTokens')} · ${t('allTime')}`} value={formatTokens(totals?.inputTokens ?? 0)} />
             <StatCard label={`${t('outputTokens')} · ${t('allTime')}`} value={formatTokens(totals?.outputTokens ?? 0)} />
-            <StatCard label={`${t('cacheRead')} · ${t('allTime')}`} value={formatTokens(totals?.cacheReadTokens ?? 0)} />
-            <StatCard label={`${t('cacheWrite')} · ${t('allTime')}`} value={formatTokens(totals?.cacheWriteTokens ?? 0)} />
-            <StatCard label={`${t('reasoning')} · ${t('allTime')}`} value={formatTokens(totals?.reasoningTokens ?? 0)} />
+            <StatCard label={`${t('totalTokens')} · ${t('allTime')}`} value={formatTokens((totals?.inputTokens ?? 0) + (totals?.outputTokens ?? 0))} />
           </div>
 
           <div className="dshDashboardCards">
