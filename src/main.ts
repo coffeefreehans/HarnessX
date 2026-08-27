@@ -54,6 +54,13 @@ function notifyProfileRecovery(runtime: ElectronDesktopRuntime, body: string): v
 /** Start one Electron process and leave lifetime to the mounted desktop plugin. */
 async function start(): Promise<void> {
   app.setName(PRODUCT_NAME)
+  // One process owns the host, profile state, and shell lifetime; a second
+  // shortcut activation must surface as ANOTHER WINDOW of this instance, not
+  // as a competing full instance (shared userData/profiles would fight).
+  if (!app.requestSingleInstanceLock()) {
+    app.quit()
+    return
+  }
 
   let current: Context | undefined
   let profileStartup: DesktopProfileStartup | undefined
@@ -94,6 +101,11 @@ async function start(): Promise<void> {
   const requestQuit = (code: number): void => { void shutdown.request(code) }
   removeShutdownRequests = installShutdownRequests(process, app, requestQuit)
 
+  app.on('second-instance', () => {
+    // Every shortcut re-launch lands here: give it a fresh shell window on
+    // the running host; if none is mounted yet, just surface the existing one.
+    runtime.openMainWindow().catch(() => { runtime.show() })
+  })
   await app.whenReady()
   if (process.platform === 'win32') app.setAppUserModelId('io.github.coffeefreehans.harnessx')
   if (app.isPackaged && process.cwd() === '/') process.chdir(app.getPath('home'))
