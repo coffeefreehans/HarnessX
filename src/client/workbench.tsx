@@ -351,12 +351,6 @@ const ArrowRightIcon = (
   </Icon>
 )
 
-const PlusIcon = (
-  <Icon>
-    <path d="M8 3.2v9.6M3.2 8h9.6" />
-  </Icon>
-)
-
 const SendIcon = (
   <Icon>
     <path d="M14 2 3 6.5l4.5 2L9.5 13z" />
@@ -873,7 +867,7 @@ function renderPanel(tab: WorkbenchTab, browserHome: string | undefined, workspa
   if (tab.kind === 'explorer') return <ExplorerPanel key={tab.key} tab={tab} state={state} />
   if (tab.kind === 'terminal') return <TerminalPanel key={tab.key} tab={tab} state={state} />
   if (tab.kind === 'git') return <GitPanel key={tab.key} tab={tab} state={state} />
-  if (tab.kind === 'chat') return <AuxChatPanel />
+  if (tab.kind === 'chat') return <AuxChatPanel key={tab.key} tab={tab} />
   return <BrowserPanel key={tab.key} home={browserHome} workspace={workspace} />
 }
 
@@ -1941,12 +1935,14 @@ export function setWorkbenchApiClient(api: WorkbenchWireApi | undefined): void {
 class AuxChatStore {
   private readonly listeners = new Set<() => void>()
   private version = 0
-  private nextIndex = 1
-  private creating = false
+  /** One conversation per dock tab instance, keyed by the tab's stable key. */
+  private readonly items = new Map<string, AuxConversation>()
+  private readonly creating = new Set<string>()
+  private readonly refreshing = new Set<string>()
 
-  readonly conversations: AuxConversation[] = []
-  activeIndex = -1
-  createError: string | undefined
+  get(key: string): AuxConversation | undefined {
+    return this.items.get(key)
+  }
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
@@ -1955,30 +1951,28 @@ class AuxChatStore {
 
   getSnapshot = (): number => this.version
 
-  get active(): AuxConversation | undefined {
-    return this.conversations[this.activeIndex]
-  }
-
   private emit(): void {
     this.version += 1
     for (const listener of [...this.listeners]) listener()
   }
 
-  busy(conversation: AuxConversation): boolean {
+  busy(key: string): boolean {
+    const conversation = this.items.get(key)
+    if (conversation === undefined) return false
     return conversation.pendingText !== undefined
       || conversation.streamingText !== undefined
       || conversation.awaitingReply
   }
 
-  /** Open a fresh upstream session and switch to it. */
-  async create(cwd: string | undefined): Promise<void> {
-    if (workbenchApi === undefined || this.creating) return
-    this.creating = true
+  /** Ensure the tab owns exactly one upstream session; creates it on demand. */
+  async ensureSession(key: string, cwd: string | undefined): Promise<void> {
+    if (workbenchApi === undefined || this.items.has(key) || this.creating.has(key)) return
+    this.creating.add(key)
     try {
       const response = await workbenchApi.sessions.create(cwd === undefined ? {} : { cwd })
       const conversation: AuxConversation = {
         sessionId: response.result.sessionId,
-        index: this.nextIndex,
+        index: 0,
         messages: [],
         pendingText: undefined,
         streamingText: undefined,
@@ -1987,48 +1981,33 @@ class AuxChatStore {
         models: undefined,
         selection: undefined,
       }
-      this.nextIndex += 1
-      this.createError = undefined
-      this.conversations.push(conversation)
-      this.activeIndex = this.conversations.length - 1
+      this.items.set(key, conversation)
       this.emit()
-      void this.loadModels(response.result.sessionId)
+      void this.loadModels(key)
     } catch (cause) {
-      this.createError = cause instanceof Error ? cause.message : String(cause)
+      // Surface the failure on the slot; the panel retries on its next run.
+      const placeholder: AuxConversation = {
+        sessionId: '',
+        index: 0,
+        messages: [],
+        pendingText: undefined,
+        streamingText: undefined,
+        awaitingReply: false,
+        error: cause instanceof Error ? cause.message : String(cause),
+        models: undefined,
+        selection: undefined,
+      }
+      this.items.set(key, placeholder)
       this.emit()
     } finally {
-      this.creating = false
+      this.creating.delete(key)
     }
   }
 
-  setActive(index: number): void {
-    if (index < 0 || index >= this.conversations.length || index === this.activeIndex) return
-    this.activeIndex = index
-    this.emit()
-    const conversation = this.conversations[index]
-    if (conversation !== undefined && conversation.models === undefined) {
-      void this.loadModels(conversation.sessionId)
-    }
-  }
-
-  close(index: number): void {
-    const victim = this.conversations[index]
-    if (victim === undefined) return
-    this.conversations.splice(index, 1)
-    if (this.conversations.length === 0) {
-      this.activeIndex = -1
-    } else if (this.activeIndex > index) {
-      this.activeIndex -= 1
-    } else if (this.activeIndex >= this.conversations.length) {
-      this.activeIndex = this.conversations.length - 1
-    }
-    this.emit()
-  }
-
-  /** Queue one user message on the active conversation's upstream session. */
-  async send(text: string): Promise<void> {
-    const conversation = this.active
-    if (workbenchApi === undefined || conversation === undefined) return
+  /** Queue one user message on this tab's upstream session. */
+  async send(key: string, text: string): Promise<void> {
+    const conversation = this.items.get(key)
+    if (workbenchApi === undefined || conversation === undefined || conversation.sessionId === '') return
     conversation.error = undefined
     conversation.pendingText = text
     this.emit()
@@ -2039,7 +2018,7 @@ class AuxChatStore {
         content: [{ type: 'text', text }],
         clientTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       })
-      await this.refresh(conversation.sessionId)
+      await this.refresh(key)
     } catch (cause) {
       conversation.pendingText = undefined
       conversation.error = cause instanceof Error ? cause.message : String(cause)
@@ -2048,53 +2027,69 @@ class AuxChatStore {
   }
 
   /**
-   * Pull the authoritative tail page for one conversation (the active one by
-   * default). Transient poll failures stay silent; the next tick retries.
+   * Pull authoritative tail pages for every known conversation. Mounted panels
+   * call this on a timer; the in-flight guard keeps overlapping ticks harmless.
    */
-  async refresh(sessionId?: string): Promise<void> {
+  async refreshAll(): Promise<void> {
     if (workbenchApi === undefined) return
-    const target = sessionId === undefined
-      ? this.active
-      : this.conversations.find(entry => entry.sessionId === sessionId)
-    if (target === undefined) return
+    for (const [key, conversation] of [...this.items]) {
+      if (conversation.sessionId === '' || this.refreshing.has(key)) continue
+      this.refreshing.add(key)
+      void this.refreshOne(key, conversation).finally(() => { this.refreshing.delete(key) })
+    }
+  }
+
+  private async refreshOne(key: string, conversation: AuxConversation): Promise<void> {
+    const api = workbenchApi
+    if (api === undefined) return
     try {
-      const response = await workbenchApi.sessions.history({ sessionId: target.sessionId })
+      const response = await api.sessions.history({ sessionId: conversation.sessionId })
+      if (this.items.get(key) !== conversation) return
       const folded = foldAuxHistory(response.result.events ?? [])
-      // Drop the optimistic echo once history shows the real user message.
-      if (target.pendingText !== undefined
-        && folded.messages.some(entry => entry.role === 'user' && entry.text === target.pendingText)) {
-        target.pendingText = undefined
+      if (conversation.pendingText !== undefined
+        && folded.messages.some(entry => entry.role === 'user' && entry.text === conversation.pendingText)) {
+        conversation.pendingText = undefined
       }
-      target.messages = folded.messages
-      target.streamingText = folded.streamingText
-      target.awaitingReply = folded.awaitingReply
+      conversation.messages = folded.messages
+      conversation.streamingText = folded.streamingText
+      conversation.awaitingReply = folded.awaitingReply
     } catch {
       return
     }
     this.emit()
+  }
+
+  async refresh(key?: string): Promise<void> {
+    if (key === undefined) {
+      await this.refreshAll()
+      return
+    }
+    const conversation = this.items.get(key)
+    if (conversation === undefined || this.refreshing.has(key)) return
+    this.refreshing.add(key)
+    await this.refreshOne(key, conversation).finally(() => { this.refreshing.delete(key) })
   }
 
   /** Pull the advisory model directory for one conversation's session. */
-  private async loadModels(sessionId: string): Promise<void> {
+  private async loadModels(key: string): Promise<void> {
     if (workbenchApi === undefined) return
-    const target = this.conversations.find(entry => entry.sessionId === sessionId)
-    if (target === undefined) return
+    const target = this.items.get(key)
+    if (target === undefined || target.sessionId === '') return
     try {
-      const response = await workbenchApi.sessions.models({ sessionId })
-      if (this.conversations.find(entry => entry.sessionId === sessionId) !== target) return
+      const response = await workbenchApi.sessions.models({ sessionId: target.sessionId })
+      if (this.items.get(key) !== target) return
       target.models = response.result
       target.selection = response.result.current
     } catch {
-      // The picker falls back to the raw model id; retry on the next open.
       return
     }
     this.emit()
   }
 
-  /** Select the model that serves the active conversation's next step. */
-  async selectModel(provider: string, model: string): Promise<void> {
-    const conversation = this.active
-    if (workbenchApi === undefined || conversation === undefined) return
+  /** Select the model that serves this tab's next step. */
+  async selectModel(key: string, provider: string, model: string): Promise<void> {
+    const conversation = this.items.get(key)
+    if (workbenchApi === undefined || conversation === undefined || conversation.sessionId === '') return
     try {
       const response = await workbenchApi.sessions.selectModel({ sessionId: conversation.sessionId, provider, model })
       conversation.selection = response.result.selected
@@ -2105,10 +2100,10 @@ class AuxChatStore {
     this.emit()
   }
 
-  /** Stop the active conversation's running turn. */
-  async stop(): Promise<void> {
-    const conversation = this.active
-    if (workbenchApi === undefined || conversation === undefined) return
+  /** Stop this tab's running turn. */
+  async stop(key: string): Promise<void> {
+    const conversation = this.items.get(key)
+    if (workbenchApi === undefined || conversation === undefined || conversation.sessionId === '') return
     try {
       await workbenchApi.sessions.cancel({ sessionId: conversation.sessionId })
     } catch {
@@ -2121,18 +2116,19 @@ class AuxChatStore {
 const auxChatStore = new AuxChatStore()
 
 /**
- * Real auxiliary conversations: each tab is one live upstream session created
- * through the shared API client; sending queues a prompt and a poll loop folds
- * the history tail page into bubbles while the panel is open.
+ * One auxiliary conversation per dock tab. Opening the rail button spawns a
+ * fresh tab that immediately owns a live upstream session; there is no inner
+ * tab strip and no "+" — the outer dock tabs ARE the conversations.
  */
-function AuxChatPanel(): ReactNode {
+function AuxChatPanel(props: { tab: WorkbenchTab }): ReactNode {
   const t = useStrings()
   const store = auxChatStore
+  const tabKey = props.tab.key
   const { workspace } = useWorkspace()
   const subscribe = useCallback((listener: () => void) => store.subscribe(listener), [store])
   const readVersion = useCallback(() => store.getSnapshot(), [store])
   useSyncExternalStore(subscribe, readVersion)
-  const conversation = store.active
+  const conversation = store.get(tabKey)
   const activeSessionId = conversation?.sessionId
   const [draft, setDraft] = useState('')
   const [modelMenu, setModelMenu] = useState(false)
@@ -2144,190 +2140,141 @@ function AuxChatPanel(): ReactNode {
     if (text.length === 0 || workbenchApi === undefined) return
     setDraft('')
     stickToBottom.current = true
-    void store.send(text)
-  }, [draft, store])
+    void store.send(tabKey, text)
+  }, [draft, store, tabKey])
 
-  useEffect(() => { void store.refresh() }, [store, activeSessionId])
+  // Every tab boots straight into a fresh session at the current workspace.
+  useEffect(() => {
+    void store.ensureSession(tabKey, workspace)
+  }, [store, tabKey, workspace])
 
-  // The model menu belongs to one conversation; a tab switch closes it.
-  useEffect(() => { setModelMenu(false) }, [activeSessionId])
+  useEffect(() => { void store.refresh(tabKey) }, [store, tabKey, activeSessionId])
 
   useEffect(() => {
-    const timer = window.setInterval(() => { void store.refresh() }, 1000)
+    const timer = window.setInterval(() => { void store.refreshAll() }, 1000)
     return () => { window.clearInterval(timer) }
   }, [store])
+
+  // The model menu belongs to one tab; switching tabs closes it.
+  useEffect(() => { setModelMenu(false) }, [tabKey])
 
   useEffect(() => {
     const node = scrollRef.current
     if (node !== null && stickToBottom.current) node.scrollTop = node.scrollHeight
   })
 
-  const busy = conversation !== undefined && store.busy(conversation)
+  const busy = store.busy(tabKey)
   const serviceReady = workbenchApi !== undefined
+  const pickerLabel = auxModelDisplayName(conversation?.models, conversation?.selection)
 
   return (
     <div className="hxpWbPanel hxpWbChat">
-      <div className="hxpWbTabs" role="tablist">
-        {store.conversations.map((entry, index) => (
-          <div
-            key={entry.sessionId}
-            className="hxpWbTab"
-            role="tab"
-            tabIndex={0}
-            aria-selected={index === store.activeIndex}
-            data-active={index === store.activeIndex || undefined}
-            onClick={() => { store.setActive(index) }}
-            onKeyDown={event => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault()
-                store.setActive(index)
-              }
-            }}
-          >
-            <span className="hxpWbTabText">{`${t.chat} ${String(entry.index)}`}</span>
-            <button
-              type="button"
-              className="hxpWbTabClose"
-              title={t.close}
-              aria-label={`${t.close}: ${t.chat} ${String(entry.index)}`}
-              onClick={event => {
-                event.stopPropagation()
-                store.close(index)
-              }}
-            >
-              {CloseIcon}
-            </button>
-          </div>
-        ))}
-        <button
-          type="button"
-          className="hxpAuxAdd"
-          title={t.auxNew}
-          aria-label={t.auxNew}
-          disabled={!serviceReady}
-          onClick={() => { void store.create(workspace) }}
-        >
-          {PlusIcon}
-        </button>
-      </div>
       {!serviceReady && <div className="hxpWbNotice">{t.auxUnavailable}</div>}
-      {serviceReady && conversation === undefined && (
-        <div className="hxpAuxEmpty">
-          {store.createError !== undefined && <div className="hxpWbBrowserError">{store.createError}</div>}
-          <p>{t.auxEmpty}</p>
-        </div>
-      )}
-      {serviceReady && conversation !== undefined && (
-        <>
-          <div
-            ref={scrollRef}
-            className="hxpAuxMessages"
-            onScroll={() => {
-              const node = scrollRef.current
-              if (node === null) return
-              stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 64
-            }}
-          >
-            {conversation.messages.map(message => (
-              <div key={message.id} className="hxpAuxMsg" data-role={message.role}>{message.text}</div>
+      <div
+        ref={scrollRef}
+        className="hxpAuxMessages"
+        onScroll={() => {
+          const node = scrollRef.current
+          if (node === null) return
+          stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 64
+        }}
+      >
+        {conversation?.messages.map(message => (
+          <div key={message.id} className="hxpAuxMsg" data-role={message.role}>{message.text}</div>
+        ))}
+        {conversation?.pendingText !== undefined && (
+          <div className="hxpAuxMsg" data-role="user">{conversation.pendingText}</div>
+        )}
+        {conversation?.streamingText !== undefined && (
+          <div className="hxpAuxMsg" data-role="assistant">{conversation.streamingText}</div>
+        )}
+        {busy && <div className="hxpAuxThinking">{t.auxThinking}</div>}
+        {conversation?.error !== undefined && <div className="hxpWbBrowserError">{conversation.error}</div>}
+      </div>
+      <form
+        className="hxpAuxForm"
+        onSubmit={event => {
+          event.preventDefault()
+          submit()
+        }}
+      >
+        {modelMenu && (
+          <div className="hxpAuxModelBackdrop" onClick={() => { setModelMenu(false) }} />
+        )}
+        {modelMenu && (
+          <div className="hxpAuxModelMenu" role="listbox" aria-label={t.auxModel}>
+            {(conversation?.models?.groups ?? []).map(group => (
+              <div key={group.id}>
+                <div className="hxpAuxModelGroup">{group.name}</div>
+                {group.models.map(model => (
+                  <button
+                    key={`${group.id}:${model.id}`}
+                    type="button"
+                    role="option"
+                    aria-selected={conversation?.selection?.model === model.id && conversation?.selection?.provider === group.id}
+                    data-current={conversation?.selection?.model === model.id && conversation?.selection?.provider === group.id || undefined}
+                    className="hxpAuxModelRow"
+                    title={model.description}
+                    onClick={() => {
+                      setModelMenu(false)
+                      if (conversation?.selection?.provider === group.id && conversation.selection?.model === model.id) return
+                      void store.selectModel(tabKey, group.id, model.id)
+                    }}
+                  >
+                    <span className="hxpAuxModelName">{model.name}</span>
+                    {conversation?.selection?.model === model.id && conversation.selection?.provider === group.id && (
+                      <span className="hxpAuxModelCheck">✓</span>
+                    )}
+                  </button>
+                ))}
+              </div>
             ))}
-            {conversation.pendingText !== undefined && (
-              <div className="hxpAuxMsg" data-role="user">{conversation.pendingText}</div>
+            {(conversation?.models?.groups ?? []).length === 0 && (
+              <div className="hxpWbNotice">{serviceReady ? t.auxModel : t.auxUnavailable}</div>
             )}
-            {conversation.streamingText !== undefined && (
-              <div className="hxpAuxMsg" data-role="assistant">{conversation.streamingText}</div>
-            )}
-            {busy && <div className="hxpAuxThinking">{t.auxThinking}</div>}
-            {conversation.error !== undefined && <div className="hxpWbBrowserError">{conversation.error}</div>}
           </div>
-          <form
-            className="hxpAuxForm"
-            onSubmit={event => {
+        )}
+        <textarea
+          className="hxpAuxInput"
+          value={draft}
+          placeholder={t.auxPlaceholder}
+          rows={3}
+          onChange={event => { setDraft(event.target.value) }}
+          onKeyDown={event => {
+            if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault()
               submit()
-            }}
+            }
+          }}
+        />
+        <div className="hxpAuxToolbar">
+          <button
+            type="button"
+            className="hxpAuxModel"
+            disabled={!serviceReady}
+            title={conversation?.error !== undefined ? conversation.error : undefined}
+            onClick={() => { setModelMenu(open => !open) }}
           >
-            {modelMenu && (
-              <div className="hxpAuxModelBackdrop" onClick={() => { setModelMenu(false) }} />
-            )}
-            {modelMenu && (
-              <div className="hxpAuxModelMenu" role="listbox" aria-label={t.auxModel}>
-                {conversation.models?.routable === false && (
-                  <div className="hxpWbNotice">{t.auxUnavailable}</div>
-                )}
-                {(conversation.models?.groups ?? []).map(group => (
-                  <div key={group.id}>
-                    <div className="hxpAuxModelGroup">{group.name}</div>
-                    {group.models.map(model => (
-                      <button
-                        key={`${group.id}:${model.id}`}
-                        type="button"
-                        role="option"
-                        aria-selected={conversation.selection?.model === model.id && conversation.selection?.provider === group.id}
-                        data-current={conversation.selection?.model === model.id && conversation.selection?.provider === group.id || undefined}
-                        className="hxpAuxModelRow"
-                        title={model.description}
-                        onClick={() => {
-                          setModelMenu(false)
-                          if (conversation.selection?.provider === group.id && conversation.selection?.model === model.id) return
-                          void store.selectModel(group.id, model.id)
-                        }}
-                      >
-                        <span className="hxpAuxModelName">{model.name}</span>
-                        {conversation.selection?.model === model.id && conversation.selection?.provider === group.id && (
-                          <span className="hxpAuxModelCheck">✓</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                ))}
-                {(conversation.models?.groups ?? []).length === 0 && (
-                  <div className="hxpWbNotice">{t.auxModel}</div>
-                )}
-              </div>
-            )}
-            <textarea
-              className="hxpAuxInput"
-              value={draft}
-              placeholder={t.auxPlaceholder}
-              rows={1}
-              onChange={event => { setDraft(event.target.value) }}
-              onKeyDown={event => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault()
-                  submit()
-                }
-              }}
-            />
-            <div className="hxpAuxToolbar">
-              <button
-                type="button"
-                className="hxpAuxModel"
-                disabled={!busy && conversation.models === undefined && conversation.selection === undefined}
-                onClick={() => { setModelMenu(open => !open) }}
-              >
-                <span className="hxpAuxModelLabel">
-                  {auxModelDisplayName(conversation.models, conversation.selection) || t.auxModel}
-                </span>
-                <span className="hxpAuxModelCaret">▾</span>
+            <span className="hxpAuxModelLabel">
+              {pickerLabel.length > 0 ? pickerLabel : serviceReady ? `${t.auxModel}…` : t.auxUnavailable}
+            </span>
+            <span className="hxpAuxModelCaret">▾</span>
+          </button>
+          <div className="hxpWbSpring" />
+          {busy
+            ? (
+              <button type="button" className="hxpAuxSend" title={t.auxStop} aria-label={t.auxStop}
+                onClick={() => { void store.stop(tabKey) }}>
+                {StopIcon}
               </button>
-              <div className="hxpWbSpring" />
-              {busy
-                ? (
-                  <button type="button" className="hxpAuxSend" title={t.auxStop} aria-label={t.auxStop}
-                    onClick={() => { void store.stop() }}>
-                    {StopIcon}
-                  </button>
-                )
-                : (
-                  <button type="submit" className="hxpAuxSend" title={t.auxSend} aria-label={t.auxSend} disabled={!draft.trim()}>
-                    {SendIcon}
-                  </button>
-                )}
-            </div>
-          </form>
-        </>
-      )}
+            )
+            : (
+              <button type="submit" className="hxpAuxSend" title={t.auxSend} aria-label={t.auxSend} disabled={!draft.trim()}>
+                {SendIcon}
+              </button>
+            )}
+        </div>
+      </form>
     </div>
   )
 }
