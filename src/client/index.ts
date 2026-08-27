@@ -10,6 +10,7 @@ import { applyMarket } from './market.tsx'
 import { applyUpdates } from './updates.tsx'
 import { applySessionNotifications } from './session-notifications.ts'
 import { applyNotificationSettings } from './notification-settings.tsx'
+import { applyUsageDashboard } from './usage-dashboard.tsx'
 import { applyVisionModels } from './vision-models.tsx'
 import { installVisionFallback } from './vision-fallback.ts'
 import { installPluginSlotCompat } from './plugin-slot-compat.ts'
@@ -52,6 +53,7 @@ export function apply(ctx: ClientContext): void {
   applyUpdates(ctx)
   applySessionNotifications(ctx)
   applyNotificationSettings(ctx)
+  applyUsageDashboard(ctx)
   applyVisionModels(ctx)
   installVisionFallback(ctx)
   applySync(ctx)

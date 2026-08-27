@@ -14,7 +14,9 @@ import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
+import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import type {} from './runtime.ts'
+import { collectUsageReport, createUsageCache } from './usage-report.ts'
 
 const WORKBENCH_ROUTE = '/api/desktop/workbench'
 const MAX_JSON_BODY_BYTES = 256 * 1024
@@ -655,6 +657,9 @@ function requireStringArray(value: unknown, field: string): string[] {
 /** Stable Cordis plugin name. */
 export const name = 'desktop-workbench'
 
+/** Memoized per-file usage aggregation for the settings dashboard. */
+const usageCache = createUsageCache()
+
 /** Host services required by the workbench routes. */
 export const inject = ['webServer', 'desktopRuntime']
 
@@ -827,6 +832,10 @@ export async function routeWorkbench(request: WorkbenchRequest): Promise<void> {
       }
     }))
     sendJson(response, 200, { ...parsed, entries, counts })
+    return
+  }
+  if (method === 'GET' && subroute === '/usage') {
+    sendJson(response, 200, await collectUsageReport(resolveDshHome(), usageCache))
     return
   }
   if (method === 'GET' && subroute === '/git/patch') {

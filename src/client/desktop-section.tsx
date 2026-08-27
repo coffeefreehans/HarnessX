@@ -22,6 +22,8 @@ export const DESKTOP_NAV_ICONS = {
   cloud: `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" ${ICON_STROKE}><path d="M5 12.4h6.2a2.6 2.6 0 0 0 .5-5.2 4.2 4.2 0 0 0-8-.6 2.7 2.7 0 0 0-.7 5.3Z"/></svg>`,
   /** Multimodal models: eye. */
   eye: `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" ${ICON_STROKE}><path d="M1.8 8s2.2-4 6.2-4 6.2 4 6.2 4-2.2 4-6.2 4-6.2-4-6.2-4Z"/><circle cx="8" cy="8" r="2.1"/></svg>`,
+  /** Usage dashboard: bar chart. */
+  chart: `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" ${ICON_STROKE}><path d="M3 13.2V8.6M8 13.2V2.8M13 13.2V6.2"/></svg>`,
 } as const
 
 const NAV_SECTION_CSS = `
