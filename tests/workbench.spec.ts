@@ -1,5 +1,6 @@
 import { execSync } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
@@ -596,6 +597,12 @@ describe('routeWorkbench dispatch', () => {
     expect(popped.status).toBe(200)
     expect((await readFile(join(dir, 'tracked.txt'), 'utf8')).replace(/\r\n/g, '\n')).toBe('stashed\n')
     await call('POST', 'discard', { cwd: dir, paths: ['tracked.txt'] })
+
+    // Discard removes brand-new untracked files via clean as well.
+    await writeFile(join(dir, 'fresh-untracked.txt'), 'scratch\n')
+    const untrackedDiscard = await call('POST', 'discard', { cwd: dir, paths: [], untracked: ['fresh-untracked.txt'] })
+    expect(untrackedDiscard.status).toBe(200)
+    expect(existsSync(join(dir, 'fresh-untracked.txt'))).toBe(false)
 
     // Force-deleting a branch removes it from the listing.
     await call('POST', 'checkout', { cwd: dir, branch: 'doomed', create: true })

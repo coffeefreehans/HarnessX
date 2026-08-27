@@ -1442,6 +1442,14 @@ function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNod
 
   useEffect(() => { void reload() }, [reload])
 
+  // Keep lists and ahead counts honest while the session edits the repo.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (!busy) void reload()
+    }, 5000)
+    return () => { window.clearInterval(timer) }
+  }, [busy, reload])
+
   const mutate = useCallback(async (action: 'stage' | 'unstage', paths: string[]) => {
     if (activeWorkspace === undefined) return
     setBusy(true)
@@ -1514,11 +1522,15 @@ function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNod
     }
   }, [activeWorkspace, reload, loadStashes])
 
-  /** Discard worktree edits of tracked files after an explicit confirmation. */
-  const discardPaths = useCallback((paths: string[]) => {
-    if (activeWorkspace === undefined || paths.length === 0) return
-    if (!window.confirm(t.confirmDiscard(paths.length))) return
-    void runAction(undefined, () => postJson('/api/desktop/workbench/git/discard', { cwd: activeWorkspace, paths }))
+  /** Discard worktree edits (tracked via checkout, untracked via clean). */
+  const discardPaths = useCallback((paths: string[], untrackedPaths: string[] = []) => {
+    if (activeWorkspace === undefined || (paths.length === 0 && untrackedPaths.length === 0)) return
+    if (!window.confirm(t.confirmDiscard(paths.length + untrackedPaths.length))) return
+    void runAction(undefined, () => postJson('/api/desktop/workbench/git/discard', {
+      cwd: activeWorkspace,
+      paths,
+      untracked: untrackedPaths,
+    }))
   }, [activeWorkspace, t, runAction])
 
   const switchBranch = useCallback((name: string, create: boolean) => {
@@ -1528,8 +1540,9 @@ function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNod
         : { cwd: activeWorkspace, branch: name })
       setShowBranches(false)
       setNewBranch('')
+      await loadBranches()
     })
-  }, [runAction, activeWorkspace])
+  }, [runAction, activeWorkspace, loadBranches])
 
   if (status === undefined) {
     return (
@@ -1544,8 +1557,9 @@ function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNod
   const staged = status.entries.filter(entry => entry.x !== ' ' && entry.x !== '?')
   // Any worktree-side change (including untracked "??" rows) counts here.
   const changed = status.entries.filter(entry => entry.y !== ' ')
-  // Untracked files cannot be restored via checkout, so discard only touches these.
+  // Tracked rows discard via checkout; untracked ones via clean -f.
   const discardable = changed.filter(entry => entry.x !== '?').map(entry => entry.path)
+  const discardableUntracked = changed.filter(entry => entry.x === '?').map(entry => entry.path)
 
   return (
     <div className="hxpWbPanel hxpWbGit">
@@ -1685,9 +1699,9 @@ function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNod
           onClick={() => { void mutate('stage', changed.map(entry => entry.path)) }}>
           {t.stageAll}
         </button>
-        {discardable.length > 0 && (
+        {(discardable.length > 0 || discardableUntracked.length > 0) && (
           <button type="button" className="hxpWbLinkAction hxpWbDanger" disabled={busy}
-            onClick={() => { discardPaths(discardable) }}>
+            onClick={() => { discardPaths(discardable, discardableUntracked) }}>
             {t.discardAll}
           </button>
         )}
@@ -1697,7 +1711,9 @@ function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNod
           <GitRow key={`w-${entry.path}`} entry={entry} action="stage" actionLabel={t.stage}
             disabled={busy} onAction={() => { void mutate('stage', [entry.path]) }}
             discardLabel={t.discard} confirmText={t.confirmDiscard(1)}
-            onDiscard={entry.x !== '?' ? () => { discardPaths([entry.path]) } : undefined} />
+            onDiscard={entry.x === '?'
+              ? () => { discardPaths([], [entry.path]) }
+              : () => { discardPaths([entry.path]) }} />
         ))}
       </div>
         </>

@@ -889,8 +889,14 @@ export async function routeWorkbench(request: WorkbenchRequest): Promise<void> {
   }
   if (method === 'POST' && subroute === '/git/discard') {
     const { cwd, paths } = await requireGitMutation(request.body)
-    // checkout -- resets tracked worktree edits; untracked files stay untouched.
-    await runGit(cwd, ['checkout', '--', ...paths])
+    const body = (request.body ?? {}) as { untracked?: unknown }
+    const untracked = Array.isArray(body.untracked)
+      ? requireStringArray(body.untracked, 'untracked').filter(name => name.length > 0)
+      : []
+    // checkout -- resets tracked worktree edits; untracked entries are removed
+    // with clean -f so the explorer can discard brand-new files too.
+    if (paths.length > 0) await runGit(cwd, ['checkout', '--', ...paths])
+    if (untracked.length > 0) await runGit(cwd, ['clean', '-f', '--', ...untracked])
     sendJson(response, 200, { ok: true })
     return
   }
