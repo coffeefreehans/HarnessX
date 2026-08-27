@@ -20,6 +20,7 @@ import {
   foldAuxHistory,
   type AuxConversation,
   type AuxModelSelection,
+  type WorkbenchTab,
   type AuxSessionModels,
   type WorkbenchPanelId,
   type WorkbenchSnapshot,
@@ -765,55 +766,71 @@ export function WorkbenchDock(props: { state: WorkbenchState }): ReactNode {
           </button>
         </div>
         {snapshot.tabs.length > 0 && <TabStrip snapshot={snapshot} state={state} />}
-        {snapshot.tabs.length > 0 && snapshot.active !== null && (
+        {(() => {
+          const activeTab = snapshot.tabs.find(tab => tab.key === snapshot.active)
+          if (activeTab === undefined) return undefined
           // Re-mount the active panel on workspace change so every panel
-          // re-roots at the new workspace instead of keeping stale state.
-          <div className="hxpWbBody" key={workspace ?? ''}>{renderPanel(snapshot.active, snapshot.browserHome, workspace, state)}</div>
-        )}
+          // re-roots at the new workspace; the inner key keeps each tab's
+          // independent session alive across tab switches.
+          return (
+            <div className="hxpWbBody" key={workspace ?? ''}>
+              {renderPanel(activeTab, snapshot.browserHome, workspace, state)}
+            </div>
+          )
+        })()}
         <ResizeGrip snapshot={snapshot} state={state} />
       </div>
     </aside>
   )
 }
 
-/** Browser-style tab strip: every open panel is a tab; clicking activates it. */
+/** Browser-style tab strip: every opened instance is a tab; clicking focuses it. */
 function TabStrip(props: { snapshot: WorkbenchSnapshot; state: WorkbenchState }): ReactNode {
   const { snapshot, state } = props
   const t = useStrings()
+  const sameKindSeen = new Set<string>()
   return (
     <div className="hxpWbTabs" role="tablist">
-      {snapshot.tabs.map(id => (
-        <div
-          key={id}
-          className="hxpWbTab"
-          role="tab"
-          tabIndex={0}
-          aria-selected={snapshot.active === id}
-          data-active={snapshot.active === id || undefined}
-          onClick={() => { state.setActive(id) }}
-          onKeyDown={event => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault()
-              state.setActive(id)
-            }
-          }}
-        >
-          <span className="hxpWbTabIcon">{PanelIcons[id]}</span>
-          <span className="hxpWbTabText">{t[id]}</span>
-          <button
-            type="button"
-            className="hxpWbTabClose"
-            title={t.close}
-            aria-label={`${t.close}: ${t[id]}`}
-            onClick={event => {
-              event.stopPropagation()
-              state.closeTab(id)
+      {snapshot.tabs.map((tab, index) => {
+        // Duplicated kinds get an ordinal so several 项目 tabs stay tellable.
+        sameKindSeen.add(tab.kind)
+        const duplicates = snapshot.tabs.filter(entry => entry.kind === tab.kind).length
+        const ordinal = duplicates > 1 ? String(index - [...snapshot.tabs.slice(0, index)].filter(entry => entry.kind === tab.kind).length + 1) : ''
+        void sameKindSeen
+        const label = `${t[tab.kind]}${ordinal.length > 0 ? ` ${ordinal}` : ''}`
+        return (
+          <div
+            key={tab.key}
+            className="hxpWbTab"
+            role="tab"
+            tabIndex={0}
+            aria-selected={snapshot.active === tab.key}
+            data-active={snapshot.active === tab.key || undefined}
+            onClick={() => { state.setActive(tab.key) }}
+            onKeyDown={event => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                state.setActive(tab.key)
+              }
             }}
           >
-            {CloseIcon}
-          </button>
-        </div>
-      ))}
+            <span className="hxpWbTabIcon">{PanelIcons[tab.kind]}</span>
+            <span className="hxpWbTabText">{label}</span>
+            <button
+              type="button"
+              className="hxpWbTabClose"
+              title={`${t.close}: ${label}`}
+              aria-label={`${t.close}: ${label}`}
+              onClick={event => {
+                event.stopPropagation()
+                state.closeTab(tab.key)
+              }}
+            >
+              {CloseIcon}
+            </button>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -844,12 +861,12 @@ function HDivider(props: { label: string; onResize: (deltaY: number) => void }):
   )
 }
 
-function renderPanel(active: WorkbenchPanelId, browserHome: string | undefined, workspace: string | undefined, state: WorkbenchState): ReactNode {
-  if (active === 'explorer') return <ExplorerPanel state={state} />
-  if (active === 'terminal') return <TerminalPanel state={state} />
-  if (active === 'git') return <GitPanel state={state} />
-  if (active === 'chat') return <AuxChatPanel />
-  return <BrowserPanel home={browserHome} workspace={workspace} />
+function renderPanel(tab: WorkbenchTab, browserHome: string | undefined, workspace: string | undefined, state: WorkbenchState): ReactNode {
+  if (tab.kind === 'explorer') return <ExplorerPanel key={tab.key} tab={tab} state={state} />
+  if (tab.kind === 'terminal') return <TerminalPanel key={tab.key} tab={tab} state={state} />
+  if (tab.kind === 'git') return <GitPanel key={tab.key} tab={tab} state={state} />
+  if (tab.kind === 'chat') return <AuxChatPanel />
+  return <BrowserPanel key={tab.key} home={browserHome} workspace={workspace} />
 }
 
 function ResizeGrip(props: { snapshot: WorkbenchSnapshot; state: WorkbenchState }): ReactNode {
@@ -873,15 +890,14 @@ function ResizeGrip(props: { snapshot: WorkbenchSnapshot; state: WorkbenchState 
 /* Explorer panel                                                      */
 /* ------------------------------------------------------------------ */
 
-let explorerCwd: string | undefined
-
 const EXPLORER_PREVIEW_DEFAULT = 200
 
-function ExplorerPanel(props: { state: WorkbenchState }): ReactNode {
+function ExplorerPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNode {
   const { state } = props
   const t = useStrings()
   const { workspace } = useWorkspace()
-  const [cwd, setCwd] = useState(explorerCwd)
+  // Each explorer tab navigates independently.
+  const [cwd, setCwd] = useState<string | undefined>(workspace)
   const [entries, setEntries] = useState<FsEntry[] | undefined>()
   const [error, setError] = useState<string | undefined>()
   const [git, setGit] = useState<WorkspaceGit | undefined>()
@@ -900,7 +916,6 @@ function ExplorerPanel(props: { state: WorkbenchState }): ReactNode {
     if (dir === undefined) {
       try {
         const meta = await requestJson<{ home: string }>('/api/desktop/workbench/meta')
-        explorerCwd = meta.home
         setCwd(meta.home)
         return
       } catch (cause) {
@@ -910,7 +925,6 @@ function ExplorerPanel(props: { state: WorkbenchState }): ReactNode {
     }
     try {
       const value = await requestJson<{ entries: FsEntry[] }>(`/api/desktop/workbench/fs?path=${encodeURIComponent(dir)}`)
-      explorerCwd = dir
       setError(undefined)
       setEntries(value.entries)
     } catch (cause) {
@@ -924,10 +938,7 @@ function ExplorerPanel(props: { state: WorkbenchState }): ReactNode {
   useEffect(() => {
     if (workspace === undefined) return
     // Default to the workspace root; a directory from another project snaps back.
-    if (explorerCwd === undefined || !isWithin(explorerCwd, workspace)) {
-      explorerCwd = workspace
-      setCwd(workspace)
-    }
+    if (!isWithin(cwd ?? workspace, workspace)) setCwd(workspace)
     let cancelled = false
     const pull = (): void => {
       void fetchWorkspaceGit(workspace).then(value => {
@@ -1123,7 +1134,17 @@ interface TerminalCache {
   cwd: string | undefined
 }
 
-const terminalCache: TerminalCache = { id: undefined, exited: false, transcript: '', cwd: undefined }
+const terminalCaches = new Map<string, TerminalCache>()
+
+/** Per-tab terminal state: every terminal tab owns an independent shell. */
+function terminalCacheFor(key: string): TerminalCache {
+  let cache = terminalCaches.get(key)
+  if (cache === undefined) {
+    cache = { id: undefined, exited: false, transcript: '', cwd: undefined }
+    terminalCaches.set(key, cache)
+  }
+  return cache
+}
 
 /**
  * Drop every dock panel's stale view state so they all re-root at `workspace`
@@ -1132,17 +1153,14 @@ const terminalCache: TerminalCache = { id: undefined, exited: false, transcript:
  * @param workspace - the workspace the dock should follow.
  */
 function resetWorkbenchCaches(workspace: string): void {
-  explorerCwd = workspace
-  branchesCache = undefined
-  browserUrl = undefined
-  if (terminalCache.id !== undefined && !terminalCache.exited) {
-    // Retire the shell bound to the previous workspace.
-    void postJson('/api/desktop/workbench/term/kill', { id: terminalCache.id }).catch(() => undefined)
+  // Every terminal tab re-roots: retire each shell bound elsewhere and drop
+  // its stale scrollback so remounts start clean at the new workspace.
+  for (const [key, cache] of terminalCaches) {
+    if (cache.id !== undefined && !cache.exited && cache.cwd !== workspace) {
+      void postJson('/api/desktop/workbench/term/kill', { id: cache.id }).catch(() => undefined)
+      terminalCaches.delete(key)
+    }
   }
-  terminalCache.id = undefined
-  terminalCache.exited = false
-  terminalCache.transcript = ''
-  terminalCache.cwd = undefined
 }
 
 /** Session the main window currently shows; the workspace follows it. */
@@ -1217,10 +1235,13 @@ function useWorkspace(): { workspace: string | undefined; ready: boolean } {
 
 const TERMINAL_INPUT_DEFAULT = 46
 
-function TerminalPanel(props: { state: WorkbenchState }): ReactNode {
+function TerminalPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNode {
   const { state } = props
   const t = useStrings()
   const { workspace, ready } = useWorkspace()
+  // Shell sessions live per tab key, so two terminal tabs run two shells and a
+  // backgrounded tab keeps its scrollback while it is not rendered.
+  const terminalCache = terminalCacheFor(props.tab.key)
   const [transcript, setTranscript] = useState(terminalCache.transcript)
   const [input, setInput] = useState('')
   const [exited, setExited] = useState(terminalCache.exited)
@@ -1364,11 +1385,9 @@ function TerminalPanel(props: { state: WorkbenchState }): ReactNode {
 
 interface GitBranchEntry { name: string; current: boolean }
 
-let branchesCache: GitBranchEntry[] | undefined
-
 const GIT_LOWER_DEFAULT = 260
 
-function GitPanel(props: { state: WorkbenchState }): ReactNode {
+function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNode {
   const { state } = props
   const t = useStrings()
   const { workspace, ready } = useWorkspace()
@@ -1379,7 +1398,7 @@ function GitPanel(props: { state: WorkbenchState }): ReactNode {
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | undefined>()
-  const [branches, setBranches] = useState<GitBranchEntry[] | undefined>(branchesCache)
+  const [branches, setBranches] = useState<GitBranchEntry[] | undefined>()
   const [showBranches, setShowBranches] = useState(false)
   const [newBranch, setNewBranch] = useState('')
   const [stashes, setStashes] = useState(0)
@@ -1451,7 +1470,6 @@ function GitPanel(props: { state: WorkbenchState }): ReactNode {
       const value = await requestJson<{ branches: GitBranchEntry[] }>(
         `/api/desktop/workbench/git/branches?path=${encodeURIComponent(workspace)}`,
       )
-      branchesCache = value.branches
       setBranches(value.branches)
     } catch {
       // Keep whatever list we already have.
@@ -1753,13 +1771,11 @@ interface WebviewElement extends HTMLElement {
   canGoForward(): boolean
 }
 
-let browserUrl: string | undefined
-
 function BrowserPanel(props: { home: string | undefined; workspace: string | undefined }): ReactNode {
   const { home, workspace } = props
   const t = useStrings()
-  const [url, setUrl] = useState(browserUrl ?? home ?? DEFAULT_BROWSER_HOME)
-  const [input, setInput] = useState(browserUrl ?? home ?? DEFAULT_BROWSER_HOME)
+  const [url, setUrl] = useState(home ?? DEFAULT_BROWSER_HOME)
+  const [input, setInput] = useState(home ?? DEFAULT_BROWSER_HOME)
   const [title, setTitle] = useState('')
   const [loading, setLoading] = useState(false)
   const [failed, setFailed] = useState<string | undefined>()
@@ -1772,7 +1788,6 @@ function BrowserPanel(props: { home: string | undefined; workspace: string | und
     setInput(target)
     setTitle('')
     setFailed(undefined)
-    browserUrl = undefined
   }, [workspace, home])
 
   const navigate = useCallback((raw: string) => {
@@ -1783,7 +1798,6 @@ function BrowserPanel(props: { home: string | undefined; workspace: string | und
       : (trimmed.includes('.') && !trimmed.includes(' ')
           ? `https://${trimmed}`
           : `https://www.bing.com/search?q=${encodeURIComponent(trimmed)}`)
-    browserUrl = target
     setFailed(undefined)
     setUrl(target)
     setInput(target)

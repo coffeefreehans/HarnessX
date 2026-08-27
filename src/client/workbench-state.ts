@@ -8,16 +8,24 @@
 /** Panel identities exposed by the top icon rail. */
 export type WorkbenchPanelId = 'explorer' | 'terminal' | 'git' | 'browser' | 'chat'
 
+/** One opened dock tab: a panel identity plus its unique instance key. */
+export interface WorkbenchTab {
+  /** Stable instance key; several tabs may share one panel identity. */
+  key: string
+  /** Which rail panel this tab renders. */
+  kind: WorkbenchPanelId
+}
+
 /** Immutable dock snapshot published on every change. */
 export interface WorkbenchSnapshot {
   /** Whether the dock column is expanded. */
   open: boolean
   /** Dock width in CSS pixels while expanded. */
   width: number
-  /** Opened panels in click order, stacked vertically inside the body. */
-  tabs: readonly WorkbenchPanelId[]
-  /** Focused panel; null when nothing is open. */
-  active: WorkbenchPanelId | null
+  /** Opened tabs in click order; one panel kind may appear many times. */
+  tabs: readonly WorkbenchTab[]
+  /** Focused tab key; null when nothing is open. */
+  active: string | null
   /** Start URL used by the embedded browser panel. */
   browserHome: string | undefined
   /** Pane heights in CSS pixels; absent entries use per-panel defaults. */
@@ -58,24 +66,37 @@ function clampPane(size: number): number {
  */
 export function toggleWorkbench(snapshot: WorkbenchSnapshot): WorkbenchSnapshot {
   if (!snapshot.open) {
-    const tabs = snapshot.tabs.length > 0 ? snapshot.tabs : (['explorer'] as const)
-    const active = snapshot.active ?? tabs[0] ?? null
-    return { ...snapshot, open: true, tabs: [...tabs], ...(active !== null ? { active } : {}) }
+    if (snapshot.tabs.length > 0) {
+      return { ...snapshot, open: true, ...(snapshot.active !== null ? {} : { active: snapshot.tabs[snapshot.tabs.length - 1]?.key ?? null }) }
+    }
+    return openWorkbenchPanel({ ...snapshot, open: true }, 'explorer')
   }
   return { ...snapshot, open: false }
 }
 
+/** Highest instance index used for one panel kind inside the snapshot. */
+function maxTabIndex(tabs: readonly WorkbenchTab[], kind: WorkbenchPanelId): number {
+  let highest = 0
+  for (const tab of tabs) {
+    if (tab.kind !== kind) continue
+    const index = Number(tab.key.slice(kind.length + 1))
+    if (Number.isFinite(index) && index > highest) highest = index
+  }
+  return highest
+}
+
 /**
- * Focus a rail icon: reveals its pane when missing and focuses it otherwise.
- * Several panes stay visible at once, stacked vertically; only the caption
- * toggle or the in-dock collapse button hides the dock.
+ * Focus a rail icon: every activation opens ANOTHER tab of that panel kind,
+ * exactly like a browser's new-tab button — repeated clicks stack independent
+ * instances (their own directories, shells, and URLs) side by side in the tab
+ * strip instead of bouncing back to the old one.
  * @param snapshot - current snapshot.
  * @param id - panel identity from the rail.
- * @returns the next snapshot.
+ * @returns the next snapshot with a fresh tab focused.
  */
 export function openWorkbenchPanel(snapshot: WorkbenchSnapshot, id: WorkbenchPanelId): WorkbenchSnapshot {
-  const tabs = snapshot.tabs.includes(id) ? snapshot.tabs : [...snapshot.tabs, id]
-  return { ...snapshot, open: true, tabs, active: id }
+  const tab: WorkbenchTab = { key: `${id}:${String(maxTabIndex(snapshot.tabs, id) + 1)}`, kind: id }
+  return { ...snapshot, open: true, tabs: [...snapshot.tabs, tab], active: tab.key }
 }
 
 /**
@@ -95,14 +116,14 @@ export function resizeWorkbenchPane(snapshot: WorkbenchSnapshot, id: WorkbenchPa
  * @param id - tab to remove.
  * @returns the next snapshot.
  */
-export function closeWorkbenchTab(snapshot: WorkbenchSnapshot, id: WorkbenchPanelId): WorkbenchSnapshot {
-  const index = snapshot.tabs.indexOf(id)
+export function closeWorkbenchTab(snapshot: WorkbenchSnapshot, key: string): WorkbenchSnapshot {
+  const index = snapshot.tabs.findIndex(tab => tab.key === key)
   if (index < 0) return snapshot
-  const tabs = snapshot.tabs.filter(tab => tab !== id)
+  const tabs = snapshot.tabs.filter(tab => tab.key !== key)
   if (tabs.length === 0) return { ...snapshot, tabs, active: null, open: false }
-  if (snapshot.active !== id) return { ...snapshot, tabs }
+  if (snapshot.active !== key) return { ...snapshot, tabs }
   const fallback = index >= tabs.length ? tabs[tabs.length - 1] : tabs[index]
-  return { ...snapshot, tabs, ...(fallback !== undefined ? { active: fallback } : { active: null }) }
+  return { ...snapshot, tabs, ...(fallback !== undefined ? { active: fallback.key } : { active: null }) }
 }
 
 /**
@@ -111,9 +132,9 @@ export function closeWorkbenchTab(snapshot: WorkbenchSnapshot, id: WorkbenchPane
  * @param id - tab to focus.
  * @returns the next snapshot.
  */
-export function activateWorkbenchTab(snapshot: WorkbenchSnapshot, id: WorkbenchPanelId): WorkbenchSnapshot {
-  if (!snapshot.tabs.includes(id)) return snapshot
-  return { ...snapshot, open: true, active: id }
+export function activateWorkbenchTab(snapshot: WorkbenchSnapshot, key: string): WorkbenchSnapshot {
+  if (!snapshot.tabs.some(tab => tab.key === key)) return snapshot
+  return { ...snapshot, open: true, active: key }
 }
 
 /**
@@ -148,24 +169,24 @@ export class WorkbenchState {
     return () => { this.listeners.delete(listener) }
   }
 
-  /** Toggle dock visibility. */
+  /** Toggle dock visibility — an empty dock reopens its last tab or a fresh explorer. */
   toggle(): void {
     this.publish(toggleWorkbench(this.snapshot))
   }
 
-  /** Open or focus a rail panel; clicking an already-visible one is a no-op focus. */
+  /** Activate a rail icon: opens ANOTHER tab of that kind, focused. */
   openPanel(id: WorkbenchPanelId): void {
     this.publish(openWorkbenchPanel(this.snapshot, id))
   }
 
-  /** Close one opened tab. */
-  closeTab(id: WorkbenchPanelId): void {
-    this.publish(closeWorkbenchTab(this.snapshot, id))
+  /** Close one opened tab instance. */
+  closeTab(key: string): void {
+    this.publish(closeWorkbenchTab(this.snapshot, key))
   }
 
-  /** Focus one opened tab. */
-  setActive(id: WorkbenchPanelId): void {
-    this.publish(activateWorkbenchTab(this.snapshot, id))
+  /** Focus one opened tab instance. */
+  setActive(key: string): void {
+    this.publish(activateWorkbenchTab(this.snapshot, key))
   }
 
   /** Collapse the dock column; open tabs survive for the next reveal. */

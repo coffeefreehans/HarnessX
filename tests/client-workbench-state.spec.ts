@@ -10,6 +10,7 @@ import {
   getWorkbenchStore,
   openWorkbenchPanel,
   readWorkbenchPrefs,
+  activateWorkbenchTab,
   resizeWorkbenchPane,
   toggleWorkbench,
   WorkbenchState,
@@ -37,60 +38,67 @@ describe('workbench pure transitions', () => {
     expect(WORKBENCH_PANEL_IDS).toEqual(['explorer', 'terminal', 'git', 'browser', 'chat'])
   })
 
-  it('toggle reveals an explorer tab on the empty dock and keeps tabs after collapse', () => {
+  it('toggle reopens the last tab on the empty-reveal path and keeps tabs after collapse', () => {
     const opened = toggleWorkbench(base())
     expect(opened.open).toBe(true)
-    expect(opened.tabs).toEqual(['explorer'])
-    expect(opened.active).toBe('explorer')
+    expect(opened.tabs.map(tab => tab.kind)).toEqual(['explorer'])
+    expect(opened.active).toBe('explorer:1')
 
     const closed = toggleWorkbench(opened)
     expect(closed.open).toBe(false)
-    expect(closed.tabs).toEqual(['explorer'])
+    expect(closed.tabs.map(tab => tab.kind)).toEqual(['explorer'])
 
     const reopened = toggleWorkbench(closed)
     expect(reopened.open).toBe(true)
-    expect(reopened.tabs).toEqual(['explorer'])
+    expect(reopened.active).toBe('explorer:1')
   })
 
-  it('openPanel appends tabs in click order and focuses them', () => {
+  it('every rail click opens ANOTHER instance of that panel kind', () => {
     let snapshot = base()
     snapshot = openWorkbenchPanel(snapshot, 'terminal')
     snapshot = openWorkbenchPanel(snapshot, 'explorer')
     snapshot = openWorkbenchPanel(snapshot, 'git')
-    expect(snapshot.tabs).toEqual(['terminal', 'explorer', 'git'])
-    expect(snapshot.active).toBe('git')
-    expect(snapshot.open).toBe(true)
+    expect(snapshot.tabs.map(tab => `${tab.kind}:${tab.key}`)).toEqual([
+      'terminal:terminal:1',
+      'explorer:explorer:1',
+      'git:git:1',
+    ])
+    expect(snapshot.active).toBe('git:1')
 
-    // Re-focusing an existing tab must not duplicate it.
+    // Clicking a kind again stacks an independent second instance.
     snapshot = openWorkbenchPanel(snapshot, 'terminal')
-    expect(snapshot.tabs).toEqual(['terminal', 'explorer', 'git'])
-    expect(snapshot.active).toBe('terminal')
+    expect(snapshot.tabs.map(tab => tab.key)).toEqual(['terminal:1', 'explorer:1', 'git:1', 'terminal:2'])
+    expect(snapshot.active).toBe('terminal:2')
+
+    snapshot = openWorkbenchPanel(snapshot, 'terminal')
+    expect(snapshot.active).toBe('terminal:3')
+    expect(snapshot.tabs.filter(tab => tab.kind === 'terminal')).toHaveLength(3)
   })
 
-  it('openPanel is a no-op when clicking the already-focused panel, like a browser', () => {
+  it('tabs stay independently addressable by their instance keys', () => {
     let snapshot = openWorkbenchPanel(base(), 'git')
-    snapshot = openWorkbenchPanel(snapshot, 'git')
-    expect(snapshot.open).toBe(true)
-    expect(snapshot.active).toBe('git')
-    expect(snapshot.tabs).toEqual(['git'])
+    snapshot = { ...snapshot, tabs: [{ key: 'git:7', kind: 'git' }] }
+    snapshot = activateWorkbenchTab(snapshot, 'git:7')
+    expect(snapshot.active).toBe('git:7')
 
-    // Re-opening an existing tab refocuses without duplicating or collapsing.
-    const reopened = openWorkbenchPanel(snapshot, 'git')
-    expect(reopened.open).toBe(true)
-    expect(reopened.active).toBe('git')
-    expect(reopened.tabs).toEqual(['git'])
+    const next = closeWorkbenchTab({ ...snapshot, tabs: [
+      { key: 'a:1', kind: 'explorer' },
+      { key: 'b:2', kind: 'terminal' },
+    ], active: 'b:2' }, 'b:2')
+    expect(next.tabs.map(tab => tab.key)).toEqual(['a:1'])
+    expect(next.active).toBe('a:1')
   })
 
   it('closeTab moves focus right-then-left and closing the last tab collapses the dock', () => {
     let snapshot = base()
     for (const id of ['explorer', 'terminal', 'git'] as const) snapshot = openWorkbenchPanel(snapshot, id)
-    snapshot = { ...snapshot, active: 'terminal' }
+    snapshot = { ...snapshot, active: 'terminal:1' }
 
-    expect(closeWorkbenchTab(snapshot, 'terminal').active).toBe('git')
-    expect(closeWorkbenchTab({ ...snapshot, active: 'git' }, 'git').active).toBe('terminal')
+    expect(closeWorkbenchTab(snapshot, 'terminal:1').active).toBe('git:1')
+    expect(closeWorkbenchTab({ ...snapshot, active: 'git:1' }, 'git:1').active).toBe('terminal:1')
 
     let single = openWorkbenchPanel(base(), 'browser')
-    single = closeWorkbenchTab(single, 'browser')
+    single = closeWorkbenchTab(single, 'browser:1')
     expect(single.tabs).toEqual([])
     expect(single.active).toBeNull()
     expect(single.open).toBe(false)
@@ -101,8 +109,8 @@ describe('workbench pure transitions', () => {
     for (const id of ['explorer', 'terminal'] as const) snapshot = openWorkbenchPanel(snapshot, id)
     const collapsed = collapseWorkbench(snapshot)
     expect(collapsed.open).toBe(false)
-    expect(collapsed.tabs).toEqual(['explorer', 'terminal'])
-    expect(collapsed.active).toBe('terminal')
+    expect(collapsed.tabs.map(tab => tab.kind)).toEqual(['explorer', 'terminal'])
+    expect(collapsed.active).toBe('terminal:1')
     // Collapsing an already-closed dock is a no-op; reopening restores the tabs.
     expect(collapseWorkbench(collapsed)).toBe(collapsed)
     expect(openWorkbenchPanel(collapsed, 'explorer').open).toBe(true)
@@ -111,10 +119,10 @@ describe('workbench pure transitions', () => {
   it('closing a non-active tab preserves focus', () => {
     let snapshot = base()
     for (const id of ['explorer', 'terminal'] as const) snapshot = openWorkbenchPanel(snapshot, id)
-    snapshot = { ...snapshot, active: 'terminal' }
-    const next = closeWorkbenchTab(snapshot, 'explorer')
-    expect(next.tabs).toEqual(['terminal'])
-    expect(next.active).toBe('terminal')
+    snapshot = { ...snapshot, active: 'terminal:1' }
+    const next = closeWorkbenchTab(snapshot, 'explorer:1')
+    expect(next.tabs.map(tab => tab.kind)).toEqual(['terminal'])
+    expect(next.active).toBe('terminal:1')
     expect(next.open).toBe(true)
   })
 
