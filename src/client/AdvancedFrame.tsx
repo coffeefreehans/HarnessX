@@ -8,7 +8,7 @@ import {
   computeDesktopColumns, DesktopLayoutState, MACOS_SIDEBAR_COLLAPSED,
   SIDEBAR_AUTO_COLLAPSE, SIDEBAR_COLLAPSED, SIDEBAR_DEFAULT,
 } from './layout-state.ts'
-import { noteWorkbenchSession, noteWorkbenchSessionCwd, WorkbenchDock, WorkbenchToggleButton } from './workbench.tsx'
+import { noteWorkbenchSession, noteWorkbenchSessionCwd, noteWorkbenchWorkspacePath, WorkbenchDock, WorkbenchToggleButton } from './workbench.tsx'
 import {
   WORKBENCH_WIDTH_MAX,
   WORKBENCH_WIDTH_MIN,
@@ -36,7 +36,7 @@ export function DesktopBrandName(_props: PropsRuntime<'sidebar.brand.name'>): Re
 }
 
 /** Desktop-owned transparent frame around the unchanged product surfaces. */
-export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSessions }: AdvancedFrameProps) {
+export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSessions, useWorkspaces }: AdvancedFrameProps) {
   const subscribeLayout = useCallback((listener: () => void) => layout.subscribe(listener), [layout])
   const readLayout = useCallback(() => layout.getSnapshot(), [layout])
   const panels = useSyncExternalStore(subscribeLayout, readLayout)
@@ -60,6 +60,20 @@ export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSess
     return current !== undefined ? state.byId[current]?.cwd : undefined
   })
   useEffect(() => { noteWorkbenchSessionCwd(currentSessionCwd) }, [currentSessionCwd])
+  // The workspaces store is the same source the composer's workspace picker
+  // reads; it names a workspace for a blank session (New Session flow) whose
+  // cwd the session store only learns once the session runs. Priority inside
+  // the dock still favors an absolute session cwd.
+  const storeWorkspacePath = useWorkspaces((state) => {
+    const owner = currentSession !== undefined
+      ? state.items.find(item => item.sessionIds.includes(currentSession))
+      : undefined
+    const recent = state.recentWorkspaceId !== undefined
+      ? state.items.find(item => item.workspaceId === state.recentWorkspaceId)
+      : undefined
+    return (owner ?? recent ?? state.items[0])?.path
+  })
+  useEffect(() => { noteWorkbenchWorkspacePath(storeWorkspacePath) }, [storeWorkspacePath])
 
   useEffect(() => {
     const element = frameRef.current

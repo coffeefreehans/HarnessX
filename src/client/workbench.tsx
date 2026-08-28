@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { ReactNode } from 'react'
 import { MACOS_TITLEBAR_HEIGHT, WINDOWS_CAPTION_CONTROLS_WIDTH, WINDOWS_TITLEBAR_HEIGHT } from '../window-chrome.ts'
 import { isDesktopPrefsHydrated, schedulePersistDesktopPrefs } from './desktop-prefs.ts'
+import { isAbsoluteWorkspacePath, resolveDockWorkspace } from './workspace-source.ts'
 import {
   WORKBENCH_WIDTH_MAX,
   WORKBENCH_WIDTH_MIN,
@@ -1171,6 +1172,9 @@ let activeSessionId: string | undefined
 /** Working directory of the current session, straight from the session store. */
 let activeSessionCwd: string | undefined
 
+/** Workspace path projected by the workspaces store; names a workspace even for a session that has not run yet. */
+let activeStoreWorkspace: string | undefined
+
 const activeCwdListeners = new Set<() => void>()
 
 /** Note which session the main window is showing so dock panels follow it. @param sessionId - current session id. */
@@ -1193,16 +1197,28 @@ export function noteWorkbenchSessionCwd(cwd: string | undefined): void {
 }
 
 /**
- * Hook resolving the workspace root the dock should follow: the current
- * session's own directory when the store knows it, else a polled host route
- * (registry row owning the session, first row as the last fallback).
+ * Publish the workspaces-store projection: the workspace owning the current
+ * session, else the recent workspace. This is the source the composer's
+ * workspace picker reads, so a blank session is docked to the workspace it
+ * was created against before any cwd is known.
+ * @param path - the projected absolute workspace directory, when known.
  */
-/** Only real absolute directories may drive dock panels; anything else is unknown. */
-function isAbsoluteWorkspacePath(value: string | undefined): value is string {
-  if (value === undefined || value.length === 0) return false
-  return value.startsWith('/') || /^[a-zA-Z]:[\/]/.test(value)
+export function noteWorkbenchWorkspacePath(path: string | undefined): void {
+  if (path === activeStoreWorkspace) return
+  activeStoreWorkspace = path
+  // Re-root only when this source is the effective one; an absolute session
+  // cwd owns the panels and the terminals bound to it.
+  if (path !== undefined && !isAbsoluteWorkspacePath(activeSessionCwd)) resetWorkbenchCaches(path)
+  for (const listener of [...activeCwdListeners]) listener()
 }
 
+/**
+ * Hook resolving the workspace root the dock should follow: the current
+ * session's own directory when the store knows it, else the workspaces-store
+ * projection (the same source the composer's workspace picker reads), else a
+ * polled host route (registry row owning the session, first row as the last
+ * fallback).
+ */
 function useWorkspace(): { workspace: string | undefined; ready: boolean } {
   const [hostWorkspace, setHostWorkspace] = useState(workspaceCache)
   const [ready, setReady] = useState(false)
@@ -1211,6 +1227,7 @@ function useWorkspace(): { workspace: string | undefined; ready: boolean } {
     return () => { activeCwdListeners.delete(listener) }
   }, [])
   const sessionCwd = useSyncExternalStore(subscribeCwd, () => activeSessionCwd)
+  const storeWorkspace = useSyncExternalStore(subscribeCwd, () => activeStoreWorkspace)
   useEffect(() => {
     let cancelled = false
     const tick = async (): Promise<void> => {
@@ -1220,9 +1237,10 @@ function useWorkspace(): { workspace: string | undefined; ready: boolean } {
         if (cancelled) return
         const next = typeof value.path === 'string' && value.path.length > 0 ? value.path : undefined
         workspaceCache = next
-        // When the client store has no cwd, the host route is the workspace
-        // source; re-root the panels if it resolved somewhere new.
-        if (next !== hostWorkspace && activeSessionCwd === undefined && next !== undefined) {
+        // When neither client store has a cwd, the host route is the workspace
+        // source; re-root the panels only if it is what they will follow.
+        if (next !== hostWorkspace && next !== undefined
+          && resolveDockWorkspace(activeSessionCwd, activeStoreWorkspace, next) === next) {
           resetWorkbenchCaches(next)
         }
         setHostWorkspace(next)
@@ -1238,8 +1256,7 @@ function useWorkspace(): { workspace: string | undefined; ready: boolean } {
       clearInterval(timer)
     }
   }, [])
-  const resolved = sessionCwd ?? hostWorkspace
-  return { workspace: isAbsoluteWorkspacePath(resolved) ? resolved : undefined, ready }
+  return { workspace: resolveDockWorkspace(sessionCwd, storeWorkspace, hostWorkspace), ready }
 }
 
 const TERMINAL_INPUT_DEFAULT = 46
