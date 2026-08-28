@@ -26,6 +26,7 @@ export type UpdatesKey =
   | 'processing'
   | 'downloading'
   | 'currentVersion'
+  | 'kernelVersion'
   | 'latestVersion'
   | 'notChecked'
   | 'arch'
@@ -64,6 +65,7 @@ const zh: Record<UpdatesKey, string> = {
   processing: '处理中…',
   downloading: '下载中',
   currentVersion: '当前版本',
+  kernelVersion: '内核版本',
   latestVersion: '最新版本',
   notChecked: '尚未检查',
   arch: 'CPU 架构',
@@ -103,6 +105,7 @@ const en: Record<UpdatesKey, string> = {
   processing: 'Processing…',
   downloading: 'Downloading',
   currentVersion: 'Current Version',
+  kernelVersion: 'Kernel Version',
   latestVersion: 'Latest Version',
   notChecked: 'Not checked yet',
   arch: 'Architecture',
@@ -137,6 +140,8 @@ const NS = 'settings.updates'
 interface UpdateSnapshot {
   /** Installed application version. */
   currentVersion: string
+  /** DeepSeek Harness kernel (runtime package family) version. */
+  kernelVersion?: string
   /** Current CPU architecture. */
   arch: string
   /** Whether this package can download an installer. */
@@ -337,6 +342,7 @@ function UpdateSettingsSection(props: PropsRuntime<'settings.section'> & PropsLo
 
       <dl className="harnessxUpdatesGrid">
         <div className="harnessxUpdatesField"><dt>{t('currentVersion')}</dt><dd>{currentVersion}</dd></div>
+        <div className="harnessxUpdatesField"><dt>{t('kernelVersion')}</dt><dd>{snapshot?.kernelVersion ?? '—'}</dd></div>
         <div className="harnessxUpdatesField"><dt>{t('latestVersion')}</dt><dd>{latestVersion}</dd></div>
         <div className="harnessxUpdatesField"><dt>{t('arch')}</dt><dd>{snapshot?.arch ?? '—'}</dd></div>
         <div className="harnessxUpdatesField"><dt>{t('publishedAt')}</dt><dd>{formatDate(snapshot?.publishedAt)}</dd></div>
