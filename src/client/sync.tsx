@@ -288,7 +288,7 @@ export function applySync(ctx: ClientContext): void {
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'cloud-sync',
-    order: 110,
+    order: 100,
     label: () => ctx.locale.bind(NS)('nav'),
     locale: NS,
   }, SyncSettingsSection))

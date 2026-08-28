@@ -176,6 +176,54 @@ describe('GitHub Release update download with latest.yml / latest-mac.yml', () =
     }), 'missing-asset')
   })
 
+  it('reports monotonic 0-100 progress against the manifest size', async () => {
+    const version = '0.0.2'
+    const platform = 'win32'
+    const arch = 'x64'
+    const artifact = windowsArtifact()
+    const userDataPath = await temporaryUserData()
+    const artifactName = releaseArtifactName(platform, arch, version)
+    const manifestName = releaseManifestName(platform)
+    const chunkCount = 4
+    const chunkSize = artifact.byteLength / chunkCount
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let index = 0; index < chunkCount; index += 1) {
+          controller.enqueue(artifact.subarray(index * chunkSize, (index + 1) * chunkSize))
+        }
+        controller.close()
+      },
+    })
+    const progress: number[] = []
+
+    const result = await downloadDesktopUpdate({
+      platform,
+      arch,
+      version,
+      release: releaseFixture(version, platform, arch),
+      userDataPath,
+      request: async (url) => {
+        if (url.endsWith('/' + manifestName)) {
+          const manifest = [
+            'version: ' + version,
+            'files:',
+            '  - url: ' + artifactName,
+            '    sha512: ' + sha512Base64(artifact),
+            '    size: ' + String(artifact.byteLength),
+          ].join('\n')
+          return new Response(manifest)
+        }
+        if (url.endsWith('/' + artifactName)) return new Response(stream)
+        return new Response('not found', { status: 404 })
+      },
+      onProgress: percent => { progress.push(percent) },
+    })
+
+    expect(progress).toEqual([25, 50, 75, 100])
+    expect(await readFile(result)).toEqual(Buffer.from(artifact))
+    await expectNoPartialFiles(userDataPath, version)
+  })
+
   it('rejects an invalid installer even when its checksum matches', async () => {
     const version = '0.0.2'
     const platform = 'win32'

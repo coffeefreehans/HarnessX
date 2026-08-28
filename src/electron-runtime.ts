@@ -84,7 +84,7 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
     request: (url, init) => net.fetch(url, init),
     confirmDownload: version => this.confirmUpdateDownload(version),
     showManualCheckResult: result => this.showManualUpdateCheckResult(result),
-    downloadAndOpen: (version, release, signal) => this.downloadAndOpenUpdate(version, release, signal),
+    downloadAndOpen: (version, release, signal, onProgress) => this.downloadAndOpenUpdate(version, release, signal, onProgress),
     notify: notification => { this.showNotification(notification) },
   }
 
@@ -431,6 +431,7 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
     version: string,
     release: UpdateReleaseInfo,
     signal: AbortSignal,
+    onProgress?: (percent: number) => void,
   ): Promise<void> {
     if (this.platform !== 'darwin' && this.platform !== 'win32') {
       throw new Error(`harnessx-desktop: updates are unavailable on ${this.platform}`)
@@ -443,6 +444,7 @@ export class ElectronDesktopRuntime implements DesktopRuntime {
       userDataPath: app.getPath('userData'),
       request: (url, init) => net.fetch(url, init),
       signal,
+      ...(onProgress === undefined ? {} : { onProgress }),
     })
     signal.throwIfAborted()
 

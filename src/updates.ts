@@ -70,6 +70,8 @@ export interface UpdateApiSnapshot {
   readonly checking: boolean
   /** Version currently being downloaded. */
   readonly downloadingVersion?: string
+  /** Download progress of `downloadingVersion`, as an integer 0-100. */
+  readonly downloadProgress?: number
   /** Latest version returned by GitHub. */
   readonly latestVersion?: string
   /** Update comparison result. */
@@ -101,6 +103,7 @@ export function apply(ctx: Context, config: Config): void {
     let disposed = false
     let checking = false
     let downloadingVersion: string | undefined
+    let downloadProgressPercent: number | undefined
     let latestResult: UpdateCheckResult | null | undefined
     let lastCheckedAt: string | undefined
     let lastError: string | undefined
@@ -150,6 +153,9 @@ export function apply(ctx: Context, config: Config): void {
         canDownload: adapter.canDownload,
         checking,
         ...(downloadingVersion === undefined ? {} : { downloadingVersion }),
+        ...(downloadingVersion === undefined || downloadProgressPercent === undefined
+          ? {}
+          : { downloadProgress: downloadProgressPercent }),
         ...(latestResult === undefined || latestResult === null
           ? {}
           : { latestVersion: latestResult.latestVersion }),
@@ -237,6 +243,7 @@ export function apply(ctx: Context, config: Config): void {
         const controller = new AbortController()
         downloadController = controller
         downloadingVersion = confirmedResult.latestVersion
+        downloadProgressPercent = 0
         lastError = undefined
         refreshTray()
         try {
@@ -244,12 +251,14 @@ export function apply(ctx: Context, config: Config): void {
             confirmedResult.latestVersion,
             confirmedResult.release,
             controller.signal,
+            percent => { downloadProgressPercent = percent },
           )
         } catch (cause) {
           if (!controller.signal.aborted) lastError = errorMessage(cause)
         } finally {
           if (downloadController === controller) downloadController = undefined
           downloadingVersion = undefined
+          downloadProgressPercent = undefined
           refreshTray()
         }
       })().finally(() => {
