@@ -742,7 +742,7 @@ export function WorkbenchDock(props: { state: WorkbenchState }): ReactNode {
     <aside className="hxpWb" data-open={snapshot.open || undefined}>
       <div className="hxpWbSlide">
         <div className="hxpWbRail">
-          {WORKBENCH_PANEL_IDS.map(id => (
+          {WORKBENCH_PANEL_IDS.filter(id => id !== 'chat').map(id => (
             <button
               key={id}
               type="button"
@@ -1197,6 +1197,12 @@ export function noteWorkbenchSessionCwd(cwd: string | undefined): void {
  * session's own directory when the store knows it, else a polled host route
  * (registry row owning the session, first row as the last fallback).
  */
+/** Only real absolute directories may drive dock panels; anything else is unknown. */
+function isAbsoluteWorkspacePath(value: string | undefined): value is string {
+  if (value === undefined || value.length === 0) return false
+  return value.startsWith('/') || /^[a-zA-Z]:[\/]/.test(value)
+}
+
 function useWorkspace(): { workspace: string | undefined; ready: boolean } {
   const [hostWorkspace, setHostWorkspace] = useState(workspaceCache)
   const [ready, setReady] = useState(false)
@@ -1232,7 +1238,8 @@ function useWorkspace(): { workspace: string | undefined; ready: boolean } {
       clearInterval(timer)
     }
   }, [])
-  return { workspace: sessionCwd ?? hostWorkspace, ready }
+  const resolved = sessionCwd ?? hostWorkspace
+  return { workspace: isAbsoluteWorkspacePath(resolved) ? resolved : undefined, ready }
 }
 
 const TERMINAL_INPUT_DEFAULT = 46
@@ -1396,8 +1403,10 @@ function GitPanel(props: { tab: WorkbenchTab; state: WorkbenchState }): ReactNod
   // Session switches and poll gaps can transiently hide the workspace; once
   // known, this tab stays bound to its repository until a real one arrives.
   const lastWorkspace = useRef<string | undefined>(undefined)
-  if (workspace !== undefined) lastWorkspace.current = workspace
-  const activeWorkspace = workspace ?? lastWorkspace.current
+  if (isAbsoluteWorkspacePath(workspace)) lastWorkspace.current = workspace
+  const activeWorkspace = isAbsoluteWorkspacePath(workspace)
+    ? workspace
+    : isAbsoluteWorkspacePath(lastWorkspace.current) ? lastWorkspace.current : undefined
   const [status, setStatus] = useState<StatusResponse | undefined>()
   const [log, setLog] = useState<LogResponse['entries']>([])
   const [diff, setDiff] = useState<DiffResponse['total'] | undefined>()
