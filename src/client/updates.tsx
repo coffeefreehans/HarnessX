@@ -31,7 +31,6 @@ export type UpdatesKey =
   | 'notChecked'
   | 'arch'
   | 'publishedAt'
-  | 'releaseTitle'
   | 'lastChecked'
   | 'releaseNotes'
   | 'noReleaseNotes'
@@ -70,7 +69,6 @@ const zh: Record<UpdatesKey, string> = {
   notChecked: '尚未检查',
   arch: 'CPU 架构',
   publishedAt: '发布时间',
-  releaseTitle: '版本标题',
   lastChecked: '上次检查',
   releaseNotes: '版本说明',
   noReleaseNotes: '暂无版本说明。',
@@ -110,7 +108,6 @@ const en: Record<UpdatesKey, string> = {
   notChecked: 'Not checked yet',
   arch: 'Architecture',
   publishedAt: 'Published At',
-  releaseTitle: 'Release Title',
   lastChecked: 'Last Checked',
   releaseNotes: 'Release Notes',
   noReleaseNotes: 'No release notes available.',
@@ -346,7 +343,6 @@ function UpdateSettingsSection(props: PropsRuntime<'settings.section'> & PropsLo
         <div className="harnessxUpdatesField"><dt>{t('latestVersion')}</dt><dd>{latestVersion}</dd></div>
         <div className="harnessxUpdatesField"><dt>{t('arch')}</dt><dd>{snapshot?.arch ?? '—'}</dd></div>
         <div className="harnessxUpdatesField"><dt>{t('publishedAt')}</dt><dd>{formatDate(snapshot?.publishedAt)}</dd></div>
-        <div className="harnessxUpdatesField"><dt>{t('releaseTitle')}</dt><dd>{snapshot?.releaseName ?? '—'}</dd></div>
         <div className="harnessxUpdatesField"><dt>{t('lastChecked')}</dt><dd>{formatDate(snapshot?.lastCheckedAt)}</dd></div>
       </dl>
 
