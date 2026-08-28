@@ -36,15 +36,17 @@ jobs:
       - run: yarn build
       - run: yarn typecheck
       - run: yarn vitest run tests/package.spec.ts tests/update-checker.spec.ts tests/update-download.spec.ts tests/verify-mac-release.spec.ts
+      - name: Resolve release version
+        run: echo "RELEASE_VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
       - name: Build unsigned DMG
-        run: yarn exec electron-builder --mac dmg --${{ matrix.architecture }} --publish never --config.mac.identity=null --config.mac.notarize=false --config.npmRebuild=false
+        run: yarn exec electron-builder --mac dmg --${{ matrix.architecture }} --publish never --config.mac.identity=null --config.mac.notarize=false --config.npmRebuild=false --config.directories.output=dist/${RELEASE_VERSION}
       - name: Generate update manifest
         run: node scripts/merge-update-manifests.ts
       - uses: actions/upload-artifact@v4
         with:
           name: HarnessX-macOS-${{ matrix.architecture }}
           path: |
-            dist/HarnessX-*-${{ matrix.architecture }}.dmg
-            dist/latest-mac.yml
+            dist/${{ env.RELEASE_VERSION }}/HarnessX-*-${{ matrix.architecture }}.dmg
+            dist/${{ env.RELEASE_VERSION }}/latest-mac.yml
           if-no-files-found: error
           retention-days: 7
