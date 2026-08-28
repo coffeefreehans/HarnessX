@@ -11,8 +11,17 @@ interface CommandCall {
   readonly env: NodeJS.ProcessEnv
 }
 
-function options(calls: CommandCall[], logs: string[] = []): WindowsPackageOptions {
-  return {
+interface ChecksumCall {
+  readonly releaseDir: string
+  readonly version: string
+}
+
+function options(calls: CommandCall[], logs: string[] = []): {
+  value: WindowsPackageOptions
+  checksumCalls: ChecksumCall[]
+} {
+  const checksumCalls: ChecksumCall[] = []
+  const value: WindowsPackageOptions = {
     env: {
       PATH: 'C:\\Windows\\System32',
       SAFE_VALUE: 'kept',
@@ -26,6 +35,7 @@ function options(calls: CommandCall[], logs: string[] = []): WindowsPackageOptio
     nodeVersion: '22.23.2',
     workspaceRoot: 'C:\\repo',
     desktopRoot: 'C:\\repo',
+    version: '2.0.0',
     commandShell: 'C:\\Windows\\System32\\cmd.exe',
     builderCli: 'C:\\repo\\node_modules\\electron-builder\\cli.js',
     manifestMerger: 'C:\\repo\\scripts\\merge-update-manifests.ts',
@@ -35,15 +45,20 @@ function options(calls: CommandCall[], logs: string[] = []): WindowsPackageOptio
       calls.push({ command, args: [...args], cwd, env: { ...env } })
     },
     log: message => logs.push(message),
+    writeChecksums: (releaseDir, version) => {
+      checksumCalls.push({ releaseDir, version })
+    },
   }
+  return { value, checksumCalls }
 }
 
 describe('Windows multi-architecture installer packaging', () => {
   it('checks without credentials, builds unsigned x64 and arm64 NSIS and portable targets, then verifies them', () => {
     const calls: CommandCall[] = []
     const logs: string[] = []
+    const { value, checksumCalls } = options(calls, logs)
 
-    packageWindowsInstaller(options(calls, logs))
+    packageWindowsInstaller(value)
 
     expect(calls).toHaveLength(5)
     expect(calls[0]).toEqual({
@@ -57,46 +72,29 @@ describe('Windows multi-architecture installer packaging', () => {
       cwd: 'C:\\repo',
       env: { PATH: 'C:\\Windows\\System32', SAFE_VALUE: 'kept' },
     })
-    expect(calls[1]).toEqual({
-      command: 'C:\\Program Files\\nodejs\\node.exe',
-      args: [
-        'C:\\repo\\node_modules\\electron-builder\\cli.js',
-        '--win',
-        'nsis',
-        'zip',
-        '--x64',
-        '--publish',
-        'never',
-        '--config.win.signExecutable=false',
-        '--config.npmRebuild=false',
-      ],
-      cwd: 'C:\\repo',
-      env: {
-        PATH: 'C:\\Windows\\System32',
-        SAFE_VALUE: 'kept',
-        CSC_IDENTITY_AUTO_DISCOVERY: 'false',
-      },
-    })
-    expect(calls[2]).toEqual({
-      command: 'C:\\Program Files\\nodejs\\node.exe',
-      args: [
-        'C:\\repo\\node_modules\\electron-builder\\cli.js',
-        '--win',
-        'nsis',
-        'zip',
-        '--arm64',
-        '--publish',
-        'never',
-        '--config.win.signExecutable=false',
-        '--config.npmRebuild=false',
-      ],
-      cwd: 'C:\\repo',
-      env: {
-        PATH: 'C:\\Windows\\System32',
-        SAFE_VALUE: 'kept',
-        CSC_IDENTITY_AUTO_DISCOVERY: 'false',
-      },
-    })
+    for (const [index, architecture] of (['x64', 'arm64'] as const).entries()) {
+      expect(calls[index + 1]).toEqual({
+        command: 'C:\\Program Files\\nodejs\\node.exe',
+        args: [
+          'C:\\repo\\node_modules\\electron-builder\\cli.js',
+          '--win',
+          'nsis',
+          'zip',
+          `--${architecture}`,
+          '--publish',
+          'never',
+          '--config.directories.output=dist/2.0.0',
+          '--config.win.signExecutable=false',
+          '--config.npmRebuild=false',
+        ],
+        cwd: 'C:\\repo',
+        env: {
+          PATH: 'C:\\Windows\\System32',
+          SAFE_VALUE: 'kept',
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false',
+        },
+      })
+    }
     expect(calls[3]).toEqual({
       command: 'C:\\Program Files\\nodejs\\node.exe',
       args: ['C:\\repo\\scripts\\merge-update-manifests.ts'],
@@ -110,9 +108,11 @@ describe('Windows multi-architecture installer packaging', () => {
       env: { PATH: 'C:\\Windows\\System32', SAFE_VALUE: 'kept' },
     })
     expect(logs).toEqual([
-      'Building unsigned Windows x64 and arm64 installers; Authenticode is a separate release step.',
+      'Building unsigned Windows x64 and arm64 installers into dist/2.0.0; Authenticode is a separate release step.',
       'Merging multi-architecture update manifests.',
+      'Writing SHA-256 checksums.',
     ])
+    expect(checksumCalls).toEqual([{ releaseDir: 'C:\\repo\\dist\\2.0.0', version: '2.0.0' }])
   })
 
   it.each([
@@ -123,24 +123,26 @@ describe('Windows multi-architecture installer packaging', () => {
     'rejects unsupported host %s/%s with Node %s before running commands',
     (platform, arch, nodeVersion, message) => {
     const calls: CommandCall[] = []
-      const value = { ...options(calls), platform, arch, nodeVersion }
+      const { value } = options(calls)
+      const broken: WindowsPackageOptions = { ...value, platform, arch, nodeVersion }
 
-      expect(() => packageWindowsInstaller(value)).toThrow(message)
+      expect(() => packageWindowsInstaller(broken)).toThrow(message)
       expect(calls).toEqual([])
     },
   )
 
   it('stops before packaging when the headless check fails', () => {
     const calls: CommandCall[] = []
-    const value: WindowsPackageOptions = {
-      ...options(calls),
+    const { value } = options(calls)
+    const failing: WindowsPackageOptions = {
+      ...value,
       run: (command, args, cwd, env) => {
         calls.push({ command, args: [...args], cwd, env: { ...env } })
         throw new Error('headless check failed')
       },
     }
 
-    expect(() => packageWindowsInstaller(value)).toThrow('headless check failed')
+    expect(() => packageWindowsInstaller(failing)).toThrow('headless check failed')
     expect(calls).toHaveLength(1)
   })
 })

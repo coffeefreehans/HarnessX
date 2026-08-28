@@ -85,7 +85,8 @@ export async function mergeUpdateManifests(distDir: string, version: string): Pr
 
 const invokedPath = process.argv[1]
 if (invokedPath !== undefined && resolve(invokedPath) === fileURLToPath(import.meta.url)) {
-  const distDir = resolve(fileURLToPath(import.meta.url), '..', '..', 'dist')
-  const pkg = JSON.parse(await readFile(resolve(distDir, '..', 'package.json'), 'utf8')) as { version: string }
-  await mergeUpdateManifests(distDir, pkg.version)
+  const packageRoot = resolve(fileURLToPath(import.meta.url), '..', '..')
+  const pkg = JSON.parse(await readFile(resolve(packageRoot, 'package.json'), 'utf8')) as { version: string }
+  // electron-builder wrote every artifact into the per-version release folder.
+  await mergeUpdateManifests(join(packageRoot, 'dist', pkg.version), pkg.version)
 }

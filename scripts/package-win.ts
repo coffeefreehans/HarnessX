@@ -1,7 +1,9 @@
 /** Build unsigned Windows x64 and arm64 NSIS installers on a native Windows host. */
 
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -28,6 +30,8 @@ export interface WindowsPackageOptions {
   readonly workspaceRoot: string
   /** Desktop package root containing electron-builder configuration. */
   readonly desktopRoot: string
+  /** Product version naming the dist release folder. */
+  readonly version: string
   /** Absolute native Windows command interpreter. */
   readonly commandShell: string
   /** Absolute electron-builder CLI module. */
@@ -47,6 +51,8 @@ export interface WindowsPackageOptions {
   ) => void
   /** Report non-secret packaging progress. */
   readonly log: (message: string) => void
+  /** Write SHA256SUMS.txt beside the built artifacts. */
+  readonly writeChecksums: (releaseDir: string, version: string) => void
 }
 
 /**
@@ -78,6 +84,31 @@ function run(
   }
 }
 
+/** Read the desktop package version naming the dist release folder. */
+function readVersion(desktopRoot: string): string {
+  const manifest = JSON.parse(readFileSync(join(desktopRoot, 'package.json'), 'utf8')) as {
+    version?: unknown
+  }
+  if (typeof manifest.version !== 'string' || manifest.version.length === 0) {
+    throw new Error(`desktop package at ${desktopRoot} has no valid version`)
+  }
+  return manifest.version
+}
+
+/**
+ * Release artifacts live in a per-version folder, so hash every built
+ * `HarnessX-<version>-*` deliverable into a SHA256SUMS.txt beside them.
+ * @param releaseDir - Version folder under dist holding the artifacts.
+ * @param version - Product version the artifact names carry.
+ */
+function writeSha256Checksums(releaseDir: string, version: string): void {
+  const names = readdirSync(releaseDir)
+    .filter(name => name.startsWith(`HarnessX-${version}-`))
+    .sort()
+  const lines = names.map(name => `${createHash('sha256').update(readFileSync(join(releaseDir, name))).digest('hex')} *${name}`)
+  writeFileSync(join(releaseDir, 'SHA256SUMS.txt'), `${lines.join('\n')}\n`, 'utf8')
+}
+
 function defaultOptions(): WindowsPackageOptions {
   const desktopRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
   const workspaceRoot = desktopRoot
@@ -90,6 +121,7 @@ function defaultOptions(): WindowsPackageOptions {
     nodeVersion: process.versions.node,
     workspaceRoot,
     desktopRoot,
+    version: readVersion(desktopRoot),
     commandShell: windowsRoot === undefined || windowsRoot.length === 0
       ? 'cmd.exe'
       : join(windowsRoot, 'System32', 'cmd.exe'),
@@ -99,6 +131,7 @@ function defaultOptions(): WindowsPackageOptions {
     nodeExecutable: process.execPath,
     run,
     log: message => console.log(message),
+    writeChecksums: writeSha256Checksums,
   }
 }
 
@@ -125,8 +158,9 @@ export function packageWindowsInstaller(
   }
 
   const cleanEnvironment = withoutWindowsSigningSecrets(options.env)
+  const outputArgument = `--config.directories.output=dist/${options.version}`
   options.log(
-    'Building unsigned Windows x64 and arm64 installers; Authenticode is a separate release step.',
+    `Building unsigned Windows x64 and arm64 installers into dist/${options.version}; Authenticode is a separate release step.`,
   )
   options.run(
     options.commandShell,
@@ -150,6 +184,7 @@ export function packageWindowsInstaller(
         `--${targetArchitecture}`,
         '--publish',
         'never',
+        outputArgument,
         '--config.win.signExecutable=false',
         '--config.npmRebuild=false',
       ],
@@ -173,6 +208,8 @@ export function packageWindowsInstaller(
     options.desktopRoot,
     cleanEnvironment,
   )
+  options.log('Writing SHA-256 checksums.')
+  options.writeChecksums(join(options.desktopRoot, 'dist', options.version), options.version)
 }
 
 const invokedPath = process.argv[1]

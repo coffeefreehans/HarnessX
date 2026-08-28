@@ -23,7 +23,7 @@ function fixture(version = '2.0.0'): {
 } {
   const root = mkdtempSync(join(tmpdir(), 'dsh-win-installer-'))
   temporaryRoots.push(root)
-  const dist = join(root, 'dist')
+  const dist = join(root, 'dist', version)
   const x64Unpacked = join(dist, 'win-unpacked')
   const arm64Unpacked = join(dist, 'win-arm64-unpacked')
   mkdirSync(x64Unpacked, { recursive: true })

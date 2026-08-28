@@ -83,7 +83,7 @@ function defaultOptions(): WindowsInstallerVerificationOptions {
 export function verifyWindowsInstaller(
   options: WindowsInstallerVerificationOptions = defaultOptions(),
 ): WindowsInstallerArtifacts {
-  const distDir = join(options.desktopRoot, 'dist')
+  const distDir = join(options.desktopRoot, 'dist', options.version)
   const artifacts = (['x64', 'arm64'] as const).map((architecture) => {
     const installerPath = join(
       distDir,
