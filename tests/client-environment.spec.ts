@@ -116,11 +116,24 @@ describe('advanced desktop layout', () => {
     layout.toggleSidebar()
     layout.openRightbar(true, false)
     layout.closeRightbar()
+    layout.selectPanel('workspace')
+    layout.selectPanel('workspace')
+    layout.selectPanel(null)
     expect(snapshots).toEqual([
-      { sidebar: 0, rightbar: 0, rightbarTrack: true, rightbarFullscreen: false, narrow: false, narrowExpanded: false },
-      { sidebar: 0, rightbar: 360, rightbarTrack: true, rightbarFullscreen: false, narrow: false, narrowExpanded: false },
-      { sidebar: 0, rightbar: 0, rightbarTrack: true, rightbarFullscreen: false, narrow: false, narrowExpanded: false },
+      { sidebar: 0, rightbar: 0, rightbarTrack: true, rightbarFullscreen: false, activePanelId: null, narrow: false, narrowExpanded: false },
+      { sidebar: 0, rightbar: 360, rightbarTrack: true, rightbarFullscreen: false, activePanelId: null, narrow: false, narrowExpanded: false },
+      { sidebar: 0, rightbar: 0, rightbarTrack: true, rightbarFullscreen: false, activePanelId: null, narrow: false, narrowExpanded: false },
+      { sidebar: 0, rightbar: 0, rightbarTrack: true, rightbarFullscreen: false, activePanelId: 'workspace', narrow: false, narrowExpanded: false },
+      { sidebar: 0, rightbar: 0, rightbarTrack: true, rightbarFullscreen: false, activePanelId: null, narrow: false, narrowExpanded: false },
     ])
+  })
+
+  it('rejects unknown main panel selections through the registration guard', () => {
+    const layout = new DesktopLayoutState()
+    const registered = new Set(['conversation', 'workspace'])
+    layout.selectPanel('workspace', id => registered.has(id))
+    expect(() => { layout.selectPanel('nope', id => registered.has(id)) }).toThrow('unknown main panel')
+    expect(layout.getSnapshot().activePanelId).toBe('workspace')
   })
 
   it('lets the rail re-expand without losing its wide preference on narrow windows', () => {

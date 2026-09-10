@@ -10,21 +10,23 @@ import type { DesktopLayoutState } from './layout-state.ts'
  */
 export class DesktopLayoutController implements ILayout {
   private readonly state: DesktopLayoutState
-  private readonly upstream: ILayout | undefined
+  private readonly hasPanel: ((id: string) => boolean) | undefined
   private navigation: AbortController | undefined
 
   /**
+   * Advanced mode disables the upstream ui-layout plugin, so this controller
+   * owns panel selection as well as column geometry.
    * @param state - desktop-owned column state driven by this controller.
-   * @param upstream - controller captured before this replacement provided `layout`.
+   * @param hasPanel - registration guard over live `main` entries.
    */
-  constructor(state: DesktopLayoutState, upstream: ILayout | undefined) {
+  constructor(state: DesktopLayoutState, hasPanel?: (id: string) => boolean) {
     this.state = state
-    this.upstream = upstream
+    this.hasPanel = hasPanel
   }
 
   /** @param panelId - registered main key, or null to show the Conversation. */
   selectPanel(panelId: MainPanelId | null): void {
-    this.upstream?.selectPanel(panelId)
+    this.state.selectPanel(panelId, this.hasPanel)
   }
 
   /** @returns a signal aborted by the next navigation or layout disposal. */

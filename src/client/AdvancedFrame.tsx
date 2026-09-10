@@ -36,7 +36,7 @@ export function DesktopBrandName(_props: PropsRuntime<'sidebar.brand.name'>): Re
 }
 
 /** Desktop-owned transparent frame around the unchanged product surfaces. */
-export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSessions, useWorkspaces, usePanelInfo }: AdvancedFrameProps) {
+export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSessions, useWorkspaces }: AdvancedFrameProps) {
   const subscribeLayout = useCallback((listener: () => void) => layout.subscribe(listener), [layout])
   const readLayout = useCallback(() => layout.getSnapshot(), [layout])
   const panels = useSyncExternalStore(subscribeLayout, readLayout)
@@ -49,10 +49,10 @@ export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSess
     const current = state.current
     return current !== undefined && state.byId[current]?.blank === false ? current : undefined
   })
-  // The upstream panel selector (workspace/settings entries in the sidebar)
-  // decides which keyed entry the center column renders; null keeps the
-  // Conversation. The desktop frame reads it through the standard hook.
-  const activePanelId = usePanelInfo(info => info.activePanelId)
+  // Panel selection is desktop-owned in advanced mode (the upstream ui-layout
+  // plugin is disabled): the layout state carries the selected main key and
+  // also feeds the panelInfo root hook the sidebar highlights from.
+  const activePanelId = panels.activePanelId
   // Dock panels (explorer/terminal/git/aux chat) follow the session the main
   // window is showing.
   const currentSession = useSessions((state) => state.current)

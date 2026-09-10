@@ -4,6 +4,8 @@ export interface DesktopLayoutSnapshot {
   sidebar: number
   /** Preferred right-column width; zero means closed. */
   rightbar: number
+  /** Selected central panel key, or null for the conversation. */
+  activePanelId: string | null
   /** Whether the right column reserves a grid track instead of overlaying. */
   rightbarTrack: boolean
   /** Whether the right column covers the whole frame. */
@@ -73,6 +75,7 @@ export class DesktopLayoutState {
     rightbar: 0,
     rightbarTrack: true,
     rightbarFullscreen: false,
+    activePanelId: null,
     narrow: false,
     narrowExpanded: false,
   })
@@ -116,6 +119,16 @@ export class DesktopLayoutState {
   /** Close the right column while keeping its slot mounted. */
   closeRightbar(): void {
     if (this.snapshot.rightbar !== 0) this.publish({ ...this.snapshot, rightbar: 0 })
+  }
+
+  /** Select the central panel; null returns to the conversation.
+   * @param panelId - registered main key, or null.
+   * @param validate - optional registration guard throwing for unknown keys. */
+  selectPanel(panelId: string | null, validate?: (id: string) => boolean): void {
+    if (panelId !== null && validate !== undefined && !validate(panelId)) {
+      throw new Error(`harnessx-desktop: unknown main panel ${JSON.stringify(panelId)}`)
+    }
+    if (this.snapshot.activePanelId !== panelId) this.publish({ ...this.snapshot, activePanelId: panelId })
   }
 
   /** @param width - requested sidebar width from a resize gesture. */

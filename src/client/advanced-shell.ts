@@ -5,7 +5,6 @@ import type { DesktopClientEnvironment } from './environment.ts'
 import { AdvancedFrame, DesktopBrandName } from './AdvancedFrame.tsx'
 import { DesktopLayoutState } from './layout-state.ts'
 import { DesktopLayoutController, provideDesktopLayout } from './layout-service.ts'
-import type { ILayout } from '@deepseek-ai/dsh-client-ui-layout/client'
 import { installAdvancedStyles } from './styles.ts'
 import { DesktopThemePresenter } from './theme-presenter.ts'
 import { getWorkbenchStore } from './workbench-state.ts'
@@ -27,12 +26,24 @@ export function applyAdvancedShell(ctx: ClientContext, environment: DesktopClien
   // client; capture it once the connection service is available.
   const connection = ctx.get('connection') as { api?: WorkbenchWireApi }
   setWorkbenchApiClient(connection?.api)
-  // Main-panel selection keeps flowing through the upstream controller (it
-  // owns the panelInfo root hook); this replacement owns only column geometry.
-  const upstreamLayout = ctx.get('layout') as ILayout | undefined
+  // Advanced mode disables the upstream ui-layout plugin, so the desktop owns
+  // the layout face AND the panelInfo root hook the new sidebar consumes.
+  const hasMainPanel = (id: string): boolean =>
+    ctx.slots.entries('main').some(entry => entry.options.key === id)
   ctx.effect(
-    () => provideDesktopLayout(ctx, new DesktopLayoutController(desktopLayout, upstreamLayout)),
+    () => provideDesktopLayout(ctx, new DesktopLayoutController(desktopLayout, hasMainPanel)),
     'desktop: layout service',
+  )
+  ctx.effect(
+    () => ctx.slots.provideRoot({
+      hooks: {
+        panelInfo: {
+          getSnapshot: () => ({ activePanelId: desktopLayout.getSnapshot().activePanelId }),
+          subscribe: (listener: () => void) => desktopLayout.subscribe(listener),
+        },
+      },
+    }),
+    'desktop: panel info',
   )
 
   ctx.effect(() => {
