@@ -1,6 +1,7 @@
 /** Session completion and approval-wait notification watcher. */
 
-import type { ClientContext, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type { SessionId } from '@deepseek-ai/dsh-client-connection/client'
 import { notifySessionCompleted } from './notifications.ts'
 
 /** Project basename from a session cwd for notification context. */

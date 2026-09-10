@@ -2,8 +2,12 @@
 export interface DesktopLayoutSnapshot {
   /** Preferred sidebar width; zero means the compact rail. */
   sidebar: number
-  /** Preferred details width; zero means closed. */
-  details: number
+  /** Preferred right-column width; zero means closed. */
+  rightbar: number
+  /** Whether the right column reserves a grid track instead of overlaying. */
+  rightbarTrack: boolean
+  /** Whether the right column covers the whole frame. */
+  rightbarFullscreen: boolean
   /** Whether the current viewport is below the automatic-collapse breakpoint. */
   narrow: boolean
   /** Manual narrow-screen override that temporarily expands the rail. */
@@ -66,7 +70,9 @@ function clamp(value: number, min: number, max: number): number {
 export class DesktopLayoutState {
   private snapshot: DesktopLayoutSnapshot = Object.freeze({
     sidebar: SIDEBAR_DEFAULT,
-    details: 0,
+    rightbar: 0,
+    rightbarTrack: true,
+    rightbarFullscreen: false,
     narrow: false,
     narrowExpanded: false,
   })
@@ -98,14 +104,18 @@ export class DesktopLayoutState {
     this.publish({ ...this.snapshot, narrow, narrowExpanded: false })
   }
 
-  /** Open details at its default width. */
-  openDetails(): void {
-    if (this.snapshot.details === 0) this.publish({ ...this.snapshot, details: DETAILS_DEFAULT })
+  /** Open the right column at its default width in the requested presentation.
+   * @param track - whether the panel reserves a grid track instead of overlaying.
+   * @param fullscreen - whether the panel covers the whole frame. */
+  openRightbar(track: boolean, fullscreen: boolean): void {
+    if (this.snapshot.rightbar === 0 || this.snapshot.rightbarTrack !== track || this.snapshot.rightbarFullscreen !== fullscreen) {
+      this.publish({ ...this.snapshot, rightbar: DETAILS_DEFAULT, rightbarTrack: track, rightbarFullscreen: fullscreen })
+    }
   }
 
-  /** Close details while keeping its slot mounted. */
-  closeDetails(): void {
-    if (this.snapshot.details !== 0) this.publish({ ...this.snapshot, details: 0 })
+  /** Close the right column while keeping its slot mounted. */
+  closeRightbar(): void {
+    if (this.snapshot.rightbar !== 0) this.publish({ ...this.snapshot, rightbar: 0 })
   }
 
   /** @param width - requested sidebar width from a resize gesture. */
@@ -113,9 +123,9 @@ export class DesktopLayoutState {
     this.publish({ ...this.snapshot, sidebar: clamp(width, SIDEBAR_MIN, SIDEBAR_MAX) })
   }
 
-  /** @param width - requested details width from a resize gesture. */
-  setDetails(width: number): void {
-    this.publish({ ...this.snapshot, details: clamp(width, DETAILS_MIN, DETAILS_MAX) })
+  /** @param width - requested right-column width from a resize gesture. */
+  setRightbar(width: number): void {
+    this.publish({ ...this.snapshot, rightbar: clamp(width, DETAILS_MIN, DETAILS_MAX) })
   }
 
   private publish(next: DesktopLayoutSnapshot): void {

@@ -86,7 +86,6 @@ describe('published package surface', () => {
     expect(manifest.dsh?.client).toEqual({
       platform: 'web',
       inject: [
-        '@deepseek-ai/dsh-client-runtime',
         '@deepseek-ai/dsh-client-ui-theme',
       ],
     })
@@ -124,7 +123,7 @@ describe('published package surface', () => {
     const main = readFileSync(new URL('src/main.ts', packageRoot), 'utf8')
     const snapshot = main.indexOf('const environment = loadLayeredEnv')
     const install = main.indexOf('const pnpmRuntime = installDesktopPnpmRuntime')
-    const prepare = main.indexOf('const prepared = prepareDesktopProfile')
+    const prepare = main.indexOf('const prepared = await prepareDesktopProfile')
     const boot = main.indexOf('const ctx = await boot')
 
     expect(snapshot).toBeGreaterThanOrEqual(0)
@@ -296,9 +295,9 @@ describe('published package surface', () => {
   it('isolates a failed browser plugin from the core application shell', () => {
     // Upstream folded dsh-client-web into the dsh-web-frontend bundle at rc.2,
     // so the boot-tolerance patch now targets the frontend assets alone.
-    const frontendPatchResolution = 'patch:@deepseek-ai/dsh-web-frontend@npm%3A0.1.1-rc.2#./patches/dsh-web-frontend@0.1.1-rc.2.patch'
+    const frontendPatchResolution = 'patch:@deepseek-ai/dsh-web-frontend@npm%3A0.1.5-rc.1#./patches/dsh-web-frontend@0.1.5-rc.1.patch'
     const lockfile = readFileSync(new URL('yarn.lock', workspaceRoot), 'utf8')
-    const frontendPatch = readFileSync(new URL('patches/dsh-web-frontend@0.1.1-rc.2.patch', workspaceRoot), 'utf8')
+    const frontendPatch = readFileSync(new URL('patches/dsh-web-frontend@0.1.5-rc.1.patch', workspaceRoot), 'utf8')
     const workspaceRequire = createRequire(new URL('package.json', packageRoot))
     const frontendManifest = workspaceRequire.resolve('@deepseek-ai/dsh-web-frontend/package.json')
     const frontendAssetsDir = join(dirname(frontendManifest), 'dist', 'assets')
@@ -309,9 +308,9 @@ describe('published package surface', () => {
 
     expect(workspaceManifest.dependencies).not.toHaveProperty('@deepseek-ai/dsh-client-web')
     expect(workspaceManifest.resolutions).toMatchObject({
-      '@deepseek-ai/dsh-web-frontend@npm:^0.1.1-rc.2': frontendPatchResolution,
+      '@deepseek-ai/dsh-web-frontend@npm:^0.1.5-rc.1': frontendPatchResolution,
     })
-    expect(lockfile).toContain('@deepseek-ai/dsh-web-frontend@patch:@deepseek-ai/dsh-web-frontend@npm%3A0.1.1-rc.2#./patches/dsh-web-frontend@0.1.1-rc.2.patch')
+    expect(lockfile).toContain('@deepseek-ai/dsh-web-frontend@patch:@deepseek-ai/dsh-web-frontend@npm%3A0.1.5-rc.1#./patches/dsh-web-frontend@0.1.5-rc.1.patch')
     expect(frontendPatch).toContain('disabling failed optional plugin')
     expect(frontendAssets).toContain('disabling failed optional plugin')
     // The patch rewrites minified bundle code; a malformed edit turns the whole
@@ -328,31 +327,33 @@ describe('published package surface', () => {
   })
 
   it('starts restricted Windows shells with a hidden console show state', () => {
-    const patchResolution = 'patch:@deepseek-ai/dsh-sandbox-windows-acl@npm%3A0.1.1-rc.2#./patches/dsh-sandbox-windows-acl@0.1.1-rc.2.patch'
+    // The Win32 spawn helpers moved from dsh-sandbox-windows-acl into the
+    // shared dsh-win32-process library at 0.1.5-rc.1, so the show-state patch
+    // follows the startup-info encoder there.
+    const patchResolution = 'patch:@deepseek-ai/dsh-win32-process@npm%3A0.1.5-rc.1#./patches/dsh-win32-process@0.1.5-rc.1.patch'
     const lockfile = readFileSync(new URL('yarn.lock', workspaceRoot), 'utf8')
-    const patch = readFileSync(new URL('patches/dsh-sandbox-windows-acl@0.1.1-rc.2.patch', workspaceRoot), 'utf8')
+    const patch = readFileSync(new URL('patches/dsh-win32-process@0.1.5-rc.1.patch', workspaceRoot), 'utf8')
     const workspaceRequire = createRequire(new URL('package.json', packageRoot))
-    const sandboxManifest = workspaceRequire.resolve('@deepseek-ai/dsh-sandbox-windows-acl/package.json')
-    const sandboxLocalManifest = workspaceRequire.resolve('@deepseek-ai/dsh-sandbox-local/package.json')
-    const sandboxLocalRequire = createRequire(sandboxLocalManifest)
-    const sandboxLib = join(dirname(sandboxManifest), 'lib')
-    const runtimeChunks = readdirSync(sandboxLib).filter(name => /^types-.*\.js$/u.test(name))
+    const win32ProcessManifest = workspaceRequire.resolve('@deepseek-ai/dsh-win32-process/package.json')
+    const subprocessLocalManifest = workspaceRequire.resolve('@deepseek-ai/dsh-subprocess-local/package.json')
+    const subprocessLocalRequire = createRequire(subprocessLocalManifest)
+    const runtimeLib = join(dirname(win32ProcessManifest), 'lib')
+    const installedRuntime = readFileSync(join(runtimeLib, 'index.js'), 'utf8')
 
     expect(workspaceManifest.resolutions).toMatchObject({
-      '@deepseek-ai/dsh-sandbox-windows-acl@npm:0.1.1-rc.2': patchResolution,
-      '@deepseek-ai/dsh-sandbox-windows-acl@npm:^0.1.1-rc.2': patchResolution,
+      '@deepseek-ai/dsh-win32-process@npm:0.1.5-rc.1': patchResolution,
+      '@deepseek-ai/dsh-win32-process@npm:^0.1.5-rc.1': patchResolution,
     })
-    expect(sandboxLocalRequire.resolve('@deepseek-ai/dsh-sandbox-windows-acl/package.json'))
-      .toBe(sandboxManifest)
-    expect(lockfile).toContain('@deepseek-ai/dsh-sandbox-windows-acl@patch:@deepseek-ai/dsh-sandbox-windows-acl@npm%3A0.1.1-rc.2#./patches/dsh-sandbox-windows-acl@0.1.1-rc.2.patch')
+    expect(subprocessLocalRequire.resolve('@deepseek-ai/dsh-win32-process/package.json'))
+      .toBe(win32ProcessManifest)
+    expect(lockfile).toContain('@deepseek-ai/dsh-win32-process@patch:@deepseek-ai/dsh-win32-process@npm%3A0.1.5-rc.1#./patches/dsh-win32-process@0.1.5-rc.1.patch')
     expect(patch.match(/^\+\s*dwFlags: 257,\r?$/gmu)).toHaveLength(2)
     expect(patch.match(/^\+\s*wShowWindow: 0,\r?$/gmu)).toHaveLength(2)
-    expect(runtimeChunks).toHaveLength(1)
-    const installedRuntime = readFileSync(join(sandboxLib, runtimeChunks[0] as string), 'utf8')
     expect(installedRuntime.match(/dwFlags: 257,/gu)).toHaveLength(2)
     expect(installedRuntime.match(/wShowWindow: 0,/gu)).toHaveLength(2)
-    expect(installedRuntime).toContain('api.createProcessAsUserW(token, null, commandLine, null, null, 1, 0, null')
-    expect(installedRuntime).toContain('api.createProcessAsUserW(token, null, commandLine, null, null, 1, 4, null')
+    expect(installedRuntime).toContain('api.createProcessAsUserW(options.token, null, commandLine, null, null, 1, creationFlags, null, options.cwd, startupInfo, processInfo)')
+    expect(installedRuntime).toContain('createRestrictedProcess(api, options, buildCommandLine(options.command, options.args), 0, startupInfo, processInfo)')
+    expect(installedRuntime).toContain('createRestrictedProcess(api, options, commandLine, 4, startupInfo, processInfo)')
     expect(installedRuntime).not.toContain('134217728')
   })
 })

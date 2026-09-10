@@ -27,7 +27,7 @@ export interface AdvancedFrameInjected {
 
 /** Full advanced root slot props. */
 export type AdvancedFrameProps = PropsRuntime<'root'>
-  & PropsRenderSlots<'sidebar' | 'conversation' | 'details' | 'shell.overlay'>
+  & PropsRenderSlots<'sidebar' | 'main' | 'rightbar' | 'shell.overlay'>
   & AdvancedFrameInjected
 
 /** Product name occupying the sidebar's documented brand-name seat. */
@@ -36,7 +36,7 @@ export function DesktopBrandName(_props: PropsRuntime<'sidebar.brand.name'>): Re
 }
 
 /** Desktop-owned transparent frame around the unchanged product surfaces. */
-export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSessions, useWorkspaces }: AdvancedFrameProps) {
+export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSessions, useWorkspaces, usePanelInfo }: AdvancedFrameProps) {
   const subscribeLayout = useCallback((listener: () => void) => layout.subscribe(listener), [layout])
   const readLayout = useCallback(() => layout.getSnapshot(), [layout])
   const panels = useSyncExternalStore(subscribeLayout, readLayout)
@@ -49,6 +49,10 @@ export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSess
     const current = state.current
     return current !== undefined && state.byId[current]?.blank === false ? current : undefined
   })
+  // The upstream panel selector (workspace/settings entries in the sidebar)
+  // decides which keyed entry the center column renders; null keeps the
+  // Conversation. The desktop frame reads it through the standard hook.
+  const activePanelId = usePanelInfo(info => info.activePanelId)
   // Dock panels (explorer/terminal/git/aux chat) follow the session the main
   // window is showing.
   const currentSession = useSessions((state) => state.current)
@@ -68,10 +72,7 @@ export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSess
     const owner = currentSession !== undefined
       ? state.items.find(item => item.sessionIds.includes(currentSession))
       : undefined
-    const recent = state.recentWorkspaceId !== undefined
-      ? state.items.find(item => item.workspaceId === state.recentWorkspaceId)
-      : undefined
-    return (owner ?? recent ?? state.items[0])?.path
+    return (owner ?? state.items[0])?.path
   })
   useEffect(() => { noteWorkbenchWorkspacePath(storeWorkspacePath) }, [storeWorkspacePath])
 
@@ -91,7 +92,7 @@ export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSess
   const previousSession = useRef(detailsSession)
   useEffect(() => {
     if (detailsSession !== undefined && previousSession.current !== undefined && previousSession.current !== detailsSession) {
-      layout.closeDetails()
+      layout.closeRightbar()
     }
     previousSession.current = detailsSession
   }, [detailsSession, layout])
@@ -104,12 +105,14 @@ export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSess
   const workbenchWidth = bench.open
     ? Math.min(WORKBENCH_WIDTH_MAX, Math.max(WORKBENCH_WIDTH_MIN, Math.min(requestedWorkbenchWidth, viewport - 360)))
     : 0
-  // The workbench dock owns the fourth column; the three product columns lay
-  // out within whatever width remains.
+  // The workbench dock owns the last column; the product columns lay out
+  // within whatever width remains. An overlaying or fullscreen right column
+  // reserves no grid track of its own.
+  const rightbarTrackWidth = panels.rightbarFullscreen || !panels.rightbarTrack ? 0 : panels.rightbar
   const columns = computeDesktopColumns(
     viewport - workbenchWidth,
     sidebarPreference,
-    detailsSession === undefined ? 0 : panels.details,
+    detailsSession === undefined ? 0 : rightbarTrackWidth,
     platform === 'darwin' ? MACOS_SIDEBAR_COLLAPSED : SIDEBAR_COLLAPSED,
   )
 
@@ -119,7 +122,8 @@ export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSess
       className="dshDesktopFrame"
       data-desktop-platform={platform}
       data-sidebar-collapsed={collapsed || undefined}
-      style={{ gridTemplateColumns: `${columns.sidebar}px minmax(0, 1fr) ${columns.details}px ${workbenchWidth}px` }}
+      data-rightbar-fullscreen={panels.rightbarFullscreen || undefined}
+      style={{ gridTemplateColumns: `${columns.sidebar}px minmax(0, 1fr) ${rightbarTrackWidth}px ${workbenchWidth}px` }}
     >
       {platform === 'darwin' && <div className="dshDesktopMacCaptionRow" aria-hidden="true" />}
       {platform === 'win32' && <div className="dshDesktopWindowsCaptionRow" aria-hidden="true" />}
@@ -129,8 +133,17 @@ export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSess
           {renderSlot('sidebar', { collapsed, width: columns.sidebar })}
         </div>
       </aside>
-      <main className="dshDesktopConversationSurface">{renderSlot('conversation', {})}</main>
-      <aside className="dshDesktopDetailsSurface">{renderSlot('details', {})}</aside>
+      <main className="dshDesktopConversationSurface">{renderSlot('main', {}, { entryKey: activePanelId ?? 'conversation' })}</main>
+      <aside
+        className={panels.rightbarTrack && !panels.rightbarFullscreen ? 'dshDesktopDetailsSurface' : 'dshDesktopDetailsOverlay'}
+        data-rightbar-overlay={(!panels.rightbarTrack || panels.rightbarFullscreen) || undefined}
+      >
+        {panels.rightbar > 0 && renderSlot('rightbar', {
+          width: panels.rightbarFullscreen ? viewport : rightbarTrackWidth || panels.rightbar,
+          viewportWidth: viewport,
+          canShow: viewport >= 700,
+        })}
+      </aside>
       <WorkbenchDock state={workbench} />
       <div className="dshDesktopOverlay" data-shell-overlay>
         {renderSlot('shell.overlay', {})}
@@ -143,12 +156,12 @@ export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSess
           onResize={(width) => { layout.setSidebar(width) }}
         />
       )}
-      {columns.details > 0 && (
+      {rightbarTrackWidth > 0 && !panels.rightbarFullscreen && (
         <ResizeHandle
           side="details"
           left={viewport - columns.details}
           size={columns.details}
-          onResize={(width) => { layout.setDetails(width) }}
+          onResize={(width) => { layout.setRightbar(width) }}
         />
       )}
     </div>

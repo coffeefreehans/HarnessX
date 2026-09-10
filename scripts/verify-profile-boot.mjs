@@ -29,7 +29,7 @@ const trayItems = []
 
 try {
   writeFileSync(join(home, 'settings.yaml'), 'dsh-desktop:\n  mode: advanced\n')
-  const prepared = prepareDesktopProfile('1', home, 'win32')
+  const prepared = await prepareDesktopProfile('1', home, 'win32')
   const hostServicePluginDir = join(
     prepared.profile.dir,
     'node_modules',
@@ -172,8 +172,13 @@ try {
     throw new Error(`assembled Windows profile selected ${picker.kind} directory picker`)
   }
 
-  const expectedUrl = `http://127.0.0.1:${String(ctx.webServer.port)}/?dsh-desktop-mode=advanced&dsh-desktop-platform=win32`
-  if (mountedSpec?.url !== expectedUrl) {
+  // The desktop markers ride the fragment (the Connection token entry
+  // redirects to a clean '/' query), and the mounted URL additionally carries
+  // the per-launch token.
+  const expectedBase = new URL(`http://127.0.0.1:${String(ctx.webServer.port)}/#dsh-desktop-mode=advanced&dsh-desktop-platform=win32`)
+  const authenticatedUrl = new URL(ctx.connection.authenticatedUrl(expectedBase.href))
+  authenticatedUrl.hash = expectedBase.hash
+  if (mountedSpec?.url !== authenticatedUrl.href) {
     throw new Error(`desktop plugin produced an unexpected renderer URL: ${String(mountedSpec?.url)}`)
   }
   if (mountedSpec?.mode !== 'advanced') {
@@ -201,12 +206,24 @@ try {
   })) {
     throw new Error('assembled desktop profile unexpectedly exposes the profile selector tray item')
   }
-  const response = await fetch(expectedUrl)
+  // Node's fetch carries no cookie jar across the token redirect, so the
+  // exchange is followed manually: the token entry 303s to '/' while minting
+  // the session cookie, then the clean root is fetched with that cookie.
+  const tokenResponse = await fetch(authenticatedUrl.href, { redirect: 'manual' })
+  if (tokenResponse.status !== 303) {
+    throw new Error(`token entry returned HTTP ${String(tokenResponse.status)}`)
+  }
+  const sessionCookie = tokenResponse.headers.getSetCookie().map(cookie => cookie.split(';')[0]).join('; ')
+  const response = await fetch(expectedBase.origin + '/', {
+    headers: sessionCookie.length > 0 ? { cookie: sessionCookie } : {},
+  })
   const html = await response.text()
   if (response.status !== 200) {
     throw new Error(`assembled Web root returned HTTP ${String(response.status)}`)
   }
-  const marketResponse = await fetch(new URL('/api/desktop/market/sources', expectedUrl))
+  const marketResponse = await fetch(new URL('/api/desktop/market/sources', authenticatedUrl), {
+    headers: sessionCookie.length > 0 ? { cookie: sessionCookie } : {},
+  })
   const marketBody = await marketResponse.json()
   if (marketResponse.status !== 200
     || !Array.isArray(marketBody.sources)

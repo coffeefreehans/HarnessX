@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
-import { provideDesktopLayout } from '../src/client/layout-service.ts'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import { DesktopLayoutController, provideDesktopLayout } from '../src/client/layout-service.ts'
 import { parseDesktopClientEnvironment } from '../src/client/environment.ts'
 import {
   computeDesktopColumns, DesktopLayoutState, MACOS_SIDEBAR_COLLAPSED, SIDEBAR_COLLAPSED,
@@ -89,13 +89,13 @@ describe('advanced desktop layout', () => {
       reflect: {
         provide: (name: string, value: unknown) => {
           expect(name).toBe('layout')
-          expect(value).toBeInstanceOf(DesktopLayoutState)
+          expect(value).toBeInstanceOf(DesktopLayoutController)
           return () => { disposed = true }
         },
       },
     } as unknown as ClientContext
 
-    const dispose = provideDesktopLayout(ctx, new DesktopLayoutState())
+    const dispose = provideDesktopLayout(ctx, new DesktopLayoutController(new DesktopLayoutState(), undefined))
     expect(disposed).toBe(false)
     dispose()
     expect(disposed).toBe(true)
@@ -114,12 +114,12 @@ describe('advanced desktop layout', () => {
     const snapshots: object[] = []
     layout.subscribe(() => { snapshots.push(layout.getSnapshot()) })
     layout.toggleSidebar()
-    layout.openDetails()
-    layout.closeDetails()
+    layout.openRightbar(true, false)
+    layout.closeRightbar()
     expect(snapshots).toEqual([
-      { sidebar: 0, details: 0, narrow: false, narrowExpanded: false },
-      { sidebar: 0, details: 360, narrow: false, narrowExpanded: false },
-      { sidebar: 0, details: 0, narrow: false, narrowExpanded: false },
+      { sidebar: 0, rightbar: 0, rightbarTrack: true, rightbarFullscreen: false, narrow: false, narrowExpanded: false },
+      { sidebar: 0, rightbar: 360, rightbarTrack: true, rightbarFullscreen: false, narrow: false, narrowExpanded: false },
+      { sidebar: 0, rightbar: 0, rightbarTrack: true, rightbarFullscreen: false, narrow: false, narrowExpanded: false },
     ])
   })
 

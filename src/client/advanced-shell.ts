@@ -1,10 +1,11 @@
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-theme/client'
 import type {} from './contracts.ts'
 import type { DesktopClientEnvironment } from './environment.ts'
 import { AdvancedFrame, DesktopBrandName } from './AdvancedFrame.tsx'
 import { DesktopLayoutState } from './layout-state.ts'
-import { provideDesktopLayout } from './layout-service.ts'
+import { DesktopLayoutController, provideDesktopLayout } from './layout-service.ts'
+import type { ILayout } from '@deepseek-ai/dsh-client-ui-layout/client'
 import { installAdvancedStyles } from './styles.ts'
 import { DesktopThemePresenter } from './theme-presenter.ts'
 import { getWorkbenchStore } from './workbench-state.ts'
@@ -26,8 +27,11 @@ export function applyAdvancedShell(ctx: ClientContext, environment: DesktopClien
   // client; capture it once the connection service is available.
   const connection = ctx.get('connection') as { api?: WorkbenchWireApi }
   setWorkbenchApiClient(connection?.api)
+  // Main-panel selection keeps flowing through the upstream controller (it
+  // owns the panelInfo root hook); this replacement owns only column geometry.
+  const upstreamLayout = ctx.get('layout') as ILayout | undefined
   ctx.effect(
-    () => provideDesktopLayout(ctx, desktopLayout),
+    () => provideDesktopLayout(ctx, new DesktopLayoutController(desktopLayout, upstreamLayout)),
     'desktop: layout service',
   )
 
@@ -52,12 +56,16 @@ export function applyAdvancedShell(ctx: ClientContext, environment: DesktopClien
     }
   }, 'desktop: theme presenter')
 
+  // Priority -1 shadows the upstream AppFrame registration (same-priority
+  // single-cell registrations throw in the 0.1.5-rc.1 slot core); the desktop
+  // frame hosts the same documented child slots in its own column layout.
   ctx.effect(() => ctx.slots.register({
     name: 'root',
+    priority: -1,
     children: {
       'sidebar': { kind: 'single', scope: 'root' },
-      'conversation': { kind: 'single', scope: 'session-maybe' },
-      'details': { kind: 'single', scope: 'session' },
+      'main': { kind: 'keyed', scope: 'root' },
+      'rightbar': { kind: 'single', scope: 'root' },
       'shell.overlay': { kind: 'list', scope: 'root' },
     },
     inject: () => ({ layout: desktopLayout, platform: environment.platform, workbench }),

@@ -666,7 +666,7 @@ function jobSnapshot(job: MarketJob): MarketJobSnapshot {
 /** Ensure the active desktop profile has a package manifest before pnpm mutates it. */
 function ensureProfilePackage(profileDir: string, profileName: string): void {
   if (existsSync(join(profileDir, 'package.json'))) return
-  initProfile(profileDir, PROFILE_TEMPLATES[profileName] ?? [])
+  initProfile(profileDir, PROFILE_TEMPLATES[profileName]?.bundles ?? [])
 }
 
 /** Keep the profile pnpm workspace installable while denying dependency build scripts. */

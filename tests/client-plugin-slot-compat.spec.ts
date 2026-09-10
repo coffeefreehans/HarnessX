@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { installPluginSlotCompat } from '../src/client/plugin-slot-compat.ts'
 
 interface RecordedCall {
