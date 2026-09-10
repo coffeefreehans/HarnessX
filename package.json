@@ -311,7 +311,7 @@
     "appId": "io.github.coffeefreehans.harnessx",
     "productName": "DeepSeek HarnessX",
     "executableName": "HarnessX",
-    "buildVersion": "0.1.1",
+    "buildVersion": "0.1.9",
     "artifactName": "HarnessX-${version}-${arch}-Portable.${ext}",
     "asar": true,
     "asarUnpack": [
