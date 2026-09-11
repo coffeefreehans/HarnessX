@@ -295,9 +295,9 @@ describe('published package surface', () => {
   it('isolates a failed browser plugin from the core application shell', () => {
     // Upstream folded dsh-client-web into the dsh-web-frontend bundle at rc.2,
     // so the boot-tolerance patch now targets the frontend assets alone.
-    const frontendPatchResolution = 'patch:@deepseek-ai/dsh-web-frontend@npm%3A0.1.5-rc.1#./patches/dsh-web-frontend@0.1.5-rc.1.patch'
+    const frontendPatchResolution = 'patch:@deepseek-ai/dsh-web-frontend@npm%3A0.1.5-rc.2#./patches/dsh-web-frontend@0.1.5-rc.2.patch'
     const lockfile = readFileSync(new URL('yarn.lock', workspaceRoot), 'utf8')
-    const frontendPatch = readFileSync(new URL('patches/dsh-web-frontend@0.1.5-rc.1.patch', workspaceRoot), 'utf8')
+    const frontendPatch = readFileSync(new URL('patches/dsh-web-frontend@0.1.5-rc.2.patch', workspaceRoot), 'utf8')
     const workspaceRequire = createRequire(new URL('package.json', packageRoot))
     const frontendManifest = workspaceRequire.resolve('@deepseek-ai/dsh-web-frontend/package.json')
     const frontendAssetsDir = join(dirname(frontendManifest), 'dist', 'assets')
@@ -308,9 +308,9 @@ describe('published package surface', () => {
 
     expect(workspaceManifest.dependencies).not.toHaveProperty('@deepseek-ai/dsh-client-web')
     expect(workspaceManifest.resolutions).toMatchObject({
-      '@deepseek-ai/dsh-web-frontend@npm:^0.1.5-rc.1': frontendPatchResolution,
+      '@deepseek-ai/dsh-web-frontend@npm:^0.1.5-rc.2': frontendPatchResolution,
     })
-    expect(lockfile).toContain('@deepseek-ai/dsh-web-frontend@patch:@deepseek-ai/dsh-web-frontend@npm%3A0.1.5-rc.1#./patches/dsh-web-frontend@0.1.5-rc.1.patch')
+    expect(lockfile).toContain('@deepseek-ai/dsh-web-frontend@patch:@deepseek-ai/dsh-web-frontend@npm%3A0.1.5-rc.2#./patches/dsh-web-frontend@0.1.5-rc.2.patch')
     expect(frontendPatch).toContain('disabling failed optional plugin')
     expect(frontendAssets).toContain('disabling failed optional plugin')
     // The patch rewrites minified bundle code; a malformed edit turns the whole
@@ -330,9 +330,9 @@ describe('published package surface', () => {
     // The Win32 spawn helpers moved from dsh-sandbox-windows-acl into the
     // shared dsh-win32-process library at 0.1.5-rc.1, so the show-state patch
     // follows the startup-info encoder there.
-    const patchResolution = 'patch:@deepseek-ai/dsh-win32-process@npm%3A0.1.5-rc.1#./patches/dsh-win32-process@0.1.5-rc.1.patch'
+    const patchResolution = 'patch:@deepseek-ai/dsh-win32-process@npm%3A0.1.5-rc.2#./patches/dsh-win32-process@0.1.5-rc.2.patch'
     const lockfile = readFileSync(new URL('yarn.lock', workspaceRoot), 'utf8')
-    const patch = readFileSync(new URL('patches/dsh-win32-process@0.1.5-rc.1.patch', workspaceRoot), 'utf8')
+    const patch = readFileSync(new URL('patches/dsh-win32-process@0.1.5-rc.2.patch', workspaceRoot), 'utf8')
     const workspaceRequire = createRequire(new URL('package.json', packageRoot))
     const win32ProcessManifest = workspaceRequire.resolve('@deepseek-ai/dsh-win32-process/package.json')
     const subprocessLocalManifest = workspaceRequire.resolve('@deepseek-ai/dsh-subprocess-local/package.json')
@@ -341,12 +341,12 @@ describe('published package surface', () => {
     const installedRuntime = readFileSync(join(runtimeLib, 'index.js'), 'utf8')
 
     expect(workspaceManifest.resolutions).toMatchObject({
-      '@deepseek-ai/dsh-win32-process@npm:0.1.5-rc.1': patchResolution,
-      '@deepseek-ai/dsh-win32-process@npm:^0.1.5-rc.1': patchResolution,
+      '@deepseek-ai/dsh-win32-process@npm:0.1.5-rc.2': patchResolution,
+      '@deepseek-ai/dsh-win32-process@npm:^0.1.5-rc.2': patchResolution,
     })
     expect(subprocessLocalRequire.resolve('@deepseek-ai/dsh-win32-process/package.json'))
       .toBe(win32ProcessManifest)
-    expect(lockfile).toContain('@deepseek-ai/dsh-win32-process@patch:@deepseek-ai/dsh-win32-process@npm%3A0.1.5-rc.1#./patches/dsh-win32-process@0.1.5-rc.1.patch')
+    expect(lockfile).toContain('@deepseek-ai/dsh-win32-process@patch:@deepseek-ai/dsh-win32-process@npm%3A0.1.5-rc.2#./patches/dsh-win32-process@0.1.5-rc.2.patch')
     expect(patch.match(/^\+\s*dwFlags: 257,\r?$/gmu)).toHaveLength(2)
     expect(patch.match(/^\+\s*wShowWindow: 0,\r?$/gmu)).toHaveLength(2)
     expect(installedRuntime.match(/dwFlags: 257,/gu)).toHaveLength(2)
