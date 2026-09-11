@@ -281,8 +281,10 @@ export async function prepareDesktopProfile(
         throw new Error(`${BIN_NAME}: advanced desktop mode must use ${packageName} in the ${id} row`)
       }
     }
+    // The kernel's own AppFrame stays active in advanced mode: the desktop
+    // shell only attaches additive surfaces (workbench overlay, brand seat,
+    // settings sections) instead of replacing the layout.
     patches.push(
-      { id: 'ui-layout', disabled: true },
       { id: 'ui-sidebar', disabled: false },
       { id: 'ui-conversation', disabled: false },
     )

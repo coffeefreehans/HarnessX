@@ -246,11 +246,13 @@ try {
   ]) {
     if (!ids.has(id)) throw new Error(`assembled advanced Web graph is missing ${id}`)
   }
-  for (const id of [
-    '@deepseek-ai/dsh-client-ui-layout',
-    '@deepseek-ai/dsh-client-ui-directory-picker-browse',
-  ]) {
-    if (ids.has(id)) throw new Error(`assembled advanced Web graph unexpectedly includes ${id}`)
+  // The kernel AppFrame stays active in advanced mode; only the browse
+  // directory-picker surface is expected to stay out.
+  if (!ids.has('@deepseek-ai/dsh-client-ui-layout')) {
+    throw new Error('assembled advanced Web graph is missing the kernel layout row')
+  }
+  if (ids.has('@deepseek-ai/dsh-client-ui-directory-picker-browse')) {
+    throw new Error('assembled advanced Web graph unexpectedly includes @deepseek-ai/dsh-client-ui-directory-picker-browse')
   }
 } finally {
   await ctx?.fiber.dispose()
