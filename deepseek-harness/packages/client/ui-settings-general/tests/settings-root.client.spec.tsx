@@ -1,21 +1,11 @@
 // @vitest-environment jsdom
-import type { GlobalStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useEffect, useState } from 'react'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import type { SettingsRootComponentProps } from '../src/client/shell-contract.ts'
 import { SettingsRoot } from '../src/client/SettingsRoot.tsx'
-import { en, zh } from '../src/client/locales.ts'
 
-// Every fixture carries the resource hook the resources plugin merges into GlobalStandardProps.
-const useResource = (() => ({ status: 'none' as const, value: undefined, failure: undefined, reload: () => {} })) as GlobalStandardProps['useResource']
-const usePanelInfo: GlobalStandardProps['usePanelInfo'] = selector => selector({ activePanelId: null })
-
-afterEach(() => {
-  cleanup()
-  vi.useRealTimers()
-})
+afterEach(cleanup)
 
 type Row = { id: string; order: number; label: string }
 type Step = { id: string; order: number }
@@ -28,15 +18,8 @@ const SEAT_CONTENT: Record<string, string> = {
   'settings.close': 'Close',
 }
 
-type AttentionSnapshot = Parameters<Parameters<SettingsRootComponentProps['useSessionPendingInteraction']>[0]>[0]
-type ConnectionSnapshot = Parameters<Parameters<SettingsRootComponentProps['useConnectionState']>[0]>[0]
-const noAttention: AttentionSnapshot = new Map()
-const useSessionPendingInteraction: SettingsRootComponentProps['useSessionPendingInteraction'] = selector => selector(noAttention)
-
 function mount({
   wide = true,
-  dictionary = en,
-  connectionState = 'connected',
   onboardingActive = true,
   rows = [
     { id: 'general', order: 0, label: 'General' },
@@ -47,21 +30,11 @@ function mount({
     { id: 'welcome', order: -100 },
     { id: 'credential', order: 0 },
   ],
-}: {
-  wide?: boolean
-  dictionary?: typeof en | typeof zh
-  connectionState?: ConnectionSnapshot
-  onboardingActive?: boolean
-  rows?: Row[]
-  steps?: Step[]
-} = {}) {
+}: { wide?: boolean; onboardingActive?: boolean; rows?: Row[]; steps?: Step[] } = {}) {
   // Mutable row source standing in for the bound useSections hook; bump()
   // plays a ledger change through the same observable contract.
   let current = rows
-  let currentConnectionState = connectionState
   const listeners = new Set<() => void>()
-  const connectionListeners = new Set<() => void>()
-  const reconnect = vi.fn()
   const renderSlot = vi.fn(
     ((key: string, _owner: unknown, opts?: { only?: string }) => {
       if (key === 'settings.section') return <div data-testid={`section-${opts?.only ?? 'all'}`} />
@@ -78,21 +51,8 @@ function mount({
   const unusedHook = (() => { throw new Error('unused by SettingsRoot') }) as never
   const props: SettingsRootComponentProps = {
     useSessions,
-    useSessionPendingInteraction,
-    usePanelInfo, useResource,
     useWorkspaces: unusedHook,
     wide,
-    reconnect,
-    t: makeTranslate(dictionary),
-    useConnectionState: (select) => {
-      const [, force] = useState(0)
-      useEffect(() => {
-        const listener = () => { force(n => n + 1) }
-        connectionListeners.add(listener)
-        return () => { connectionListeners.delete(listener) }
-      }, [])
-      return select(currentConnectionState)
-    },
     useOnboardingSteps: select => select(steps),
     useSections: (select) => {
       const [, force] = useState(0)
@@ -112,70 +72,28 @@ function mount({
       for (const fn of [...listeners]) fn()
     })
   }
-  const setConnectionState = (next: typeof currentConnectionState) => {
-    act(() => {
-      currentConnectionState = next
-      for (const fn of [...connectionListeners]) fn()
-    })
-  }
-  return { view, renderSlot, bump, listeners, reconnect, setConnectionState }
+  return { view, renderSlot, bump, listeners }
 }
 
 function openPanel() {
-  const trigger = screen.getByRole('button', { name: 'Settings' })
-  trigger.focus()
-  fireEvent.click(trigger)
-  return trigger
+  fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
 }
 
 describe('SettingsRoot trigger', () => {
-  it.each([
-    { column: 'expanded English', wide: true, dictionary: en, name: 'Settings' },
-    { column: 'collapsed English', wide: false, dictionary: en, name: 'Settings' },
-    { column: 'expanded Chinese', wide: true, dictionary: zh, name: '设置' },
-    { column: 'collapsed Chinese', wide: false, dictionary: zh, name: '设置' },
-  ])('uses the locale name and accepts keyboard-style activation for the $column trigger', ({
-    wide, dictionary, name,
-  }) => {
-    const { renderSlot } = mount({ wide, dictionary })
-    const trigger = screen.getByRole('button', { name })
-    expect(trigger.getAttribute('aria-label')).toBe(name)
-    expect(renderSlot).toHaveBeenCalledWith('settings.trigger', { wide })
+  it('renders the trigger seat content as the accessible name (no aria-label of its own)', () => {
+    const { renderSlot } = mount()
+    const trigger = screen.getByRole('button', { name: 'Settings' })
+    expect(trigger.hasAttribute('aria-label')).toBe(false)
+    expect(renderSlot).toHaveBeenCalledWith('settings.trigger', { wide: true })
     expect(trigger.getAttribute('aria-expanded')).toBe('false')
-    trigger.focus()
-    fireEvent.click(trigger, { detail: 0 })
+    fireEvent.click(trigger)
     expect(screen.getByRole('dialog')).toBeTruthy()
-    expect(screen.getByRole('button', { name, expanded: true })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Settings', expanded: true })).toBeTruthy()
   })
 
-  it('shows outage, retry progress, and a two-second recovery confirmation', () => {
-    vi.useFakeTimers()
-    const mounted = mount()
-    expect(screen.queryByRole('button', { name: 'Disconnected, reconnect now' })).toBeNull()
-
-    mounted.setConnectionState('disconnected')
-    const indicator = screen.getByRole('button', { name: 'Disconnected, reconnect now' })
-    expect(indicator.textContent).toContain('Disconnected')
-    expect(indicator.hasAttribute('title')).toBe(false)
-    expect(indicator.querySelector('svg')).toBeTruthy()
-    fireEvent.click(indicator)
-    expect(mounted.reconnect).toHaveBeenCalledOnce()
-
-    mounted.setConnectionState('connecting')
-    expect(screen.getByRole('button', { name: 'Reconnecting automatically, reconnect now' }).textContent)
-      .toContain('Reconnecting...')
-
-    mounted.setConnectionState('connected')
-    expect(screen.getByRole('status', { name: 'Connected' })).toBeTruthy()
-    act(() => { vi.advanceTimersByTime(1_999) })
-    expect(screen.getByRole('status', { name: 'Connected' })).toBeTruthy()
-    act(() => { vi.advanceTimersByTime(1) })
-    expect(screen.queryByRole('status')).toBeNull()
-  })
-
-  it('keeps the reconnect indicator out of the collapsed rail', () => {
-    mount({ wide: false, connectionState: 'disconnected' })
-    expect(screen.queryByRole('button', { name: 'Disconnected, reconnect now' })).toBeNull()
+  it('hands the rail state to the trigger seat', () => {
+    const { renderSlot } = mount({ wide: false })
+    expect(renderSlot).toHaveBeenCalledWith('settings.trigger', { wide: false })
   })
 })
 
@@ -208,29 +126,26 @@ describe('SettingsPanel chrome seats', () => {
 })
 
 describe('SettingsPanel close paths', () => {
-  it('closes via the header button and restores trigger focus', async () => {
+  it('closes via the header button', () => {
     mount()
-    const trigger = openPanel()
+    openPanel()
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     expect(screen.queryByRole('dialog')).toBeNull()
-    await vi.waitFor(() => { expect(document.activeElement).toBe(trigger) })
   })
 
-  it('closes via a mask click and restores trigger focus', async () => {
+  it('closes via a mask click', () => {
     mount()
-    const trigger = openPanel()
+    openPanel()
     const dialog = screen.getByRole('dialog')
     fireEvent.click(dialog.parentElement!.firstElementChild!)
     expect(screen.queryByRole('dialog')).toBeNull()
-    await vi.waitFor(() => { expect(document.activeElement).toBe(trigger) })
   })
 
-  it('closes via document-level Escape, restores trigger focus, and unhooks the listener', async () => {
+  it('closes via document-level Escape and unhooks the listener with the panel', () => {
     mount()
-    const trigger = openPanel()
+    openPanel()
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).toBeNull()
-    await vi.waitFor(() => { expect(document.activeElement).toBe(trigger) })
     // Ignored while closed (listener removed with the panel) and non-Escape
     // keys are ignored while open.
     fireEvent.keyDown(document, { key: 'Escape' })

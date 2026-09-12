@@ -1,17 +1,10 @@
-/** Controller and UI-domain fixture shapes for the client test runtime. */
+/** Session/workspace fixture shapes and snapshot defaults for the test runtime. */
 import type {
-  ISession, SessionEventLikeEntry, SessionSnapshot, SessionSummary,
-} from '@deepseek-ai/dsh-api-session-controller/client'
-import type { WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controller/client'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+  ConversationSnapshot, ISession, SessionId, SessionSummary, WorkspaceListState,
+} from '@deepseek-ai/dsh-client-runtime/client'
 import {
-  EMPTY_CONVERSATION_SNAPSHOT,
-  type ConversationSnapshot,
-} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import {
-  EMPTY_CHAT_SNAPSHOT,
-  type ChatSnapshot,
-} from '@deepseek-ai/dsh-client-ui-chat/client'
+  EMPTY_CHAT_SNAPSHOT, EMPTY_CONVERSATION_VIEWS,
+} from '@deepseek-ai/dsh-client-runtime/client'
 
 /**
  * Fixture overrides for the session behavior face: any subset of the
@@ -31,12 +24,6 @@ export type SessionBehaviorOverrides = Partial<ISession> & Record<string, unknow
  */
 export type Stabilizer = (fn: () => void | Promise<void>) => Promise<void>
 
-/** Mutable top-level snapshot fields accepted by fixture update callbacks. */
-export type FixtureSnapshot<T> = { -readonly [Key in keyof T]: T[Key] }
-
-/** Writable test representation of the immutable Session Controller snapshot. */
-export type SessionFixtureSnapshot = FixtureSnapshot<SessionSnapshot>
-
 /**
  * Session fixture accepted by {@link TestSessions.add}: identity plus optional
  * snapshot/list-row overrides and the session behavior face the feature under
@@ -45,30 +32,34 @@ export type SessionFixtureSnapshot = FixtureSnapshot<SessionSnapshot>
  */
 export interface SessionFixture {
   id: string
-  /** Overrides merged over {@link sessionSnapshot}; Conversation data arrives through the event feed. */
-  snapshot?: Partial<Omit<SessionSnapshot, 'sessionId'>>
+  /** Overrides merged over {@link conversationSnapshot} (sessionId comes from `id`). */
+  snapshot?: Partial<Omit<ConversationSnapshot, 'sessionId'>>
   /** List-row overrides merged over the defaults derived from `id`. */
   summary?: Partial<Omit<SessionSummary, 'id'>>
   /** Session behavior face: exactly the methods the feature under test calls (ISession subset + extras). */
   session?: SessionBehaviorOverrides
-  /** Initial contiguous event window consumed by Conversation assembly. */
-  events?: readonly SessionEventLikeEntry[]
-  /** Whether the initial event window has an older page. */
-  hasMore?: boolean
 }
 
 /**
- * A complete quiescent Session Controller snapshot.
+ * A complete quiescent conversation snapshot (open window, no traffic).
  * @param sessionId - owning session id.
  * @returns the snapshot; spread fixture overrides on top.
  */
-export function sessionSnapshot(sessionId: SessionId): SessionSnapshot {
+export function conversationSnapshot(sessionId: SessionId): ConversationSnapshot {
   return {
     sessionId,
+    views: EMPTY_CONVERSATION_VIEWS,
+    chat: EMPTY_CHAT_SNAPSHOT,
+    nodes: [],
+    turnTimings: new Map(),
+    turnEnds: new Map(),
+    partial: null,
+    runningCalls: [],
+    pending: [],
     queue: [],
-    pendingSubmissions: [],
     running: false,
     subagent: null,
+    composerPhase: 'active',
     removed: false,
     openState: 'open',
     openError: null,
@@ -77,41 +68,22 @@ export function sessionSnapshot(sessionId: SessionId): SessionSnapshot {
     promptError: null,
     blank: false,
     lastAgentError: null,
-    promptAttempted: false,
-    awaitingFirstTurn: false,
   }
 }
 
 /**
- * A target-neutral Conversation snapshot.
- * @param overrides - target roster or activity overrides.
- * @returns an immutable fixture value.
+ * A ready workspace list with no workspaces (the shape WorkspaceRuntime
+ * projects after both baselines land).
+ * @returns the initial state of the test workspaces store.
  */
-export function conversationSnapshot(
-  overrides: Partial<ConversationSnapshot> = {},
-): ConversationSnapshot {
-  return { ...EMPTY_CONVERSATION_SNAPSHOT, ...overrides }
-}
-
-/**
- * A Chat target snapshot.
- * @param overrides - Chat target overrides.
- * @returns an immutable fixture value.
- */
-export function chatSnapshot(overrides: Partial<ChatSnapshot> = {}): ChatSnapshot {
-  return { ...EMPTY_CHAT_SNAPSHOT, ...overrides }
-}
-
-/**
- * A ready Workspace Controller snapshot with no Workspace rows.
- * @returns the initial state of the test Workspace source.
- */
-export function workspaceSnapshot(): WorkspaceSnapshot {
+export function workspaceListState(): WorkspaceListState {
   return {
     items: [],
     archivedSessionIds: [],
     state: 'idle',
     phase: 'ready',
     error: null,
+    baselinesReady: true,
+    recentWorkspaceId: undefined,
   }
 }

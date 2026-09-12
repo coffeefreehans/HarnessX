@@ -39,15 +39,7 @@ def _host_platform_tag() -> str:
     machine = platform.machine().lower()
     arch = "arm64" if machine in {"arm64", "aarch64"} else "x64" if machine in {"x86_64", "amd64"} else machine
     system = platform.system().lower()
-    key = (
-        f"macos-{arch}"
-        if system == "darwin"
-        else f"linux-{arch}"
-        if system == "linux"
-        else f"win-{arch}"
-        if system == "windows"
-        else system
-    )
+    key = f"macos-{arch}" if system == "darwin" else f"linux-{arch}" if system == "linux" else system
     try:
         return _PLATFORMS[key][0]
     except KeyError as exc:
@@ -74,24 +66,17 @@ class RuntimeBuildHook(BuildHookInterface):
             )
         expected_executable = matches[0][1]
         runtime_dir = Path(self.root) / "src" / "deepseek_harness_runtime" / "runtime"
-        runtime_files = sorted(
-            runtime_dir.glob("deepseek-harness-sdk-runtime-*") if runtime_dir.is_dir() else []
-        )
-        expected_files = (
-            [expected_executable, f"{expected_executable.removesuffix('.exe')}-rg.exe"]
-            if expected_executable.endswith(".exe")
-            else [expected_executable, f"{expected_executable}-rg"]
-        )
+        runtime_files = sorted(runtime_dir.glob("dsh-jsonrpc-agent-pkg-*") if runtime_dir.is_dir() else [])
+        expected_files = [expected_executable, f"{expected_executable}-rg"]
         if "-macos-" in expected_executable:
             expected_files.append(f"{expected_executable}-spawn-helper")
-        expected_files.sort()
         found_files = [path.name for path in runtime_files]
         if found_files != expected_files:
             raise RuntimeError(
                 f"runtime wheel {platform_tag} payload must be {expected_files}; found {found_files}"
             )
         for executable in runtime_files:
-            if platform_tag != "win_amd64" and executable.stat().st_mode & stat.S_IXUSR == 0:
+            if executable.stat().st_mode & stat.S_IXUSR == 0:
                 raise RuntimeError(f"runtime executable is not executable: {executable}")
         build_data["pure_python"] = False
         build_data["infer_tag"] = False

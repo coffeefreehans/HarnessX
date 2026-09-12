@@ -13,16 +13,13 @@
     "src/client/index.ts",
     "src/client/random-uuid.ts",
     "src/client/rpc.ts",
+    "src/client/web-api-client.ts",
     "src/loopback-hostname.ts",
-    "src/recovery-config.ts",
     "src/rpc.ts"
   ],
   "references": [
     {
       "path": "../../../vendor/cordis"
-    },
-    {
-      "path": "../../../vendor/schemastery"
     },
     {
       "path": "../../attachment/attachment"
@@ -31,25 +28,19 @@
       "path": "../../core/session"
     },
     {
-      "path": "../../todo/tool-todo"
-    },
-    {
       "path": "../../core/tools"
     },
     {
-      "path": "../../credentials/credentials"
-    },
-    {
-      "path": "../../settings/settings"
-    },
-    {
-      "path": "../../host/directory-picker"
+      "path": "../../host/apiproxy"
     },
     {
       "path": "../../interaction/commands"
     },
     {
       "path": "../../llm/llm"
+    },
+    {
+      "path": "../../runtime-diagnostics/invariants"
     },
     {
       "path": "../../util/brand"

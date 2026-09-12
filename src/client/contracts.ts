@@ -1,19 +1,37 @@
-/**
- * Client type surface for the desktop bundle.
- *
- * The 0.1.5-rc.1 family removed the `dsh-client-runtime/client` barrel that
- * used to pull every browser-side declaration merge into one program. The
- * Cordis Context members, slot keys, and standard props the desktop reads are
- * now merged by their owning packages, so importing their `/client` faces
- * here restores that surface for every desktop client module (each imports
- * this file for its side-effect declarations).
- */
-import type {} from '@deepseek-ai/dsh-api-session-controller/client'
-import type {} from '@deepseek-ai/dsh-client-locale/client'
-import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
-import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import type {} from '@deepseek-ai/dsh-client-ui-session/client'
-import type {} from '@deepseek-ai/dsh-client-ui-theme/client'
-import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
-import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
+/** Sidebar geometry passed by the desktop root slot. */
+export interface DesktopSidebarOwnerProps {
+  /** Whether the sidebar is showing its compact rail. */
+  collapsed: boolean
+  /** Current rendered sidebar width. */
+  width: number
+}
+
+/** Public panel transitions consumed by conversation and sidebar plugins. */
+export interface DesktopLayoutService {
+  /** Toggle the sidebar between wide and compact presentation. */
+  toggleSidebar(): void
+  /** Open the current session's details panel. */
+  openDetails(): void
+  /** Close the details panel. */
+  closeDetails(): void
+}
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** Desktop-owned layout service in advanced mode. */
+    layout: DesktopLayoutService
+  }
+}
+
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface SlotMap {
+    /** Upstream sidebar hosted by the desktop advanced frame. */
+    'sidebar': { kind: 'single'; scope: 'root'; owner: DesktopSidebarOwnerProps }
+    /** Unchanged upstream conversation surface. */
+    'conversation': { kind: 'single'; scope: 'session-maybe'; owner: Record<never, never> }
+    /** Unchanged upstream details surface. */
+    'details': { kind: 'single'; scope: 'session'; owner: Record<never, never> }
+    /** Frame-wide additive overlays. */
+    'shell.overlay': { kind: 'list'; scope: 'root' }
+  }
+}

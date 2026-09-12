@@ -3,7 +3,7 @@
  * releases a consumer whose config reads `ctx.webStartup` directly.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -23,12 +23,8 @@ interface Observed {
 
 const disposers: (() => Promise<void>)[] = []
 
-/** Fixture tree roots, removed after their booted tree has been disposed. */
-const tempDirs: string[] = []
-
 afterEach(async () => {
   for (const dispose of disposers.splice(0)) await dispose()
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
   internals.stdout = process.stdout
   internals.stderr = process.stderr
 })
@@ -43,7 +39,6 @@ async function bootProvider(args: string[]): Promise<{
   observed: Observed
 }> {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-web-startup-'))
-  tempDirs.push(dir)
   const observed: Observed = { exits: [], out: '' }
   writeFileSync(join(dir, 'reader.mjs'), `
 export function apply(_ctx, config) { globalThis.__webStartupObserved.readerConfig = config }

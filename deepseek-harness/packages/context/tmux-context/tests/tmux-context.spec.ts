@@ -1,14 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import AgentRegistry, { agentEvents, type Agent } from '@deepseek-ai/dsh-agent'
-import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
+import AgentRegistry, { agentEvents, Inbox, type Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { ShellExecutor } from '@deepseek-ai/dsh-shell'
 import type { ShellExecRequest, ShellExecSpec, ShellProcess, ShellRunResult } from '@deepseek-ai/dsh-shell'
 import * as tmuxContext from '@deepseek-ai/dsh-tmux-context'
 import type { Config } from '@deepseek-ai/dsh-tmux-context'
-import { unsupportedInbox } from '@deepseek-ai/dsh-agent-loop-testkit'
 
 const SIGNAL = new AbortController().signal
 
@@ -84,7 +82,6 @@ async function mount(
 ): Promise<{ ctx: Context; bash: FakeBash | undefined }> {
   const ctx = new Context()
   await ctx.plugin(AgentRegistry)
-  await ctx.plugin(SessionProjectionRegistry)
   let bash: FakeBash | undefined
   if (withBash) {
     await ctx.plugin(FakeBash)
@@ -95,11 +92,11 @@ async function mount(
 }
 
 function sessionAgent(session: Session, id = 'agent'): Agent {
-  const agent: Agent = {
+  return {
     id: SessionId(id),
     options: {},
     session,
-    inbox: unsupportedInbox(),
+    inbox: new Inbox(session, { inserted: () => {}, discarded: () => {}, claimed: () => {} }),
     status: 'running',
     ctx: new Context(),
     send: () => {},
@@ -110,7 +107,6 @@ function sessionAgent(session: Session, id = 'agent'): Agent {
     runMaintenance: task => task(new AbortController().signal),
     whenIdle: () => Promise.resolve(),
   }
-  return agent
 }
 
 function openMessageTurn(session: Session, turn: number): void {
@@ -123,7 +119,7 @@ function openMessageTurn(session: Session, turn: number): void {
 
 function contextTexts(session: Session): string[] {
   const texts: string[] = []
-  for (const event of session.snapshotEvents()) {
+  for (const event of session.events) {
     if (event.type === 'user/message'
       && event.data.source.kind === 'plugin'
       && event.data.source.plugin === 'tmux-context') {
@@ -171,7 +167,7 @@ describe('tmux-context injection', () => {
       + 'window active=1, pane active=0, '
       + 'layout d517,270x71,0,0{135x71,0,0,87,134x71,136,0[134x35,136,0,90,134x35,136,36,93]}',
     ])
-    const event = session.snapshotEvents().at(-1)
+    const event = session.events.at(-1)
     if (event?.type !== 'user/message') throw new Error('missing tmux context')
     // `snapshot` form: one named contribution carrying exactly the reading the
     // model saw, so a consumer attributes it without re-splitting prose.

@@ -2,8 +2,7 @@
  * Doc-sync gate for the canonical package-README limitations section. It scans
  * package manifests, rejects missing or variant sections, and requires one
  * top-level bullet; audited packages in {@link NO_LIMITATIONS} must omit it.
- * The archived [limitations gate record](../.agents/notes/archived/process/2026-07-10-readme-known-limitations-gate.md)
- * documents the original decision.
+ * See the [limitations Agent Note](../.agents/notes/implemented/process/2026-07-10-readme-known-limitations-gate.md).
  */
 
 import { existsSync, globSync, readFileSync } from 'node:fs'
@@ -17,7 +16,7 @@ const CANONICAL = '## Known Limitations and Deferred Work'
 
 /** Packages audited as having no limitations section, keyed by repo-relative directory. */
 const NO_LIMITATIONS: Readonly<Record<string, string>> = {
-  'packages/util/brand': 'Stateless nominal-string and canonical-key helpers have no deferred work.',
+  'packages/util/brand': 'Type-only nominal-branding primitive with no runtime behavior or deferred work.',
 }
 
 /** A heading that reads as a limitations section — canonical or drifted. */

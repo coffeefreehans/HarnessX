@@ -1,18 +1,17 @@
 /**
- * JSON storage backend: one human-readable document per unit under a
- * configured root — a whole-unit file (`single` layout) or one document per
- * record (`per-record` layout), published by atomic rewrite. Registers as
- * backend `json` on the storage hub.
+ * JSON storage backend: one human-readable file per unit under a configured
+ * root, published by atomic whole-file rewrite. Registers as backend `json`
+ * on the storage hub.
  * @module @deepseek-ai/dsh-storage-json
  */
 
 import { mkdir } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { StorageError, UNIT_NAME_RE, storageBackendServiceKey } from '@deepseek-ai/dsh-storage'
 import type { KvFacet, KvUnit, KvUnitDescriptor, StorageBackend } from '@deepseek-ai/dsh-storage'
-import { openSingleUnit } from './single-unit.ts'
-import { openPerRecordUnit } from './per-record-unit.ts'
+import { openJsonUnit } from './unit.ts'
 
 /** Cordis plugin name. */
 export const name = 'storage-json'
@@ -26,7 +25,7 @@ export const inject = ['storage']
  * location explicitly.
  */
 export interface Config {
-  /** Directory holding one `<unit>.json` file (or `<unit>/` tree) per unit. */
+  /** Directory holding one `<unit>.json` file per unit. */
   root: string
 }
 
@@ -63,12 +62,8 @@ export class JsonStorageBackend implements StorageBackend {
 
   private async openUnit(descriptor: KvUnitDescriptor): Promise<KvUnit> {
     await mkdir(this.root, { recursive: true, mode: 0o700 })
-    // The two layouts differ in medium shape only; each opener owns its own
-    // path convention under the shared root.
-    const onClose = () => this.open.delete(descriptor.name)
-    const unit = descriptor.layout === 'per-record'
-      ? await openPerRecordUnit(descriptor, this.root, onClose)
-      : await openSingleUnit(descriptor, this.root, onClose)
+    const path = join(this.root, `${descriptor.name}.json`)
+    const unit = await openJsonUnit(descriptor, path, () => this.open.delete(descriptor.name))
     if (this.closed) {
       // The backend closed while this open was in flight: do not hand out a
       // live unit past close().

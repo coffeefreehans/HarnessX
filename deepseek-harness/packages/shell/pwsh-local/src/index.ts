@@ -20,7 +20,7 @@ import z from '@deepseek-ai/schemastery'
 import { SHELL_SETTINGS_NAMESPACE, ShellExecutor } from '@deepseek-ai/dsh-shell'
 import type { ShellExecRequest, ShellExecSpec, ShellProcess, ShellProcessRead, ShellRunResult, CollectedOutput } from '@deepseek-ai/dsh-shell'
 import type { SubprocessCollect, SubprocessHandle, SubprocessOutputReader, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
-import type {} from '@deepseek-ai/dsh-settings'
+import { installSettingsSection } from '@deepseek-ai/dsh-settings'
 import { clampTimeout, deadline, MAX_TIMER_DELAY_MS, timeoutOf } from '@deepseek-ai/dsh-timeout'
 /* jscpd:ignore-end */
 import { resolvePwshPath } from './resolve.ts'
@@ -122,7 +122,7 @@ export function assertServiceablePwshConfig(config: Config): void {
 
 /**
  * Local PowerShell executor over `ctx.subprocess`. Bounded output, spill
- * files, and managed-range termination are the subprocess service's mechanics;
+ * files, and process-tree termination are the subprocess service's mechanics;
  * this executor supplies their configured budgets per spawn.
  */
 export class PwshLocalExecutor extends ShellExecutor {
@@ -165,21 +165,19 @@ export class PwshLocalExecutor extends ShellExecutor {
     this.source = () => entry
     this.declaredPwshPath = entry.pwshPath
     this.resolvedPwshPath = resolvePwshPath(entry.pwshPath)
-    ctx.inject(['settings'], (settingsCtx) => {
-      settingsCtx.settings.installSection(ctx, SHELL_SETTINGS_NAMESPACE, PwshLocalExecutor.Config, entry, {
-        validate: assertServiceablePwshConfig,
-        setSource: (current) => {
-          this.source = current as () => ResolvedConfig
-        },
-        // Probing the filesystem is the one fact derived from the source: every
-        // other field is read through the getter at each command.
-        onChange: () => {
-          const declared = this.source().pwshPath
-          if (declared === this.declaredPwshPath) return
-          this.declaredPwshPath = declared
-          this.resolvedPwshPath = resolvePwshPath(declared)
-        },
-      })
+    installSettingsSection(ctx, SHELL_SETTINGS_NAMESPACE, PwshLocalExecutor.Config, entry, {
+      validate: assertServiceablePwshConfig,
+      setSource: (current) => {
+        this.source = current as () => ResolvedConfig
+      },
+      // Probing the filesystem is the one fact derived from the source: every
+      // other field is read through the getter at each command.
+      onChange: () => {
+        const declared = this.source().pwshPath
+        if (declared === this.declaredPwshPath) return
+        this.declaredPwshPath = declared
+        this.resolvedPwshPath = resolvePwshPath(declared)
+      },
     })
   }
 
@@ -288,12 +286,12 @@ export class PwshLocalExecutor extends ShellExecutor {
     const running = this.ctx.subprocess.spawn(this.spawnSpec(spec, this.config.maxOutputBytes, spec.signal, argv))
     const collected = PwshLocalExecutor.collected(running)
 
-    // A provider rejection has no direct outcome to display; its stage is not
-    // public, so a neutral note is delivered once through the read path.
-    let providerFailureNote: string | undefined
-    const consumeProviderFailure = (): string => {
-      const note = providerFailureNote ?? ''
-      providerFailureNote = undefined
+    // A spawn failure produces no process output, so the subprocess service has nothing
+    // to buffer; the note is delivered exactly once through the read path.
+    let spawnFailureNote: string | undefined
+    const consumeSpawnFailure = (): string => {
+      const note = spawnFailureNote ?? ''
+      spawnFailureNote = undefined
       return note
     }
 
@@ -312,16 +310,10 @@ export class PwshLocalExecutor extends ShellExecutor {
         proc.signal = outcome.signal
         this.onProcessDone(proc, collected.stderr.readFrom(0).text, false)
       }, (error: unknown) => {
-        // Background provider failures settle as killed and surface through the read path.
+        // Background spawn failures settle as killed and surface through the read path.
         proc.status = 'killed'
-        let detail = 'unprintable provider failure'
-        try {
-          detail = String(error)
-        } catch {
-          // Provider-owned rejection values cannot make ShellProcess.done reject.
-        }
-        providerFailureNote = `subprocess failed before reporting an outcome: ${detail}`
-        this.onProcessDone(proc, providerFailureNote, true, error)
+        spawnFailureNote = `spawn failed: ${String(error)}`
+        this.onProcessDone(proc, spawnFailureNote, true, error)
       }),
       readOutput: (): ShellProcessRead => {
         const out = collected.stdout.readFrom(stdoutOffset)
@@ -329,10 +321,9 @@ export class PwshLocalExecutor extends ShellExecutor {
         stdoutOffset = out.nextOffset
         stderrOffset = err.nextOffset
 
-        const providerFailure = consumeProviderFailure()
-        const failureSeparator = err.text.length > 0 && !err.text.endsWith('\n') ? '\n' : ''
-        const errText = err.text
-          + (providerFailure.length > 0 ? `${failureSeparator}${providerFailure}` : '')
+        // A failed spawn never produced process output, so the note and real
+        // stderr text are mutually exclusive.
+        const errText = err.text.length > 0 ? err.text : consumeSpawnFailure()
         // Single newline between sections: stdout chunks usually end with one
         // already; add it only when missing.
         const separator = out.text.length > 0 && !out.text.endsWith('\n') ? '\n' : ''
@@ -362,10 +353,10 @@ export class PwshLocalExecutor extends ShellExecutor {
    * pwsh-confining consumer is `@deepseek-ai/dsh-pwsh-sandbox`.
    * @param _proc - the settled process handle.
    * @param _stderr - the process's retained stderr tail used by subclasses for settlement classification.
-   * @param _providerRejected - whether the subprocess promise rejected without a direct outcome.
-   * @param _providerError - the provider rejection reason, which may itself be undefined.
+   * @param _spawnFailed - whether the spawn rejected before any process existed.
+   * @param _spawnError - the spawn rejection, when `_spawnFailed`.
    */
-  protected onProcessDone(_proc: ShellProcess, _stderr: string, _providerRejected: boolean, _providerError?: unknown): void {}
+  protected onProcessDone(_proc: ShellProcess, _stderr: string, _spawnFailed: boolean, _spawnError?: unknown): void {}
 }
 /* jscpd:ignore-end */
 

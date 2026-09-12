@@ -1,9 +1,7 @@
 /** Shared trajectory record data and formatting contracts. */
 
 import type { HTMLAttributes } from 'react'
-import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
-import type { ConversationPromptSnapshot } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { TrajectoryTranslate } from './locales.ts'
+import type { ConversationPromptSnapshot } from '@deepseek-ai/dsh-client-runtime/client'
 
 /** Closed set of trajectory record kinds. */
 export type TrajectoryCellKind =
@@ -29,7 +27,8 @@ export interface AssistantMetricDetail {
 export interface TrajectorySourceBlock {
   type: string
   content: string
-  attachment?: ImageAttachmentRef
+  imageSrc?: string
+  imageAlt?: string
   callId?: string
   toolName?: string
 }
@@ -58,8 +57,6 @@ export interface TrajectoryCellProps extends HTMLAttributes<HTMLDivElement> {
   inputDetail?: string
   /** Complete system-prompt/tool-catalog state introduced by a SYSTEM record. */
   promptDetail?: ConversationPromptSnapshot
-  /** Known prompt text without a loaded request config or tool catalog. */
-  systemPromptDetail?: string
   /** System-prompt/tool-catalog state replaced by a SYSTEM update. */
   previousPromptDetail?: ConversationPromptSnapshot
   /** Full assistant/tool result content for the details panel. */
@@ -115,29 +112,19 @@ export function trajectoryRecordId(cell: TrajectoryCellProps): string {
 /**
  * Format a duration in milliseconds with thousands separators.
  * @param milliseconds - Duration in milliseconds, or `null` when absent.
- * @param t - Trajectory locale translator.
  * @returns `—` when unknown, otherwise an integer-millisecond label.
  */
-export function formatDurationMillis(
-  milliseconds: number | null,
-  t: TrajectoryTranslate,
-): string {
+export function formatDurationMillis(milliseconds: number | null): string {
   if (milliseconds === null || !Number.isFinite(milliseconds)) return '—'
   const integer = String(Math.round(milliseconds))
-  return t('unit.milliseconds', {
-    value: integer.replace(/\B(?=(\d{3})+(?!\d))/g, ','),
-  })
+  return `${integer.replace(/\B(?=(\d{3})+(?!\d))/g, ',')} ms`
 }
 
 /**
  * Format an elapsed duration given in seconds as a millisecond label.
  * @param seconds - Duration seconds, or `null` when absent.
- * @param t - Trajectory locale translator.
  * @returns `—` when unknown, otherwise an integer-millisecond label.
  */
-export function formatElapsedSeconds(
-  seconds: number | null,
-  t: TrajectoryTranslate,
-): string {
-  return formatDurationMillis(seconds === null ? null : seconds * 1000, t)
+export function formatElapsedSeconds(seconds: number | null): string {
+  return formatDurationMillis(seconds === null ? null : seconds * 1000)
 }

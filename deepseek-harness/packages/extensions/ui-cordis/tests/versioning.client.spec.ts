@@ -40,6 +40,7 @@ describe('versioned Cordis card models', () => {
       turn: 1,
       step: 1,
       time: 1,
+      callView: null,
       subCalls: [],
     })
 
@@ -63,6 +64,8 @@ describe('versioned Cordis card models', () => {
       content: [{ type: 'text', text: 'running' }],
       isError: false,
       meta: { pluginId: PLUGIN, packageId: PACKAGE, pluginRunId: RUN },
+      callView: null,
+      resultView: null,
       subCalls: [],
     })
 
@@ -84,6 +87,7 @@ describe('versioned Cordis card models', () => {
       turn: 1,
       step: 1,
       time: 1,
+      callView: null,
       subCalls: [],
     })
 

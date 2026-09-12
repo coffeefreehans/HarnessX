@@ -47,7 +47,9 @@ interface FakeHostOptions {
 /**
  * Drive runWorkerSession IN-PROCESS over a MessageChannel: this is where the
  * worker-side files earn their coverage — code inside a real Worker is
- * invisible to main-process coverage.
+ * invisible to main-process coverage. The fake host mirrors the real host's
+ * protocol discipline (one started/start-error per start; settled/disposed
+ * follow).
  */
 function fakeHost(options?: FakeHostOptions): FakeHost {
   const channel = new MessageChannel()
@@ -236,6 +238,7 @@ describe('runWorkerSession over an in-process MessageChannel', () => {
     const callId = host.ofType(WorkerToHostType.ChildStart)[0]!.callId
     host.send({ type: HostToWorkerType.ChildStarted, callId, childId: 'child-0' })
     host.send({ type: HostToWorkerType.Cancel, reason: 'stop everything' })
+    // The real host settles the aborted child; mirror it.
     host.send({ type: HostToWorkerType.ChildSettled, callId, result: { output: [], stopReason: 'aborted' } })
     const result = await host.result()
     expect(result.stopReason).toBe('cancelled')

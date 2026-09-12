@@ -9,7 +9,7 @@
  * shown" instead of blocking the entire client boot.
  */
 
-import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 
 const COMPAT_SLOT_NAME = 'settings.plugin.item'
 const MAX_KEY_ATTEMPTS = 8

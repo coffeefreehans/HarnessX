@@ -1,16 +1,14 @@
 /** Agent Teams service façade over roster, mailbox, task, and runtime lifecycle owners. */
 
-import { Context } from '@deepseek-ai/cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-session-persistence'
-import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { TeamActivity } from './activity.ts'
 import { errorMessage, TeamError } from './error.ts'
 import { TeamJournal } from './journal.ts'
 import { TeamRuntimeLifecycle } from './lifecycle.ts'
 import { TeamMailbox } from './mailbox.ts'
-import { teamProjectionDefinition } from './projection.ts'
 import { TeamRoster } from './roster.ts'
 import type { TeamMembership } from './roster.ts'
 import { TeamTaskBoard } from './task-board.ts'
@@ -23,9 +21,7 @@ import type {
   SpawnTeammateRequest,
   SpawnTeammateResult,
   TeamMemberView,
-  TeamTaskMutationResult,
   TeamTaskView,
-  TeamView,
   TeamWaitResult,
   UpdateTeamTaskRequest,
 } from './types.ts'
@@ -34,6 +30,7 @@ export type * from './types.ts'
 export type { TeamMembership } from './roster.ts'
 export { TeamId, TeamMessageId, TeamTaskId } from './types.ts'
 export { TeamError } from './error.ts'
+export { foldTeam } from './fold.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -56,8 +53,8 @@ function positiveLimit(name: string, value: number): number {
 }
 
 /** Agent Teams service backed by the exact live Lead Session log. */
-export class TeamService extends TypertRemoteService {
-  static inject = ['agents', 'sessions', 'sessionPersistence', 'sessionProjections', 'subagents']
+export class TeamService extends Service {
+  static inject = ['agents', 'sessions', 'sessionPersistence', 'subagents']
 
   static Config: z<Config> = z.object({
     maxMembers: z.number().step(1).min(1).default(DEFAULT_MAX_MEMBERS),
@@ -113,16 +110,7 @@ export class TeamService extends TypertRemoteService {
       const membership = this.roster.tryMembership(agent)
       if (membership !== undefined) this.activity.notify(membership.id)
     })
-    ctx.effect(() => {
-      const disposeProjection = ctx.root.sessionProjections.register(teamProjectionDefinition)
-      return async () => {
-        try {
-          await this.disposeRuntime()
-        } finally {
-          disposeProjection()
-        }
-      }
-    }, 'agentTeams.runtimeLifecycle()')
+    ctx.effect(() => () => this.disposeRuntime(), 'agentTeams.runtimeLifecycle()')
     for (const agent of ctx.agents.list()) this.scheduleRecovery(agent)
   }
 
@@ -157,7 +145,7 @@ export class TeamService extends TypertRemoteService {
   /**
    * Queue one durable peer message, then attempt immediate delivery.
    * @param caller - exact live sending Team member.
-   * @param request - target name, content, and pre-queue cancellation.
+   * @param request - target name, content, scheduling mode, and pre-queue cancellation.
    * @returns durable message identity and immediate-delivery observation.
    */
   async sendMessage(caller: Agent, request: SendTeamMessageRequest): Promise<SendTeamMessageResult> {
@@ -232,57 +220,6 @@ export class TeamService extends TypertRemoteService {
    */
   tryMembership(agent: Agent): TeamMembership | undefined {
     return this.roster.tryMembership(agent)
-  }
-
-  /**
-   * Read the current roster and non-deleted task board through the generated Remote API.
-   * @param agent - exact live Team member used as the authority credential.
-   * @returns detached current roster and task views.
-   */
-  @Remote('view')
-  remoteView(agent: Agent): TeamView {
-    return {
-      members: this.listMembers(agent),
-      tasks: this.listTasks(agent),
-    }
-  }
-
-  /**
-   * Create one shared task through the generated Remote API.
-   * @param agent - exact live Team member creating the task.
-   * @param request - task text, blockers, and advisory write scopes.
-   * @returns the revision-one task or a typed Team rejection.
-   */
-  @Remote('createTask')
-  remoteCreateTask(agent: Agent, request: CreateTeamTaskRequest): Promise<TeamTaskMutationResult> {
-    return this.taskMutationResult(this.createTask(agent, request))
-  }
-
-  /**
-   * Apply one task mutation and preserve Team rejections as business results.
-   * @param agent - exact live Team member authorizing the mutation.
-   * @param request - task identity, expected revision, action, and action fields.
-   * @returns the committed task or a typed Team rejection.
-   */
-  @Remote('updateTask')
-  remoteUpdateTask(agent: Agent, request: UpdateTeamTaskRequest): Promise<TeamTaskMutationResult> {
-    return this.taskMutationResult(this.updateTask(agent, request))
-  }
-
-  /** Preserve Team task rejections while allowing unexpected failures to reject the Remote call. */
-  private async taskMutationResult(operation: Promise<TeamTaskView>): Promise<TeamTaskMutationResult> {
-    try {
-      return { ok: true, value: await operation }
-    } catch (error) {
-      if (!(error instanceof TeamError)) throw error
-      return {
-        ok: false,
-        error: {
-          code: error.code === 'TEAM_TASK_STALE_REVISION' ? 'team-task-conflict' : 'team-rejected',
-          message: error.message,
-        },
-      }
-    }
   }
 
   /** Queue one contained recovery pass after publication has unwound. */

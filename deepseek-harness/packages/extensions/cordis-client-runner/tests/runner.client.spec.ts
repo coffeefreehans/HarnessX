@@ -15,10 +15,11 @@ import { Context } from '@deepseek-ai/cordis'
 import type { Loader } from '@deepseek-ai/cordis-plugin-loader'
 import { describe, expect, it, vi } from 'vitest'
 import type {
-  CordisDynamicPackageId, CordisDynamicPluginId, CordisDynamicPluginRunId, SessionId,
+  CordisDynamicPackageId, CordisDynamicPluginId, CordisDynamicPluginRunId,
 } from '@deepseek-ai/dsh-api-remotes/client'
+import type { SessionId } from '@deepseek-ai/dsh-client-connection/client'
 import type { ClientModuleSystem } from '@deepseek-ai/dsh-client-modules/client'
-import { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
+import { SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
 import { DYNAMIC_CLIENT_REDIRECTS } from '../src/client/evaluator.ts'
 import { DynamicCordisPackageRunner } from '../src/client/runtime.ts'
 import type { DynamicCordisClientHalf, DynamicCordisRenderFailure } from '../src/client/runtime.ts'
@@ -289,7 +290,7 @@ describe('failure stages', () => {
     await bench.runner.load(half({
       code: 'return { apply: (ctx) => { ctx.on("t/ping", () => console.error("after load")) } }',
     }))
-    Reflect.apply(bench.ctx.emit.bind(bench.ctx), undefined, ['t/ping'])
+    ;(bench.ctx.emit as (type: string) => void)('t/ping')
     const mirrored = logged.mock.calls.filter(call => String(call[0]).includes('logged an error'))
     logged.mockRestore()
     expect(mirrored).toHaveLength(1)
@@ -405,7 +406,7 @@ describe('render failures', () => {
   it('seats a package that registers an unindexable component without claiming it', async () => {
     const bench = await boot()
     // A component that is not an object has no identity to key ownership on; the
-    // registration remains valid, while a crash on it has no attributable package.
+    // registration still stands, and a crash on it simply goes unattributed.
     await expect(bench.runner.load(half({
       code: `return {
         inject: ['slots'],

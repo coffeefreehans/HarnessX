@@ -15,19 +15,19 @@
       "path": "../ui-slots"
     },
     {
-      "path": "../store"
+      "path": "../runtime"
     },
     {
       "path": "../ui-primitives"
-    },
-    {
-      "path": "../ui-renderer"
     },
     {
       "path": "../ui-settings"
     },
     {
       "path": "../locale"
+    },
+    {
+      "path": "../../runtime-diagnostics/invariants"
     },
     {
       "path": "../../api/remotes/tsconfig.client.json"

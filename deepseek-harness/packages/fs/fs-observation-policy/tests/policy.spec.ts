@@ -81,10 +81,7 @@ describe('write-intent decision', () => {
 describe('edit-intent decision', () => {
   it('rejects an unread edit with FS_NOT_OBSERVED', async () => {
     const { ctx } = await setup()
-    await expect(editIntent(ctx, target('a.txt'), ownerExec({}))).rejects.toMatchObject({
-      code: 'FS_NOT_OBSERVED',
-      message: 'edit requires reading "a.txt" first',
-    })
+    await expect(editIntent(ctx, target('a.txt'), ownerExec({}))).rejects.toMatchObject({ code: 'FS_NOT_OBSERVED' })
   })
 
   it('rejects an edit with no owner (cannot prove prior observation)', async () => {

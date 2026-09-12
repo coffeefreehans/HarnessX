@@ -24,9 +24,6 @@
       "path": "../../feedback/command-feedback"
     },
     {
-      "path": "../../feedback/message-feedback"
-    },
-    {
       "path": "../../llm/llm"
     },
     {
@@ -34,6 +31,9 @@
     },
     {
       "path": "../../identity/anonymous-user-id"
+    },
+    {
+      "path": "../../runtime-diagnostics/invariants"
     }
   ]
 }

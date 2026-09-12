@@ -1,16 +1,5 @@
 /** Instance-owned concurrency bound for native image transformations. */
 
-/**
- * Preserve Error rejections and normalize non-Error native binding values.
- * @param reason - rejection reason returned by a compression task.
- * @returns an Error suitable for promise rejection.
- */
-export function compressionFailure(reason: unknown): Error {
-  return reason instanceof Error
-    ? reason
-    : new Error('Image compression task rejected with a non-Error value.', { cause: reason })
-}
-
 /** FIFO limiter for asynchronous compression work. */
 export class CompressionLimiter {
   private active = 0
@@ -41,7 +30,9 @@ export class CompressionLimiter {
           },
           (error: unknown) => {
             release()
-            reject(compressionFailure(error))
+            reject(error instanceof Error
+              ? error
+              : new Error('Image compression task rejected with a non-Error value.', { cause: error }))
           },
         )
       }

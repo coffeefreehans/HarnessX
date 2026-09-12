@@ -1,6 +1,6 @@
 /**
  * The `sessionStats` projection unit: a pure fold of step boundaries, stream
- * embedded streams, tool pairs, and assembled assistant messages into whole-log counts
+ * chunks, tool pairs, and assembled assistant messages into whole-log counts
  * and wall times.
  *
  * `step/end` — not `assistant/message` — is the counted step event because it
@@ -24,9 +24,8 @@
  */
 
 import { z } from 'zod'
-import { assistantStreamFirstTokenTime } from '@deepseek-ai/dsh-llm'
+import { isTokenDelta } from '@deepseek-ai/dsh-llm/message'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
-
 
 /** Accumulated whole-log figures (the view is exactly these totals). */
 interface SessionStatsTotals {
@@ -135,17 +134,15 @@ export const sessionStatsProjectionDefinition = {
           ...state,
           openStep: { turn: event.data.turn, step: event.data.step, startTime: event.time, firstTokenTime: null },
         }
-      case 'assistant/attempt': {
+      case 'assistant/chunk': {
         const open = state.openStep
         if (open === null || open.turn !== event.data.turn || open.step !== event.data.step) return state
-        const first = assistantStreamFirstTokenTime(event.data.stream) ?? null
-        if (open.firstTokenTime !== null || first === null) return state
-        return { ...state, openStep: { ...open, firstTokenTime: first } }
+        if (open.firstTokenTime !== null || !isTokenDelta(event.data.chunk)) return state
+        return { ...state, openStep: { ...open, firstTokenTime: event.time } }
       }
       case 'assistant/message': {
         const open = state.openStep
         if (open === null || open.turn !== event.data.turn || open.step !== event.data.step) return state
-        const firstToken = open.firstTokenTime ?? assistantStreamFirstTokenTime(event.data.stream) ?? null
         // One assembled message per step: closing the boundary means a
         // defensive duplicate cannot accrue twice.
         const next: SessionStatsState = {
@@ -153,12 +150,12 @@ export const sessionStatsProjectionDefinition = {
           llmMs: state.llmMs + Math.max(0, event.time - open.startTime),
           openStep: null,
         }
-        if (firstToken !== null) {
-          next.ttftMs += Math.max(0, firstToken - open.startTime)
+        if (open.firstTokenTime !== null) {
+          next.ttftMs += Math.max(0, open.firstTokenTime - open.startTime)
           next.ttftSteps += 1
           const outputTokens = usageOutputTokens(event.data.usage)
           if (outputTokens !== null) {
-            next.decodeMs += Math.max(0, event.time - firstToken)
+            next.decodeMs += Math.max(0, event.time - open.firstTokenTime)
             next.decodeTokens += outputTokens
           }
         }

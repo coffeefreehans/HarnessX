@@ -16,7 +16,7 @@
       "path": "../../../vendor/schemastery"
     },
     {
-      "path": "../../subprocess/win32-process"
+      "path": "../../runtime-diagnostics/invariants"
     }
   ]
 }

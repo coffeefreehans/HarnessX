@@ -2,7 +2,5 @@
   name: ../../plugins/contribute.js
   config:
     tool: ok
-- id: refuses
-  name: ../../plugins/throws.js
-  config:
-    message: this row refuses to apply
+- id: missing
+  name: ../../plugins/does-not-exist.js

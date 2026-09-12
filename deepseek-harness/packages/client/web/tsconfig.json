@@ -9,9 +9,6 @@
   ],
   "references": [
     {
-      "path": "../store"
-    },
-    {
       "path": "../../../vendor/cordis"
     },
     {
@@ -27,10 +24,10 @@
       "path": "../ui-primitives"
     },
     {
-      "path": "../ui-dockkit"
+      "path": "../ui-renderer"
     },
     {
-      "path": "../ui-renderer"
+      "path": "../../runtime-diagnostics/invariants"
     }
   ],
   "exclude": [

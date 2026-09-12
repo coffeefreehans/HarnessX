@@ -1,25 +1,13 @@
 // @vitest-environment jsdom
 /** Conversation assembly acceptance independent of Tool presentation. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
-import type { ISession } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { ISession, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
-import {
-  RemoteError, SlotTestRuntime, usePinnedBrowserLanguages, stubSettingsScope,
-} from '@deepseek-ai/dsh-client-test-runtime'
-import { InputHub } from '../src/client/input/hub.ts'
+import { SlotTestRuntime, usePinnedBrowserLanguages, stubSettingsScope } from '@deepseek-ai/dsh-client-test-runtime'
 import { apply, inject, type EmptyWorkspaceOwnerProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
-
-// jsdom implements no Range geometry (Lexical's scroll-into-view measures the
-// caret with one once the surface is genuinely contenteditable).
-Range.prototype.getBoundingClientRect = () => ({
-  top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}),
-})
-
 
 usePinnedBrowserLanguages('zh-CN')
 
@@ -41,13 +29,14 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', ResizeObserverStub)
 })
 
-type AppRootProps = PropsRenderSlots<'main'>
+type AppRootProps = PropsRenderSlots<'conversation' | 'details'>
 function AppRoot({ renderSlot }: AppRootProps) {
-  return <>{renderSlot('main', {}, { entryKey: 'conversation' })}</>
+  return <>{renderSlot('conversation', {})}</>
 }
 
 const LAYOUT_CHILDREN = {
-  'main': { kind: 'keyed', scope: 'root' },
+  'conversation': { kind: 'single', scope: 'session-maybe' },
+  'details': { kind: 'single', scope: 'session' },
 } as const
 
 function WorkspaceProbe({ open }: EmptyWorkspaceOwnerProps) {
@@ -61,21 +50,21 @@ function WorkspaceProbe({ open }: EmptyWorkspaceOwnerProps) {
 
 async function bench(opts?: { blank?: boolean }) {
   const runtime = await SlotTestRuntime.create()
-  runtime.ctx.provide('uiWorkspace', {
-    openWorkspace: vi.fn(async (_workspaceId: WorkspaceId, beforeOpen: (id: SessionId) => void) => {
-      beforeOpen(SID)
-      runtime.sessions.open(SID)
-    }),
-    openSession: (id: SessionId) => { runtime.sessions.open(id) },
-  } as never)
-  runtime.ctx.provide('settingsScope', { bind: () => stubSettingsScope().scope } as never)
+  runtime.provide('connection', { api: { settings: {} }, isLoopback: false })
+  // The plugin injects both; these specs exercise no settings path.
+  runtime.provide('remote', { $on: () => () => {} })
+  runtime.provide('settingsScope', { bind: () => stubSettingsScope().scope } as never)
+  runtime.provide('layout', { openDetails: vi.fn(), closeDetails: vi.fn() })
   const locale = new LocaleRuntime(runtime.ctx)
-  runtime.ctx.provide('locale', locale)
+  runtime.provide('locale', locale)
   runtime.slots.installLocale(locale)
   await runtime.sessions.add({
     id: SID,
     summary: { title: 'S', displayTitle: 'S', cwd: '/proj' },
-    ...(opts?.blank === true ? { snapshot: { blank: true } } : {}),
+    snapshot: {
+      nodes: [],
+      ...(opts?.blank === true ? { blank: true, composerPhase: 'blank' as const } : {}),
+    },
     session: {
       loadOlder: vi.fn<ISession['loadOlder']>(),
       prompt: vi.fn<ISession['prompt']>(async () => ({ ok: true, value: { accepted: true } })),
@@ -89,25 +78,22 @@ async function bench(opts?: { blank?: boolean }) {
 describe('resident composer', () => {
   it('renders the locked view state while no session exists at all', async () => {
     const runtime = await SlotTestRuntime.create()
-    runtime.ctx.provide('uiWorkspace', {
-      openWorkspace: vi.fn(async (_workspaceId: WorkspaceId, beforeOpen: (id: SessionId) => void) => {
-        beforeOpen(SID)
-        runtime.sessions.open(SID)
-      }),
-      openSession: (id: SessionId) => { runtime.sessions.open(id) },
-    } as never)
-    runtime.ctx.provide('settingsScope', { bind: () => stubSettingsScope().scope } as never)
+    runtime.provide('connection', { api: { settings: {} }, isLoopback: false })
+    // The plugin injects both; these specs exercise no settings path.
+    runtime.provide('remote', { $on: () => () => {} })
+    runtime.provide('settingsScope', { bind: () => stubSettingsScope().scope } as never)
+    runtime.provide('layout', { openDetails: vi.fn(), closeDetails: vi.fn() })
     const locale = new LocaleRuntime(runtime.ctx)
-    runtime.ctx.provide('locale', locale)
+    runtime.provide('locale', locale)
     runtime.slots.installLocale(locale)
     await runtime.root.declare(LAYOUT_CHILDREN, AppRoot)
     await runtime.mount({ inject: [...inject], apply })
     runtime.slots.register({ name: 'conversation.hero.workspace' }, WorkspaceProbe)
     const view = runtime.renderRoot()
-    const textarea = view.container.querySelector<HTMLDivElement>('[data-composer-input]')
+    const textarea = view.container.querySelector('textarea')
     expect(textarea).not.toBeNull()
-    expect(textarea!.getAttribute('aria-disabled')).not.toBe('true')
-    expect(textarea!.getAttribute('contenteditable')).not.toBe('true')
+    expect(textarea!.disabled).toBe(false)
+    expect(textarea!.readOnly).toBe(true)
     expect(textarea!.getAttribute('aria-haspopup')).toBe('menu')
     expect(view.getByTestId('workspace-probe').textContent).toBe('false:0')
     fireEvent.click(textarea!)
@@ -122,16 +108,13 @@ describe('resident composer', () => {
 
   it('keeps the complete Hero tree mounted when the first Workspace session appears', async () => {
     const runtime = await SlotTestRuntime.create()
-    runtime.ctx.provide('uiWorkspace', {
-      openWorkspace: vi.fn(async (_workspaceId: WorkspaceId, beforeOpen: (id: SessionId) => void) => {
-        beforeOpen(SID)
-        runtime.sessions.open(SID)
-      }),
-      openSession: (id: SessionId) => { runtime.sessions.open(id) },
-    } as never)
-    runtime.ctx.provide('settingsScope', { bind: () => stubSettingsScope().scope } as never)
+    runtime.provide('connection', { api: { settings: {} }, isLoopback: false })
+    // The plugin injects both; these specs exercise no settings path.
+    runtime.provide('remote', { $on: () => () => {} })
+    runtime.provide('settingsScope', { bind: () => stubSettingsScope().scope } as never)
+    runtime.provide('layout', { openDetails: vi.fn(), closeDetails: vi.fn() })
     const locale = new LocaleRuntime(runtime.ctx)
-    runtime.ctx.provide('locale', locale)
+    runtime.provide('locale', locale)
     runtime.slots.installLocale(locale)
     await runtime.workspaces.update((draft) => {
       draft.items = [{ workspaceId: 'w1', title: 'Proj', path: '/proj', sessionIds: [SID] }] as never
@@ -144,11 +127,11 @@ describe('resident composer', () => {
     const root = view.container.querySelector('[data-phase="hero"]')!
     const scrollBody = view.container.querySelector('[data-conversation-scroll]')!
     const composerSeat = view.container.querySelector('[data-composer-seat]')!
-    const textarea = view.container.querySelector<HTMLDivElement>('[data-composer-input]')!
+    const textarea = view.container.querySelector('textarea')!
     const workspaceChip = view.getByRole('button', { name: '选择工作区' })
     const workspaceProbe = view.getByTestId('workspace-probe')
-    expect(textarea.getAttribute('aria-disabled')).not.toBe('true')
-    expect(textarea.getAttribute('contenteditable')).not.toBe('true')
+    expect(textarea.disabled).toBe(false)
+    expect(textarea.readOnly).toBe(true)
 
     fireEvent.click(workspaceChip)
     fireEvent.click(workspaceProbe)
@@ -157,18 +140,18 @@ describe('resident composer', () => {
     await runtime.sessions.add({
       id: SID,
       summary: { title: 'S', displayTitle: 'S', cwd: '/proj', blank: true },
-      snapshot: { blank: true },
+      snapshot: { blank: true, composerPhase: 'blank' },
     })
 
     expect(view.container.querySelector('[data-phase="hero"]')).toBe(root)
     expect(view.container.querySelector('[data-conversation-scroll]')).toBe(scrollBody)
     expect(view.container.querySelector('[data-composer-seat]')).toBe(composerSeat)
-    expect(view.container.querySelector<HTMLDivElement>('[data-composer-input]')).toBe(textarea)
+    expect(view.container.querySelector('textarea')).toBe(textarea)
     expect(view.getByRole('button', { name: '选择工作区' })).toBe(workspaceChip)
     expect(view.getByTestId('workspace-probe')).toBe(workspaceProbe)
     expect(workspaceProbe.textContent).toBe('true:1')
-    expect(textarea.getAttribute('aria-disabled')).not.toBe('true')
-    expect(textarea.getAttribute('contenteditable')).toBe('true')
+    expect(textarea.disabled).toBe(false)
+    expect(textarea.readOnly).toBe(false)
     await runtime.dispose()
   })
 
@@ -178,14 +161,15 @@ describe('resident composer', () => {
       draft.items = [{ workspaceId: 'w1', title: 'Proj', path: '/proj', sessionIds: [SID] }] as never
     })
     const view = runtime.renderRoot()
-    const hero = view.container.querySelector<HTMLDivElement>('[data-composer-input]')
+    const hero = view.container.querySelector('textarea')
     expect(hero).not.toBeNull()
-    expect(hero!.getAttribute('aria-disabled')).not.toBe('true')
+    expect(hero!.disabled).toBe(false)
 
-    await runtime.sessions.updateSessionSnapshot(SID, (draft) => {
+    await runtime.sessions.updateSnapshot(SID, (draft) => {
       draft.blank = false
+      draft.composerPhase = 'active'
     })
-    expect(view.container.querySelector<HTMLDivElement>('[data-composer-input]')).toBe(hero)
+    expect(view.container.querySelector('textarea')).toBe(hero)
     await runtime.dispose()
   })
 })
@@ -193,20 +177,16 @@ describe('resident composer', () => {
 describe('prompt rejection through the assembled composer', () => {
   it('renders the promptError alert strip and keeps the draft in the machine', async () => {
     const runtime = await SlotTestRuntime.create()
-    runtime.ctx.provide('uiWorkspace', {
-      openWorkspace: vi.fn(async (_workspaceId: WorkspaceId, beforeOpen: (id: SessionId) => void) => {
-        beforeOpen(SID)
-        runtime.sessions.open(SID)
-      }),
-      openSession: (id: SessionId) => { runtime.sessions.open(id) },
-    } as never)
-    runtime.ctx.provide('settingsScope', { bind: () => stubSettingsScope().scope } as never)
+    runtime.provide('connection', { api: { settings: {} }, isLoopback: false })
+    // The plugin injects both; these specs exercise no settings path.
+    runtime.provide('remote', { $on: () => () => {} })
+    runtime.provide('settingsScope', { bind: () => stubSettingsScope().scope } as never)
+    runtime.provide('layout', { openDetails: vi.fn(), closeDetails: vi.fn() })
     const locale = new LocaleRuntime(runtime.ctx)
-    runtime.ctx.provide('locale', locale)
+    runtime.provide('locale', locale)
     runtime.slots.installLocale(locale)
     const prompt = vi.fn<ISession['prompt']>(async () => ({
-      ok: false,
-      error: new RemoteError('session/agent-busy', 'prompt rejected before acceptance', { reason: 'busy' }),
+      ok: false, error: { code: 'agent-busy', message: 'prompt rejected before acceptance', details: { reason: 'busy' } },
     }))
     await runtime.sessions.add({
       id: SID,
@@ -217,25 +197,21 @@ describe('prompt rejection through the assembled composer', () => {
     await runtime.mount({ inject: [...inject], apply })
     const view = runtime.renderRoot()
 
-    const composer = view.container.querySelector<HTMLDivElement>('[data-composer-input]')!
-    // Write through the assembled input resolver (contenteditable change
-    // events carry no value; the resolver is the public draft write path).
-    const conversation = runtime.ctx.get('conversation') as { input: unknown }
-    const shell = (conversation.input as InputHub).shell(SID)
-    act(() => { shell.setDraft('do not lose this') })
+    const composer = view.container.querySelector('textarea')!
+    fireEvent.change(composer, { target: { value: 'do not lose this' } })
     fireEvent.keyDown(composer, { key: 'Enter' })
     await waitFor(() => { expect(prompt).toHaveBeenCalledOnce() })
 
-    await runtime.sessions.updateSessionSnapshot(SID, (draft) => {
+    await runtime.sessions.updateSnapshot(SID, (draft) => {
       draft.promptError = {
         op: 'send',
-        error: new RemoteError('session/agent-busy', 'prompt rejected before acceptance', { reason: 'busy' }),
+        error: { code: 'agent-busy', message: 'prompt rejected before acceptance', details: { reason: 'busy' } },
       }
     })
     const alert = await view.findByRole('alert')
-    expect(alert.textContent).toContain('prompt rejected before acceptance (session/agent-busy)')
+    expect(alert.textContent).toContain('prompt rejected before acceptance (agent-busy)')
     await waitFor(() => {
-      expect(shell.snapshot.draft).toBe('do not lose this')
+      expect((view.container.querySelector('textarea'))!.value).toBe('do not lose this')
     })
     await runtime.dispose()
   })

@@ -11,7 +11,7 @@
  * The policy only decides WHEN to spill and composes the notice.
  *
  * A second arm applies the SAME cap to the durable log: the
- * `tools/ptc-dispatch-log` waterfall bounds the `tool/ptc-dispatch` event's
+ * `tools/code-dispatch-log` waterfall bounds the `tool/code-dispatch` event's
  * copy of an oversized `run_code` sub-call result (the program's value is
  * untouched; UIs and replay read the full text through the spill artifact).
  *
@@ -46,14 +46,13 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import { TextRetainer } from '@deepseek-ai/dsh-output-retention'
+import { TextRetainer, describeOmitted } from '@deepseek-ai/dsh-output-retention'
 import type { Omitted } from '@deepseek-ai/dsh-output-retention'
 import type { SaveTextSpill, SpillRef } from '@deepseek-ai/dsh-spill'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import type { ToolCallId } from '@deepseek-ai/dsh-llm'
+import type { CallId } from '@deepseek-ai/dsh-llm'
 import type { PostToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { SpillPolicyExec } from './types.ts'
-import { formatSpillNotice } from './notice.ts'
 
 export type { SpillPolicyExec } from './types.ts'
 
@@ -102,6 +101,12 @@ function preview(text: string, budget: number): { text: string; omitted: Omitted
   return { text: kept.text, omitted: kept.omittedBytes }
 }
 
+/** The spill-notice line for a given omission + saved reference (no preview, no leading blank line). */
+function spillNotice(omitted: Omitted, ref: SpillRef): string {
+  const omission = describeOmitted(omitted, 'bytes')
+  return `(${omission} Full formatted result stored at: ${ref.locator}. ${ref.retrievalHint})`
+}
+
 export function apply(ctx: Context, config: Config): void {
   const maxInlineBytes = config.maxInlineBytes
   // Omitted ⇒ no automatic spill policy: register nothing at all.
@@ -127,7 +132,7 @@ export function apply(ctx: Context, config: Config): void {
     totalBytes: number,
     sessionId: SessionId | undefined,
     toolName: string,
-    callId: ToolCallId,
+    callId: CallId,
     label: 'result' | 'dispatch',
   ): Promise<string | undefined> {
     if (sessionId === undefined) {
@@ -141,7 +146,7 @@ export function apply(ctx: Context, config: Config): void {
     }
     const save: SaveTextSpill = {
       owner: { sessionId },
-      source: { kind: 'tool', toolName, callId, label },
+      source: { toolName, callId, label },
       suggestedName: `${toolName}.txt`,
       content: text,
     }
@@ -163,10 +168,10 @@ export function apply(ctx: Context, config: Config): void {
     // count (the full byte total): its digit count bounds the real count's, so
     // the reserved size is a safe upper bound and the final notice is never
     // longer than what we reserved. `\n\n` is the 2-byte join.
-    const reserve = Buffer.byteLength(formatSpillNotice({ kind: 'exact', count: totalBytes }, ref), 'utf8') + 2
+    const reserve = Buffer.byteLength(spillNotice({ kind: 'exact', count: totalBytes }, ref), 'utf8') + 2
     const previewBudget = Math.max(0, cap - reserve)
     const { text: previewText, omitted } = preview(text, previewBudget)
-    const notice = formatSpillNotice(omitted, ref)
+    const notice = spillNotice(omitted, ref)
     const replacedText = previewText.length > 0 ? `${previewText}\n\n${notice}` : notice
     // Invariant: the policy NEVER emits a replacement larger than the cap. When
     // the notice alone exceeds maxInlineBytes (a tiny cap or a long spill root),
@@ -203,13 +208,13 @@ export function apply(ctx: Context, config: Config): void {
     return { kind: 'accept', content: replaced, ...decision.additionalContexts ? { additionalContexts: decision.additionalContexts } : {} }
   }, { prepend: true })
 
-  // The durable-log arm: bound the `tool/ptc-dispatch` event's copy of an
+  // The durable-log arm: bound the `tool/code-dispatch` event's copy of an
   // oversized sub-call result the same way the model-facing arm bounds an
   // outer result. The program's returned value is untouched (it already
   // crossed the worker boundary whole); only the session log's copy shrinks
   // to preview + locator, so replay and UIs read the full text through the
   // spill artifact exactly as they do for spilled native results.
-  ctx.on('tools/ptc-dispatch-log', async (dispatch, next): Promise<ContentBlock[]> => {
+  ctx.on('tools/code-dispatch-log', async (dispatch, next): Promise<ContentBlock[]> => {
     const content = await next()
     // `read` sub-calls spill too: the log copy is not model context, so the
     // read → spill → read-again loop the post-execute arm avoids cannot

@@ -8,11 +8,11 @@ import { LOADER_SMOKE_TEST_TIMEOUT_MS, runLoaderSmoke } from '@deepseek-ai/dsh-l
 // Keep the Loader config under examples so both modes exercise the same deployable
 // topology: local fixture source plus bare plugins owned by the examples workspace.
 const driver = fileURLToPath(new URL(
-  './fixtures/driver.ts',
+  '../../../../examples/headless-agent/tests/fixtures/time-context-driver.ts',
   import.meta.url,
 ))
 const configPath = fileURLToPath(new URL(
-  './fixtures/time-context.patch.yml',
+  '../../../../examples/headless-agent/tests/fixtures/time-context.cordis.yml',
   import.meta.url,
 ))
 const repoTsconfig = fileURLToPath(new URL('../../../../tsconfig.json', import.meta.url))
@@ -27,7 +27,7 @@ async function jsonlFiles(dir: string): Promise<string[]> {
   return paths.flat()
 }
 
-describe('time-context through the production headless profile', () => {
+describe('time-context through a real headless cordis.yml', () => {
   it('uses the process zone and persists one ordered context event per request', async () => {
     let events: SessionEvent[] = []
     const { stderr } = await runLoaderSmoke({
@@ -49,9 +49,7 @@ describe('time-context through the production headless profile', () => {
     expect(events.filter(event => event.type === 'turn/end')).toHaveLength(2)
 
     const contexts = events.filter(
-      (event): event is SessionEvent<'user/message'> => event.type === 'user/message'
-        && event.data.source.kind === 'plugin'
-        && event.data.source.plugin === 'time-context')
+      (event): event is SessionEvent<'user/message'> => event.type === 'user/message' && event.data.source.kind === 'plugin')
     const starts = events.filter(event => event.type === 'step/start')
     expect(contexts).toHaveLength(2)
     expect(starts).toHaveLength(2)

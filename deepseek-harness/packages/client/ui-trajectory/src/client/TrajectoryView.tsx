@@ -1,12 +1,12 @@
 /** Trajectory view: compact summary over a turn-aware event ledger. */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ConvViewProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { InjectFace, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
-  AssistantBlock, AssistantMessageNode, ConvViewProps, MessageImageLoader, RenderMessageImages,
-  ToolCallBlock,
-} from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { InjectFace, PropsLocale, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
-import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
+  AssistantBlock, AssistantMessageNode, ConversationSnapshot,
+  SnapshotStore,
+} from '@deepseek-ai/dsh-client-runtime/client'
 import {
   TrajectoryTable,
   type TrajectoryRequestNumber,
@@ -25,20 +25,12 @@ import {
 } from './timeline.ts'
 import { trajectoryRecordId } from './trajectory-record.ts'
 import { TrajectorySearchIndex } from './trajectory-search-index.ts'
-import type { TrajectorySnapshot } from './trajectory-contract.ts'
+import { EMPTY_TRAJECTORY_SNAPSHOT } from './trajectory-snapshot-builder.ts'
 import css from './views.module.css'
 
 const EMPTY_TURN_IDS: ReadonlySet<number> = new Set()
 const EMPTY_RECORD_IDS: ReadonlySet<string> = new Set()
 const SEARCH_INDEX_THROTTLE_MS = 3_000
-const HISTORY_PAGE_NODES = 50
-
-function containsCall(calls: readonly ToolCallBlock[], callId: string): boolean {
-  for (const call of calls) {
-    if (call.callId === callId || containsCall(call.subCalls, callId)) return true
-  }
-  return false
-}
 
 function lastCellIndex(turns: readonly TrajectoryTurnModel[]): number {
   let last = 0
@@ -65,7 +57,7 @@ function timelineBlock(block: AssistantBlock): AssistantBlock {
   }
 }
 
-function partialStructureSignature(partial: TrajectorySnapshot['partial']): string {
+function partialStructureSignature(partial: ConversationSnapshot['partial']): string {
   if (partial === null) return ''
   return partial.blocks.map(block => block.kind === 'tool-call'
     ? `${block.kind}:${block.callId}:${block.name}`
@@ -78,7 +70,6 @@ export interface TrajectoryViewInjected {
     duration: SnapshotStore<boolean>
   }
   loadOlder: () => Promise<boolean>
-  loadImage: MessageImageLoader
   setActualDuration: (actualDuration: boolean) => void
 }
 
@@ -127,17 +118,10 @@ function addUsage(
 }
 
 export function TrajectoryView({
-  useSession, useTrajectory, useDuration, loadOlder, loadImage, setActualDuration,
-  viewRequest, completeViewRequest, renderSlot, t,
-}: ConvViewProps
-  & PropsRenderSlots<'conversation.trajectory.images'>
-  & InjectFace<TrajectoryViewInjected>
-  & PropsLocale<'trajectory'>) {
+  useSession, useDuration, loadOlder, setActualDuration,
+  inspect, onInspectDone, t,
+}: ConvViewProps & InjectFace<TrajectoryViewInjected> & PropsLocale<'trajectory'>) {
   const [collapsedTurns, setCollapsedTurns] = useState<ReadonlySet<number>>(EMPTY_TURN_IDS)
-  const renderImages = useCallback<RenderMessageImages>(
-    owner => renderSlot('conversation.trajectory.images', { ...owner, loadImage }),
-    [loadImage, renderSlot],
-  )
   const [collapsedAssistants, setCollapsedAssistants] =
     useState<ReadonlySet<string>>(EMPTY_RECORD_IDS)
   const [timelineSelection, setTimelineSelection] = useState<TrajectoryTimeRange | null>(null)
@@ -155,40 +139,11 @@ export function TrajectoryView({
   const [timelineRecordFocus, setTimelineRecordFocus] = useState<{
     readonly index: number
   } | null>(null)
-  const completeInspection = useTrajectory(snapshot => snapshot)
-  const latestNodeSeq = completeInspection.eventNodes.at(-1)?.seq
-  const [historyTailSeq, setHistoryTailSeq] = useState(latestNodeSeq)
-  const [historyNodeLimit, setHistoryNodeLimit] = useState(HISTORY_PAGE_NODES)
-  const fixedTailSeq = historyTailSeq ?? latestNodeSeq
-  const historyTailIndex = fixedTailSeq === undefined
-    ? -1
-    : completeInspection.eventNodes.findLastIndex(node => node.seq <= fixedTailSeq)
-  const historyEndIndex = historyTailIndex < 0 && latestNodeSeq !== undefined
-    ? completeInspection.eventNodes.length
-    : historyTailIndex + 1
-  const historyStartIndex = Math.max(0, historyEndIndex - historyNodeLimit)
-  useEffect(() => {
-    if (latestNodeSeq !== undefined && (historyTailSeq === undefined || historyTailIndex < 0)) {
-      setHistoryTailSeq(latestNodeSeq)
-    }
-  }, [historyTailIndex, historyTailSeq, latestNodeSeq])
-  const inspection = useMemo<TrajectorySnapshot>(() => {
-    if (historyStartIndex === 0) return completeInspection
-    const eventNodes = completeInspection.eventNodes.slice(historyStartIndex)
-    const firstSeq = eventNodes[0]?.seq ?? 0
-    return {
-      ...completeInspection,
-      eventNodes,
-      requests: completeInspection.requests.filter(request =>
-        request.startSeq >= firstSeq || (request.resultSeq ?? -1) >= firstSeq),
-    }
-  }, [completeInspection, historyStartIndex])
+  const inspection = useSession(snapshot =>
+    snapshot.views.get('trajectory') ?? EMPTY_TRAJECTORY_SNAPSHOT)
   const historyLoading = useSession(snapshot => snapshot.openState === 'loading')
   const olderHistoryLoading = useSession(snapshot => snapshot.loadingOlder)
-  const sessionHasOlderHistory = useSession(snapshot => snapshot.hasMore)
-  const hasResidentOlderHistory = historyStartIndex > 0
-  const hasOlderHistory = hasResidentOlderHistory
-    || sessionHasOlderHistory
+  const hasOlderHistory = useSession(snapshot => snapshot.hasMore)
   const nodes = inspection.eventNodes
   const eventLocations = inspection.eventLocations
   const historyBaseSeq = nodes[0]?.seq ?? 0
@@ -196,25 +151,14 @@ export function TrajectoryView({
   const runningCalls = inspection.runningCalls
   const requests = inspection.requests
   const callSchemas = inspection.callSchemas
-  const inspectCallId = viewRequest?.view === 'trajectory' ? viewRequest.focus : null
-  const inspectNodeIndex = useMemo(() => inspectCallId === null
-    ? -1
-    : completeInspection.eventNodes.findIndex(node => node.kind === 'assistant'
-      ? node.blocks.some(block => block.kind === 'tool-call' && block.callId === inspectCallId)
-      : node.kind === 'tool-result' && containsCall([node], inspectCallId)),
-  [completeInspection.eventNodes, inspectCallId])
-  useEffect(() => {
-    if (inspectNodeIndex < 0 || inspectNodeIndex >= historyStartIndex) return
-    setHistoryNodeLimit(limit => limit + historyStartIndex - inspectNodeIndex)
-  }, [historyStartIndex, inspectNodeIndex])
   const requestNumbers = useMemo<readonly TrajectoryRequestNumber[]>(() => {
     const assistantsByStep = new Map<string, AssistantMessageNode>()
-    for (const node of completeInspection.eventNodes) {
+    for (const node of nodes) {
       if (node.kind !== 'assistant' || node.step <= 0) continue
       assistantsByStep.set(`${node.turn}\u0000${node.step}`, node)
     }
     const requestsByStep = new Map(
-      completeInspection.requests
+      requests
         .filter(request => request.purpose === 'assistant')
         .map(request => [
           `${request.turn}\u0000${request.step}`,
@@ -222,7 +166,7 @@ export function TrajectoryView({
         ]),
     )
     const orderedRequests = [
-      ...completeInspection.requests.map(request => ({
+      ...requests.map(request => ({
         seq: request.startSeq,
         request,
         node: request.purpose === 'assistant'
@@ -257,13 +201,12 @@ export function TrajectoryView({
           seq: entry.seq,
           turn,
           step,
-          group: t('group.step', { step }),
+          group: `Step ${step}`,
           number: index + 1,
           ...(request?.status === undefined ? {} : { status: request.status }),
           ...(request?.startedAt === undefined ? {} : { startedAt: request.startedAt }),
           ...(request?.completedAt === undefined ? {} : { completedAt: request.completedAt }),
           ...(request?.error === undefined ? {} : { error: request.error }),
-          ...(request?.errorCode === undefined ? {} : { errorCode: request.errorCode }),
           ...(request?.resultSeq === undefined ? {} : { resultSeq: request.resultSeq }),
           ...(request?.retry === undefined ? {} : { retry: request.retry }),
           ...(request?.maxRetries === undefined ? {} : { maxRetries: request.maxRetries }),
@@ -283,14 +226,13 @@ export function TrajectoryView({
         seq: request.startSeq,
         turn: request.turn,
         step: 0,
-        group: t('group.compaction', { seq: request.startSeq }),
+        group: `Compaction ${request.startSeq}`,
         number: index + 1,
         purpose: 'compaction',
         status: request.status,
         startedAt: request.startedAt,
         completedAt: request.completedAt,
         ...(request.error === undefined ? {} : { error: request.error }),
-        ...(request.errorCode === undefined ? {} : { errorCode: request.errorCode }),
         resultSeq: request.startSeq,
         ...(request.provenance?.provider === undefined
           ? {}
@@ -306,7 +248,7 @@ export function TrajectoryView({
 
     return numbered
   }, [
-    completeInspection.eventNodes, completeInspection.requests, t,
+    nodes, requests,
   ])
   const partialTurn = partial?.turn ?? null
   const partialStep = partial?.step ?? null
@@ -319,16 +261,15 @@ export function TrajectoryView({
         : { turn: partialTurn, step: partialStep, blocks: [] },
       runningCalls,
       requests,
-      systemPrompts: inspection.systemPrompts,
       callSchemas,
-    }, t)
+    })
     return { turns, lastIndex: lastCellIndex(turns) }
   }, [
     nodes, eventLocations, partialTurn, partialStep,
-    runningCalls, requests, inspection.systemPrompts, callSchemas, t,
+    runningCalls, requests, callSchemas,
   ])
   const timelinePartialSignature = partialStructureSignature(partial)
-  const timelinePartial = useMemo<TrajectorySnapshot['partial']>(() => partial === null
+  const timelinePartial = useMemo<ConversationSnapshot['partial']>(() => partial === null
     ? null
     : {
       turn: partial.turn,
@@ -337,15 +278,15 @@ export function TrajectoryView({
     },
   [partialStep, partialTurn, timelinePartialSignature])
   const timelineTurns = useMemo(
-    () => appendTrajectoryPartialLayout(finalized.turns, timelinePartial, finalized.lastIndex, t),
-    [finalized, timelinePartial, t],
+    () => appendTrajectoryPartialLayout(finalized.turns, timelinePartial, finalized.lastIndex),
+    [finalized, timelinePartial],
   )
   const timelineMode: TrajectoryTimelineMode = actualDuration
     ? actualTime ? 'actual' : 'duration'
     : actualTime ? 'time' : 'sequence'
   const partialSearchTurns = useMemo(
-    () => appendTrajectoryPartialLayout([], partial, finalized.lastIndex, t),
-    [finalized.lastIndex, partial, t],
+    () => appendTrajectoryPartialLayout([], partial, finalized.lastIndex),
+    [finalized.lastIndex, partial],
   )
   const searchLayouts = useMemo(
     () => [finalized.turns, partialSearchTurns] as const,
@@ -498,11 +439,9 @@ export function TrajectoryView({
     })
   }
 
-  const loadEarlierHistory = useCallback(async () => {
-    if (!hasResidentOlderHistory && !await loadOlder()) return false
-    setHistoryNodeLimit(limit => limit + HISTORY_PAGE_NODES)
-    return true
-  }, [hasResidentOlderHistory, loadOlder])
+  const loadEarlierHistory = useCallback(() => {
+    return loadOlder()
+  }, [loadOlder])
 
   return (
     <div className={css.root} data-conversation-composer-overlay="">
@@ -526,7 +465,6 @@ export function TrajectoryView({
         t={t}
       />
       <TrajectoryTimeline
-        t={t}
         turns={timelineTurns}
         mode={timelineMode}
         range={timelineRange}
@@ -540,8 +478,6 @@ export function TrajectoryView({
       />
       <div className={css.ledger}>
         <TrajectoryTable
-          t={t}
-          renderImages={renderImages}
           requestNumbers={requestNumbers}
           turns={timelineTurns}
           streamingCells={streamingCells}
@@ -561,8 +497,8 @@ export function TrajectoryView({
           onToggleTurn={toggleTurn}
           collapsedAssistants={collapsedAssistants}
           onToggleAssistant={toggleAssistant}
-          inspectCallId={inspectCallId}
-          onInspectApplied={completeViewRequest}
+          inspectCallId={inspect?.callId ?? null}
+          onInspectApplied={onInspectDone}
         />
       </div>
     </div>

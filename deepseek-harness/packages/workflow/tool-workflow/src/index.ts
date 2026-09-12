@@ -15,8 +15,7 @@ import z from '@deepseek-ai/schemastery'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolCallView, ToolResultView } from '@deepseek-ai/dsh-tools'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { Session, SessionEventMap } from '@deepseek-ai/dsh-session'
-import type { JsonValue } from '@deepseek-ai/dsh-util-values'
+import type { JsonValue, Session, SessionEventMap } from '@deepseek-ai/dsh-session'
 import type {
   WorkflowResult, WorkflowRun, WorkflowRunId, WorkflowStopReason,
 } from '@deepseek-ai/dsh-workflow'
@@ -24,6 +23,8 @@ import type {
   ToolWorkflowAgentEndData, ToolWorkflowAgentStartData,
   ToolWorkflowRunEndData, ToolWorkflowRunStartData,
 } from './types.ts'
+// Declaration merge only: makes ctx.systemPrompt visible for the section registration.
+import type {} from '@deepseek-ai/dsh-system-prompt'
 
 export const name = 'tool-workflow'
 export const inject = ['tools', 'workflowEngine', 'systemPrompt']
@@ -210,7 +211,7 @@ export function apply(ctx: Context, config: Config): void {
   // lives in tool plugins as prompt sections, not in the deployment persona).
   ctx.systemPrompt.section({
     name: `tool:${toolName}`,
-    order: ctx.systemPrompt.getSectionOrder('TOOL_WORKFLOW'),
+    order: 115,
     text: `Use the ${toolName} tool ONLY when the user explicitly asks for a workflow or for large multi-agent orchestration: you write a JavaScript script (the tool description documents the exact format) that fans work out across many subagents with phases and structured results. For one or two delegations, prefer plain subagent calls.`,
   })
   ctx.tools.register(defineTool({

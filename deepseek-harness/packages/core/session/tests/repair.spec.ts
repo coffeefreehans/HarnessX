@@ -1,24 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { ToolCallId , createMessage, createToolResultMessage } from '@deepseek-ai/dsh-llm'
-import { interruptedTurnClosers as repairInterruptedTurn, SessionSeq, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from '../src/index.ts'
-import type { SessionEvent as LogicalSessionEvent, SurfaceEvent } from '../src/index.ts'
-
-interface SessionEvent {
-  type: string
-  seq: number
-  time: number
-  data: unknown
-  [key: string]: unknown
-}
-
-function interruptedTurnClosers(events: readonly SessionEvent[]): LogicalSessionEvent[] {
-  for (const event of events) SessionSeq(event.seq)
-  return repairInterruptedTurn(events as unknown as readonly LogicalSessionEvent[])
-}
+import { CallId , createMessage, createToolResultMessage } from '@deepseek-ai/dsh-llm'
+import { interruptedTurnClosers, TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from '../src/index.ts'
+import type { SessionEvent, SurfaceEvent } from '../src/index.ts'
 
 /**
  * Unit coverage for the crash-recovery closer synthesis. The persistence
- * contract exercises it end-to-end through the real JSONL provider; these tests pin the
+ * contract exercises it end-to-end through both backends; these tests pin the
  * pure function's branches directly — especially the synthetic error
  * `tool/result` for a tool call the crash left unanswered (without it a
  * resumed session replays a dangling assistant tool-call and the provider
@@ -70,7 +57,7 @@ describe('interruptedTurnClosers', () => {
           role: 'assistant',
           content: [
             { type: 'text', text: 'calling a tool' },
-            { type: 'tool-call', id: ToolCallId('call-1'), name: 'bash', arguments: '{}' },
+            { type: 'tool-call', id: CallId('call-1'), name: 'bash', arguments: '{}' },
           ],
           source: {
             kind: 'model',
@@ -88,7 +75,7 @@ describe('interruptedTurnClosers', () => {
       turn: 2,
       step: 1,
       message: {
-        source: { callId: ToolCallId('call-1') },
+        source: { callId: CallId('call-1') },
         content: [{ isError: true }],
       },
       error: { code: TOOL_NOT_STARTED },
@@ -107,7 +94,7 @@ describe('interruptedTurnClosers', () => {
         message: createMessage({
           role: 'assistant',
           content: [
-            { type: 'tool-call', id: ToolCallId('call-1'), name: 'bash', arguments: '{}' },
+            { type: 'tool-call', id: CallId('call-1'), name: 'bash', arguments: '{}' },
           ],
           source: {
             kind: 'model',
@@ -118,7 +105,7 @@ describe('interruptedTurnClosers', () => {
       { type: 'tool/result', seq: 3, time: 3, data: {
         turn: 2, step: 1,
         message: createToolResultMessage({
-          callId: ToolCallId('call-1'),
+          callId: CallId('call-1'),
           content: [{ type: 'text', text: 'ok' }],
           isError: false,
         }),
@@ -138,7 +125,7 @@ describe('interruptedTurnClosers', () => {
         message: createMessage({
           role: 'assistant',
           content: [
-            { type: 'tool-call', id: ToolCallId('call-1'), name: 'bash', arguments: '{}' },
+            { type: 'tool-call', id: CallId('call-1'), name: 'bash', arguments: '{}' },
           ],
           source: {
             kind: 'model',
@@ -165,7 +152,7 @@ describe('interruptedTurnClosers', () => {
         message: createMessage({
           role: 'assistant',
           content: [
-            { type: 'tool-call', id: ToolCallId('old-call'), name: 'bash', arguments: '{}' },
+            { type: 'tool-call', id: CallId('old-call'), name: 'bash', arguments: '{}' },
           ],
           source: {
             kind: 'model',
@@ -176,7 +163,7 @@ describe('interruptedTurnClosers', () => {
       { type: 'tool/result', seq: 3, time: 3, data: {
         turn: 1, step: 1,
         message: createToolResultMessage({
-          callId: ToolCallId('old-call'),
+          callId: CallId('old-call'),
           content: [],
           isError: false,
         }),
@@ -190,7 +177,7 @@ describe('interruptedTurnClosers', () => {
         message: createMessage({
           role: 'assistant',
           content: [
-            { type: 'tool-call', id: ToolCallId('new-call'), name: 'bash', arguments: '{}' },
+            { type: 'tool-call', id: CallId('new-call'), name: 'bash', arguments: '{}' },
           ],
           source: {
             kind: 'model',
@@ -214,8 +201,8 @@ describe('interruptedTurnClosers', () => {
         message: createMessage({
           role: 'assistant',
           content: [
-            { type: 'tool-call', id: ToolCallId('call-a'), name: 'bash', arguments: '{}' },
-            { type: 'tool-call', id: ToolCallId('call-b'), name: 'bash', arguments: '{}' },
+            { type: 'tool-call', id: CallId('call-a'), name: 'bash', arguments: '{}' },
+            { type: 'tool-call', id: CallId('call-b'), name: 'bash', arguments: '{}' },
           ],
           source: {
             kind: 'model',
@@ -227,7 +214,7 @@ describe('interruptedTurnClosers', () => {
       { type: 'tool/result', seq: 3, time: 3, data: {
         turn: 1, step: 1,
         message: createToolResultMessage({
-          callId: ToolCallId('call-a'),
+          callId: CallId('call-a'),
           content: [],
           isError: false,
         }),
@@ -248,7 +235,7 @@ describe('interruptedTurnClosers', () => {
         message: createMessage({
           role: 'assistant',
           content: [
-            { type: 'tool-call', id: ToolCallId('call-1'), name: 'bash', arguments: '{}' },
+            { type: 'tool-call', id: CallId('call-1'), name: 'bash', arguments: '{}' },
           ],
           source: {
             kind: 'model',
@@ -256,7 +243,7 @@ describe('interruptedTurnClosers', () => {
           },
         }),
       } },
-      { type: 'tool/call', seq: 3, time: 3, data: { turn: 1, step: 1, callId: ToolCallId('call-1'), name: 'bash', arguments: '{}' } },
+      { type: 'tool/call', seq: 3, time: 3, data: { turn: 1, step: 1, callId: CallId('call-1'), name: 'bash', arguments: '{}' } },
     ]
     const closers = interruptedTurnClosers(events)
     expect(closers.map(e => e.type)).toEqual(['tool/result', 'step/end', 'turn/end'])
@@ -279,7 +266,7 @@ describe('interruptedTurnClosers', () => {
     const events: SessionEvent[] = [
       userTurnStart(1, 0),
       { type: 'step/start', seq: 1, time: 1, data: { turn: 1, step: 1 } },
-      { type: 'tool/call', seq: 2, time: 2, data: { turn: 1, step: 1, callId: ToolCallId('orphan'), name: 'bash', arguments: '{}' } },
+      { type: 'tool/call', seq: 2, time: 2, data: { turn: 1, step: 1, callId: CallId('orphan'), name: 'bash', arguments: '{}' } },
     ]
     const closers = interruptedTurnClosers(events)
     // No pending calls → no synthetic tool/result, just step/end + turn/end.

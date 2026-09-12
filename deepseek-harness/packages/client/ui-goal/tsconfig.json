@@ -18,19 +18,10 @@
       "path": "../../api/remotes/tsconfig.client.json"
     },
     {
-      "path": "../../api/session-controller/tsconfig.client.json"
-    },
-    {
-      "path": "../ui-chat"
+      "path": "../runtime"
     },
     {
       "path": "../ui-conversation"
-    },
-    {
-      "path": "../ui-renderer"
-    },
-    {
-      "path": "../ui-session"
     },
     {
       "path": "../ui-primitives"
@@ -45,7 +36,7 @@
       "path": "../../goal/goal"
     },
     {
-      "path": "../../typert/protocol"
+      "path": "../../runtime-diagnostics/invariants"
     }
   ]
 }

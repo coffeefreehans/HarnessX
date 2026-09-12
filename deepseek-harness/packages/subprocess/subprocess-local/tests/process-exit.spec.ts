@@ -15,8 +15,7 @@ interface TreeState { root: number; descendant: number }
 
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
 const hostScript = fileURLToPath(new URL('./fixtures/process-exit-host.ts', import.meta.url))
-const scenarioTimeoutMs = process.platform === 'win32' ? 60_000 : 30_000
-const testTimeoutMs = scenarioTimeoutMs + 15_000
+const scenarioTimeoutMs = 30_000
 
 function processExists(pid: number): boolean {
   try {
@@ -43,7 +42,7 @@ async function readTree(path: string): Promise<TreeState> {
 async function captureIdentities(inspector: ProcessInspector, state: TreeState): Promise<ProcessIdentity[]> {
   return vi.waitFor(() => {
     const expected = new Set([state.root, state.descendant])
-    const identities = inspector.snapshot().tree(state.root).filter(identity => expected.has(identity.pid))
+    const identities = inspector.processTree(state.root).filter(identity => expected.has(identity.pid))
     if (identities.length !== expected.size) throw new Error('managed tree is not fully observable yet')
     return identities
   }, { interval: 10, timeout: scenarioTimeoutMs })
@@ -142,7 +141,7 @@ describe('synchronous cleanup on host exit', () => {
     { trigger: 'direct' as const, expectedCode: 23, diagnostic: undefined },
     { trigger: 'uncaught-exception' as const, expectedCode: 1, diagnostic: 'host-exit-uncaught-exception' },
     { trigger: 'unhandled-rejection' as const, expectedCode: 1, diagnostic: 'host-exit-unhandled-rejection' },
-  ])('removes an ordinary managed tree after $trigger', { timeout: testTimeoutMs }, async ({
+  ])('removes an ordinary managed tree after $trigger', { timeout: 45_000 }, async ({
     trigger,
     expectedCode,
     diagnostic,
@@ -155,7 +154,7 @@ describe('synchronous cleanup on host exit', () => {
 
   it.skipIf(process.platform === 'win32')(
     'removes a terminal root and descendant after direct exit',
-    { timeout: testTimeoutMs },
+    { timeout: 45_000 },
     async () => {
       const { outcome } = await runScenario('terminal', 'direct')
       expect(outcome.exitCode).toBe(23)
@@ -163,7 +162,7 @@ describe('synchronous cleanup on host exit', () => {
     },
   )
 
-  it('preserves normal terminate-and-join disposal and removes the exit listener', { timeout: testTimeoutMs }, async () => {
+  it('preserves normal terminate-and-join disposal and removes the exit listener', { timeout: 45_000 }, async () => {
     const { outcome, disposeCounts } = await runScenario('ordinary', 'dispose')
     expect(outcome.exitCode).toBe(0)
     expect(disposeCounts?.listenersAfterLoad).toBe((disposeCounts?.listenersBefore ?? 0) + 1)

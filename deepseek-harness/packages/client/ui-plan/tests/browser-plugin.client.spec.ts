@@ -7,10 +7,9 @@
  */
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it, vi } from 'vitest'
-import { SlotRegistry } from '@deepseek-ai/dsh-client-ui-renderer/client'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { SlotRegistry } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
-import { RemoteError } from '@deepseek-ai/dsh-client-test-runtime'
 import { PlanChip } from '../src/client/PlanModeControl.tsx'
 import type { PlanChipInjected } from '../src/client/index.ts'
 import { apply, inject } from '../src/client/index.ts'
@@ -75,9 +74,9 @@ describe('ui-plan browser apply', () => {
     // reports the RPC failure in its error branch.
     b.execute.mockResolvedValueOnce({
       ok: false,
-      error: new RemoteError('session/not-found', 'gone', { sessionId: SID }),
+      error: { code: 'session-not-found', message: 'gone', details: {} },
     } as never)
-    await expect(injected.exitPlanMode()).resolves.toBe('gone (session/not-found)')
+    await expect(injected.exitPlanMode()).resolves.toBe('gone (session-not-found)')
 
     // Unmatched admission (plan-mode not composed host-side) is also a failure line.
     b.execute.mockResolvedValueOnce({ ok: true, value: undefined } as never)

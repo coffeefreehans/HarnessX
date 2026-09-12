@@ -1,3 +1,9 @@
+/* Geometry mirrors CodeBlock/TerminalBlock (12px radius, code-block surface,
+   16px vertical margin) so a web card, a terminal card, and a fenced code block
+   read as one family. A source list is prose, not aligned output, so each row
+   wraps horizontally rather than scrolling sideways like a terminal card; the
+   list as a whole scrolls vertically within a capped height (see .sources). */
+
 .block {
   --dsl-web-radius: 12px;
 
@@ -52,27 +58,14 @@
 }
 
 .sourceLink {
-  color: var(--dsw-alias-link);
+  color: var(--dsw-alias-state-business-primary);
   font-size: 14px;
-  font-weight: 500;
   line-height: 20px;
   word-break: break-word;
-  text-decoration: none;
 }
 
-/* Leading URL glyph inside source and fetch links; rides the link color.
-   1.1em follows each link's own font size. */
-.linkIcon {
-  width: 1.1em;
-  height: 1.1em;
-  vertical-align: -0.25em;
-  margin-right: 5px;
-}
-
-.sourceLink:hover,
-.sourceLink:focus-visible {
-  text-decoration: underline dotted;
-  text-underline-offset: 3px;
+.sourceLink:hover {
+  text-decoration: underline;
 }
 
 .snippet {
@@ -108,19 +101,15 @@
 }
 
 .fetchUrl {
-  color: var(--dsw-alias-link);
+  color: var(--dsw-alias-state-business-primary);
   font-family: var(--ds-font-family-code);
   font-size: 13px;
-  font-weight: 500;
   line-height: 19px;
   word-break: break-all;
-  text-decoration: none;
 }
 
-.fetchUrl:hover,
-.fetchUrl:focus-visible {
-  text-decoration: underline dotted;
-  text-underline-offset: 3px;
+.fetchUrl:hover {
+  text-decoration: underline;
 }
 
 .fetchMeta {

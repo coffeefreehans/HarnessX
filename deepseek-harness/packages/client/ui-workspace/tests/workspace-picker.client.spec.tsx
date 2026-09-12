@@ -1,22 +1,15 @@
 // @vitest-environment jsdom
-import type { GlobalStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
 import type {
-  WorkspaceId, WorkspaceSnapshot, WorkspaceView,
-} from '@deepseek-ai/dsh-api-workspace-controller/client'
-import type {} from '@deepseek-ai/dsh-client-locale/client'
-import { bindSnapshotSelector, makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
+  SessionListState, WorkspaceId, WorkspaceListState, WorkspaceView,
+} from '@deepseek-ai/dsh-client-runtime/client'
+import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
-import type { SessionPendingInteractionSnapshot } from '@deepseek-ai/dsh-client-ui-session/client'
 import type { DirectoryFlowOwnerProps, WorkspacePickerProps } from '../src/client/contract/slots.ts'
+import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
 import { WorkspacePicker } from '../src/client/WorkspacePicker.tsx'
 import { zh } from '../src/client/locales.ts'
-
-// Every fixture carries the resource hook the resources plugin merges into GlobalStandardProps.
-const useResource = (() => ({ status: 'none' as const, value: undefined, failure: undefined, reload: () => {} })) as GlobalStandardProps['useResource']
-const usePanelInfo: GlobalStandardProps['usePanelInfo'] = selector => selector({ activePanelId: null })
 
 afterEach(cleanup)
 
@@ -37,9 +30,9 @@ function hook<T>(snapshot: T) {
 const sessions: SessionListState = {
   ids: [], byId: {}, current: undefined, phase: 'ready', subagentsByParent: {}, jobsBySession: {}, currentAddress: undefined,
 }
-const noPendingInteraction: SessionPendingInteractionSnapshot = new Map()
-const workspaceState = (items: readonly WorkspaceView[]): WorkspaceSnapshot => ({
-  items, archivedSessionIds: [], state: 'idle', phase: 'ready', error: null,
+const workspaceState = (items: readonly WorkspaceView[]): WorkspaceListState => ({
+  items, archivedSessionIds: [], state: 'idle', phase: 'ready', error: null, baselinesReady: true,
+  recentWorkspaceId: items[0]?.workspaceId,
 })
 function anchor(): { current: HTMLElement } {
   const element = document.createElement('button')
@@ -98,8 +91,6 @@ function mount(
       open
       anchorRef={anchorRef}
       useSessions={hook(sessions)}
-      useSessionPendingInteraction={hook(noPendingInteraction)}
-      usePanelInfo={usePanelInfo} useResource={useResource}
       useWorkspaces={hook(workspaceState(nextItems))}
       onPick={onPick}
       onClose={onClose}
@@ -220,8 +211,6 @@ describe('WorkspacePicker', () => {
     render(
       <WorkspacePicker
         open useSessions={hook(sessions)} useWorkspaces={hook(workspaceState([workspace('alpha', 'Alpha')]))}
-        useSessionPendingInteraction={hook(noPendingInteraction)}
-        usePanelInfo={usePanelInfo} useResource={useResource}
         onPick={vi.fn()} onClose={vi.fn()} createWorkspace={vi.fn()}
         useDirectoryFlow={occupancySource().useDirectoryFlow} renderSlot={renderSlot} t={t}
       />,
@@ -230,15 +219,13 @@ describe('WorkspacePicker', () => {
   })
 
   it('keeps the menu up while the list baseline is still in flight', () => {
-    const state: WorkspaceSnapshot = {
-      ...workspaceState([]), phase: 'pending', state: 'loading',
+    const state: WorkspaceListState = {
+      ...workspaceState([]), phase: 'pending', state: 'loading', baselinesReady: false,
     }
     const { renderSlot } = flowProbe()
     render(
       <WorkspacePicker
         open anchorRef={anchor()} useSessions={hook(sessions)} useWorkspaces={hook(state)}
-        useSessionPendingInteraction={hook(noPendingInteraction)}
-        usePanelInfo={usePanelInfo} useResource={useResource}
         onPick={vi.fn()} onClose={vi.fn()} createWorkspace={vi.fn()}
         useDirectoryFlow={occupancySource().useDirectoryFlow} renderSlot={renderSlot} t={t}
       />,

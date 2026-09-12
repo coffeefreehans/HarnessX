@@ -205,7 +205,10 @@ export class ScheduleRuntime {
   /** Fold the current exact runtime suffix and contain a corrupt durable stream. */
   private readFolded(): FoldedSchedules | undefined {
     try {
-      return foldScheduleEvents(this.agent.session.ownEvents())
+      return foldScheduleEvents(
+        this.agent.session.events,
+        this.agent.session.header.seedLength ?? 0,
+      )
     } catch (error: unknown) {
       this.faulted = true
       const detail = error instanceof ScheduleLogError ? error.message : renderThrown(error)

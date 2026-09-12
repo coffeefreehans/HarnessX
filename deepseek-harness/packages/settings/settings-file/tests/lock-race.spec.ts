@@ -6,6 +6,7 @@ import z from '@deepseek-ai/schemastery'
 import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { FileSettingsProvider } from '../src/index.ts'
 
 const state = vi.hoisted(() => ({
@@ -75,7 +76,7 @@ describe('writer-lock failure cleanup', () => {
     cleanups.push(async () => { await fiber.dispose() })
     await fiber
     const settings = ctx.settings
-    settings.register('alpha', AlphaSchema)
+    settings.register(settingsNamespace('alpha'), AlphaSchema)
     const published: number[] = []
     ctx.on('settings/document-updated', (_ns, revision) => { published.push(revision) })
     let markStarted!: () => void
@@ -115,7 +116,7 @@ describe('writer-lock failure cleanup', () => {
     const path = join(dir, 'settings.yaml')
     await writeFile(path, 'alpha:\n  value: 1\n')
     const ctx = await boot({ path, watch: false })
-    const scope = ctx.settings.register('alpha', AlphaSchema)
+    const scope = ctx.settings.register(settingsNamespace('alpha'), AlphaSchema)
     state.failTempWrite = true
     await expect(scope.update({ value: 9 })).rejects.toThrow(/ENOSPC/)
     // The document is untouched and the writer lock was released on the way out.

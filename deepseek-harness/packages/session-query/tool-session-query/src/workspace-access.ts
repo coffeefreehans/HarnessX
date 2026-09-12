@@ -5,26 +5,24 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { brandString } from '@deepseek-ai/dsh-brand'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
 import {
+  SessionId,
+  type SessionEvent,
   type SessionHeader,
   type SessionId as SessionIdValue,
 } from '@deepseek-ai/dsh-session'
-import type { TurnBoundaryProjection } from '@deepseek-ai/dsh-agent'
 import type {
   SessionLineageNode,
   SessionRecord,
 } from '@deepseek-ai/dsh-session-query'
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
-import type {} from '@deepseek-ai/dsh-session-projection'
 import { serviceBoundary } from './service-boundary.ts'
 
 interface Caller {
   readonly id: SessionIdValue
   readonly header: SessionHeader
-  /** The caller's own-session boundary fold (the `turnBoundary` projection). */
-  readonly boundary: TurnBoundaryProjection | undefined
+  readonly events: readonly SessionEvent[]
 }
 
 interface TitleView {
@@ -53,7 +51,7 @@ interface DescendantVisit {
   readonly next: DescendantVisit | undefined
 }
 
-function callerOf(exec: ToolRunContext, ctx: Context): Caller {
+function callerOf(exec: ToolRunContext): Caller {
   const agent = exec.agent
   if (agent === undefined) {
     throw new HarnessError(
@@ -64,12 +62,12 @@ function callerOf(exec: ToolRunContext, ctx: Context): Caller {
   return {
     id: agent.session.id,
     header: agent.session.header,
-    boundary: ctx.sessionProjections.stateOf(agent.session, 'turnBoundary'),
+    events: agent.session.events,
   }
 }
 
 function targetId(args: { readonly session_id?: string }, caller: Caller): SessionIdValue {
-  return args.session_id === undefined ? caller.id : brandString<SessionIdValue>(args.session_id)
+  return args.session_id === undefined ? caller.id : SessionId(args.session_id)
 }
 
 async function authorizeTarget(

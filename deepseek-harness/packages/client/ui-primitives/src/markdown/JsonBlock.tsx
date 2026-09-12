@@ -5,12 +5,17 @@ import css from './JsonBlock.module.css'
 
 const MAX_CHARS = 20_000
 
-export function JsonBlock({ label, payload, defaultOpen = false, truncatedLabel }: {
+/** Default truncation footer; the owner passes a localized formatter. */
+function defaultTruncatedLabel(total: number): string {
+  return `… 已截断，共 ${total} 字符`
+}
+
+export function JsonBlock({ label, payload, defaultOpen = false, truncatedLabel = defaultTruncatedLabel }: {
   label: string
   payload: unknown
   defaultOpen?: boolean
   /** Footer appended when the body exceeds the char cap, given the full length (this package is cordis-free, so copy arrives via props). */
-  truncatedLabel: (total: number) => string
+  truncatedLabel?: ((total: number) => string) | undefined
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const body = useMemo(() => {

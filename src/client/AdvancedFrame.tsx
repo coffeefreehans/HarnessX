@@ -1,0 +1,180 @@
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import type { ReactNode } from 'react'
+import type { PropsRenderSlots, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type {} from '@deepseek-ai/dsh-client-ui-sidebar/client'
+import type {} from './contracts.ts'
+import type { DesktopClientPlatform } from './environment.ts'
+import {
+  computeDesktopColumns, DesktopLayoutState, MACOS_SIDEBAR_COLLAPSED,
+  SIDEBAR_AUTO_COLLAPSE, SIDEBAR_COLLAPSED, SIDEBAR_DEFAULT,
+} from './layout-state.ts'
+import { noteWorkbenchSession, noteWorkbenchSessionCwd, noteWorkbenchWorkspacePath, WorkbenchDock, WorkbenchToggleButton } from './workbench.tsx'
+import {
+  WORKBENCH_WIDTH_MAX,
+  WORKBENCH_WIDTH_MIN,
+  type WorkbenchState,
+} from './workbench-state.ts'
+
+/** Private values assembled by the advanced-shell registration. */
+export interface AdvancedFrameInjected {
+  /** Desktop-owned panel state exposed through the standard layout service. */
+  layout: DesktopLayoutState
+  /** Host platform controlling native title-bar spacing. */
+  platform: DesktopClientPlatform
+  /** Right-hand tool dock state (explorer/terminal/git/browser). */
+  workbench: WorkbenchState
+}
+
+/** Full advanced root slot props. */
+export type AdvancedFrameProps = PropsRuntime<'root'>
+  & PropsRenderSlots<'sidebar' | 'conversation' | 'details' | 'shell.overlay'>
+  & AdvancedFrameInjected
+
+/** Product name occupying the sidebar's documented brand-name seat. */
+export function DesktopBrandName(_props: PropsRuntime<'sidebar.brand.name'>): ReactNode {
+  return 'HARNESSX'
+}
+
+/** Desktop-owned transparent frame around the unchanged product surfaces. */
+export function AdvancedFrame({ layout, platform, workbench, renderSlot, useSessions, useWorkspaces }: AdvancedFrameProps) {
+  const subscribeLayout = useCallback((listener: () => void) => layout.subscribe(listener), [layout])
+  const readLayout = useCallback(() => layout.getSnapshot(), [layout])
+  const panels = useSyncExternalStore(subscribeLayout, readLayout)
+  const subscribeWorkbench = useCallback((listener: () => void) => workbench.subscribe(listener), [workbench])
+  const readWorkbench = useCallback(() => workbench.getSnapshot(), [workbench])
+  const bench = useSyncExternalStore(subscribeWorkbench, readWorkbench)
+  const frameRef = useRef<HTMLDivElement>(null)
+  const [viewport, setViewport] = useState(() => window.innerWidth)
+  const detailsSession = useSessions((state) => {
+    const current = state.current
+    return current !== undefined && state.byId[current]?.blank === false ? current : undefined
+  })
+  // Dock panels (explorer/terminal/git/aux chat) follow the session the main
+  // window is showing.
+  const currentSession = useSessions((state) => state.current)
+  useEffect(() => { noteWorkbenchSession(currentSession) }, [currentSession])
+  // The session store carries the live working directory; feeding it straight
+  // to the dock flips the workspace the instant the user switches conversations.
+  const currentSessionCwd = useSessions((state) => {
+    const current = state.current
+    return current !== undefined ? state.byId[current]?.cwd : undefined
+  })
+  useEffect(() => { noteWorkbenchSessionCwd(currentSessionCwd) }, [currentSessionCwd])
+  // The workspaces store is the same source the composer's workspace picker
+  // reads; it names a workspace for a blank session (New Session flow) whose
+  // cwd the session store only learns once the session runs. Priority inside
+  // the dock still favors an absolute session cwd.
+  const storeWorkspacePath = useWorkspaces((state) => {
+    const owner = currentSession !== undefined
+      ? state.items.find(item => item.sessionIds.includes(currentSession))
+      : undefined
+    const recent = state.recentWorkspaceId !== undefined
+      ? state.items.find(item => item.workspaceId === state.recentWorkspaceId)
+      : undefined
+    return (owner ?? recent ?? state.items[0])?.path
+  })
+  useEffect(() => { noteWorkbenchWorkspacePath(storeWorkspacePath) }, [storeWorkspacePath])
+
+  useEffect(() => {
+    const element = frameRef.current
+    if (element === null) return
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry !== undefined && entry.contentRect.width > 0) setViewport(entry.contentRect.width)
+    })
+    observer.observe(element)
+    return () => { observer.disconnect() }
+  }, [])
+
+  const narrow = viewport < SIDEBAR_AUTO_COLLAPSE
+  useEffect(() => { layout.setNarrow(narrow) }, [layout, narrow])
+
+  const previousSession = useRef(detailsSession)
+  useEffect(() => {
+    if (detailsSession !== undefined && previousSession.current !== undefined && previousSession.current !== detailsSession) {
+      layout.closeDetails()
+    }
+    previousSession.current = detailsSession
+  }, [detailsSession, layout])
+
+  const collapsed = panels.narrow ? !panels.narrowExpanded : panels.sidebar === 0
+  const sidebarPreference = collapsed ? 0 : panels.sidebar === 0 ? SIDEBAR_DEFAULT : panels.sidebar
+  // The dock may take most of the window, but the product columns always
+  // keep a usable strip; on small windows the state clamp floor applies.
+  const requestedWorkbenchWidth = Math.round(bench.width)
+  const workbenchWidth = bench.open
+    ? Math.min(WORKBENCH_WIDTH_MAX, Math.max(WORKBENCH_WIDTH_MIN, Math.min(requestedWorkbenchWidth, viewport - 360)))
+    : 0
+  // The workbench dock owns the fourth column; the three product columns lay
+  // out within whatever width remains.
+  const columns = computeDesktopColumns(
+    viewport - workbenchWidth,
+    sidebarPreference,
+    detailsSession === undefined ? 0 : panels.details,
+    platform === 'darwin' ? MACOS_SIDEBAR_COLLAPSED : SIDEBAR_COLLAPSED,
+  )
+
+  return (
+    <div
+      ref={frameRef}
+      className="dshDesktopFrame"
+      data-desktop-platform={platform}
+      data-sidebar-collapsed={collapsed || undefined}
+      style={{ gridTemplateColumns: `${columns.sidebar}px minmax(0, 1fr) ${columns.details}px ${workbenchWidth}px` }}
+    >
+      {platform === 'darwin' && <div className="dshDesktopMacCaptionRow" aria-hidden="true" />}
+      {platform === 'win32' && <div className="dshDesktopWindowsCaptionRow" aria-hidden="true" />}
+      <WorkbenchToggleButton state={workbench} />
+      <aside className="dshDesktopSidebarSurface">
+        <div className="dshDesktopUpstreamSidebar">
+          {renderSlot('sidebar', { collapsed, width: columns.sidebar })}
+        </div>
+      </aside>
+      <main className="dshDesktopConversationSurface">{renderSlot('conversation', {})}</main>
+      <aside className="dshDesktopDetailsSurface">{renderSlot('details', {})}</aside>
+      <WorkbenchDock state={workbench} />
+      <div className="dshDesktopOverlay" data-shell-overlay>
+        {renderSlot('shell.overlay', {})}
+      </div>
+      {!collapsed && (
+        <ResizeHandle
+          side="sidebar"
+          left={columns.sidebar}
+          size={columns.sidebar}
+          onResize={(width) => { layout.setSidebar(width) }}
+        />
+      )}
+      {columns.details > 0 && (
+        <ResizeHandle
+          side="details"
+          left={viewport - columns.details}
+          size={columns.details}
+          onResize={(width) => { layout.setDetails(width) }}
+        />
+      )}
+    </div>
+  )
+}
+
+function ResizeHandle(props: { side: 'sidebar' | 'details'; left: number; size: number; onResize: (width: number) => void }) {
+  const origin = useRef(0)
+  const base = useRef(0)
+  const onPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    origin.current = event.clientX
+    base.current = props.size
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }, [props.size])
+  const onPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+    const delta = event.clientX - origin.current
+    props.onResize(base.current + (props.side === 'sidebar' ? delta : -delta))
+  }, [props])
+  return (
+    <div
+      className="dshDesktopResizeHandle"
+      data-side={props.side}
+      style={{ left: props.left }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+    />
+  )
+}

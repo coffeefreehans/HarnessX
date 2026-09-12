@@ -1,17 +1,17 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import { CallId } from '@deepseek-ai/dsh-llm'
 import { ShellExecutor } from '@deepseek-ai/dsh-shell'
 import type { ShellExecRequest, ShellExecSpec, ShellProcess, ShellProcessRead, ShellRunResult } from '@deepseek-ai/dsh-shell'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime, { TOOL_ABORTED, TOOL_ABORTED_BEFORE_DISPATCH } from '@deepseek-ai/dsh-tools'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { turnBoundaryProjectionDefinition } from '@deepseek-ai/dsh-agent-loop'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
+import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import LocalJobRegistry from '@deepseek-ai/dsh-jobs-local'
 import * as ToolTasks from '@deepseek-ai/dsh-tool-jobs'
 import ApprovalService from '@deepseek-ai/dsh-user-approval'
@@ -19,7 +19,6 @@ import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import { LocalBashExecutor } from '@deepseek-ai/dsh-bash-local'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import SandboxPolicyService from '@deepseek-ai/dsh-sandbox-policy'
-import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import * as ToolBash from '@deepseek-ai/dsh-tool-bash'
 import * as BashEnvPlugin from '@deepseek-ai/dsh-shell-env'
 import { processOutcome } from '../src/background.ts'
@@ -28,10 +27,6 @@ import { renderProcessRead, renderResult } from '../src/render.ts'
 const testToolSignal = new AbortController().signal
 
 const spillDir = mkdtempSync(join(tmpdir(), 'dsh-tool-bash-spec-'))
-
-afterAll(() => {
-  rmSync(spillDir, { recursive: true, force: true })
-})
 
 /** Foreground-only harness: no job runtime (backgrounding fails loud here). */
 async function setup() {
@@ -81,7 +76,7 @@ function registerFakeAgent(ctx: Context, sessionId: string, inject: (...args: un
 }
 let callCounter = 0
 function call(ctx: Context, name: string, args: unknown, agent?: Agent) {
-  return ctx.tools.execute({ signal: testToolSignal, callId: ToolCallId(`call-${++callCounter}`), name, arguments: args, ...agent ? { agent } : {} })
+  return ctx.tools.execute({ signal: testToolSignal, callId: CallId(`call-${++callCounter}`), name, arguments: args, ...agent ? { agent } : {} })
 }
 
 function text(result: { content: { type: string; text?: string }[] }): string {
@@ -193,8 +188,6 @@ async function setupSandboxed(withApproval = false) {
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(LocalJobRegistry)
   await ctx.plugin(ToolTasks)
-  await ctx.plugin(SessionProjectionRegistry)
-  ctx.sessionProjections.register(turnBoundaryProjectionDefinition)
   await ctx.plugin(SandboxPolicyService, {})
   await ctx.plugin(RecordingSandboxExecutor)
   if (withApproval) await ctx.plugin(ApprovalService)
@@ -208,8 +201,8 @@ function sandboxAgent(
   ctx?: Context,
   onAppend?: (type: string) => void,
 ): Agent {
-  const events: Array<{ type: string; data?: Record<string, unknown>; seq: number }> = [{ type: 'turn/start', seq: 0, data: { turn: 1 } }]
-  if (mode !== undefined) events.push({ type: 'sandbox/mode', seq: events.length, data: { mode } })
+  const events: Array<{ type: string; data?: Record<string, unknown> }> = [{ type: 'turn/start' }]
+  if (mode !== undefined) events.push({ type: 'sandbox/mode', data: { mode } })
   const id = SessionId('sandbox-session')
   return {
     id,
@@ -217,11 +210,9 @@ function sandboxAgent(
     session: {
       id,
       header: { version: 0, id, createdAt: 0 },
-      get seq() { return events.length },
-      eventAt: (seq: number) => events[seq],
-      snapshotEvents: () => events,
+      events,
       append: (type: string, data: Record<string, unknown>) => {
-        const event = { type, data, seq: events.length }
+        const event = { type, data }
         events.push(event)
         onAppend?.(type)
         return event
@@ -318,7 +309,7 @@ describe('bash tool', () => {
     const ctx = await setup()
     const controller = new AbortController()
     const pending = ctx.tools.execute({
-      callId: ToolCallId('call-abort'),
+      callId: CallId('call-abort'),
       name: 'bash',
       arguments: { command: 'sleep 60', description: 'test command' },
       signal: controller.signal,
@@ -386,25 +377,16 @@ describe('bash tool', () => {
 
   it('contributes the exit-code habit as its prompt section (guidance the descriptions cannot carry)', async () => {
     const ctx = await setup()
-    ctx.systemPrompt.section({
-      name: 'test:before-bash',
-      order: ctx.systemPrompt.getSectionOrder('TOOL_BASH') - 10,
-      text: 'before',
-    })
-    ctx.systemPrompt.section({
-      name: 'test:after-bash',
-      order: ctx.systemPrompt.getSectionOrder('TOOL_BASH') + 10,
-      text: 'after',
-    })
+    ctx.systemPrompt.section({ name: 'test:before-bash', order: 104, text: 'before' })
+    ctx.systemPrompt.section({ name: 'test:after-bash', order: 106, text: 'after' })
     const assembly = await ctx.systemPrompt.assemble()
     const section = assembly.sections.find(s => s.name === 'tool:bash')
     expect(assembly.sections.map(s => s.name)).toEqual([
       'harness:identity',
-      'deployment:persona-prefix',
+      'deployment:persona',
       'test:before-bash',
       'tool:bash',
       'test:after-bash',
-      'deployment:persona-suffix',
     ])
     expect(section?.text).toContain('[exit code: N]')
   })
@@ -418,11 +400,11 @@ describe('bash tool', () => {
     await ctx.plugin(BashEnvPlugin)
     const fiber = await ctx.plugin(ToolBash)
     expect(ctx.tools.schemas()).toHaveLength(1)
-    expect((await ctx.systemPrompt.assemble()).sections.map(s => s.name)).toEqual(['harness:identity', 'deployment:persona-prefix', 'tool:bash', 'deployment:persona-suffix'])
+    expect((await ctx.systemPrompt.assemble()).sections.map(s => s.name)).toEqual(['harness:identity', 'deployment:persona', 'tool:bash'])
     await fiber.dispose()
     expect(ctx.tools.schemas()).toHaveLength(0)
     // Only the system-prompt plugin's own built-in sections remain.
-    expect((await ctx.systemPrompt.assemble()).sections.map(s => s.name)).toEqual(['harness:identity', 'deployment:persona-prefix', 'deployment:persona-suffix'])
+    expect((await ctx.systemPrompt.assemble()).sections.map(s => s.name)).toEqual(['harness:identity', 'deployment:persona'])
   })
 
   it('tools depend on the executor: no registration without ctx.shell', async () => {
@@ -527,7 +509,7 @@ describe('background execution through the job runtime', () => {
     const controller = new AbortController()
     controller.abort()
     const result = await ctx.tools.execute({
-      callId: ToolCallId('call-pre-aborted'),
+      callId: CallId('call-pre-aborted'),
       name: 'bash',
       arguments: { command: 'sleep 60', description: 'test command', run_in_background: true },
       signal: controller.signal,
@@ -631,10 +613,9 @@ describe('sandbox escalation through the generic task producer', () => {
     expect(prompted).not.toHaveBeenCalled()
 
     const malformed = sandboxAgent()
-    ;(malformed.session.snapshotEvents() as unknown as Array<{ type: string; data: { mode: string }; seq: number }>).push({
+    ;(malformed.session.events as unknown as Array<{ type: string; data: { mode: string } }>).push({
       type: 'sandbox/mode',
       data: { mode: 'unknown-mode' },
-      seq: malformed.session.seq,
     })
     expect(text(await call(ctx, 'bash', escalate, malformed))).toContain('not strictly wider')
   })
@@ -665,7 +646,7 @@ describe('sandbox escalation through the generic task producer', () => {
     const agent = sandboxAgent(undefined, ctx)
     ctx.agents.register(agent)
     const foreground = await ctx.tools.execute({
-      callId: ToolCallId('sandbox-signal'),
+      callId: CallId('sandbox-signal'),
       name: 'bash',
       arguments: escalate,
       agent,
@@ -688,7 +669,7 @@ describe('sandbox escalation through the generic task producer', () => {
     const start = vi.spyOn(bash, 'start')
 
     const result = await ctx.tools.execute({
-      callId: ToolCallId('cancelled-escalation-background'),
+      callId: CallId('cancelled-escalation-background'),
       name: 'bash',
       arguments: { ...escalate, run_in_background: true },
       agent,
@@ -852,7 +833,7 @@ describe('session-cwd routing (per-session workdir)', () => {
   it('falls back to the executor default when the agent has no session cwd', async () => {
     const ctx = await setup()
     // No exec.agent at all → executor uses its config/process.cwd() default.
-    const result = await ctx.tools.execute({ signal: testToolSignal, callId: ToolCallId('cwd-noagent'), name: 'bash', arguments: { command: 'pwd', description: 'pwd' } })
+    const result = await ctx.tools.execute({ signal: testToolSignal, callId: CallId('cwd-noagent'), name: 'bash', arguments: { command: 'pwd', description: 'pwd' } })
     expect(result.isError).toBe(false)
     expect(text(result).trim().length).toBeGreaterThan(0)
   })
@@ -1119,11 +1100,15 @@ describe('the model-facing bash tool builds its request from named args only (no
     }
   }
 
-  async function setupRecording() {
+  async function setupRecording(withJsonl = false) {
     const ctx = new Context()
     await ctx.plugin(SystemPrompt)
     await ctx.plugin(ToolRuntime)
     await ctx.plugin(AgentRegistry)
+    if (withJsonl) {
+      await ctx.plugin(SessionStore)
+      await ctx.plugin(JsonlSessionPersistence, { root: join(spillDir, 'jsonl') })
+    }
     await ctx.plugin(LocalJobRegistry)
     await ctx.plugin(ToolTasks)
     await ctx.plugin(BashEnvPlugin, { dshHome: recordingDshHome })
@@ -1136,16 +1121,17 @@ describe('the model-facing bash tool builds its request from named args only (no
     const { ctx } = await setupRecording()
     const description = ctx.tools.get('bash')?.description ?? ''
     expect(description).toContain('$DSH_*')
+    expect(description).not.toContain('DSH_SESSION_JSONL')
   })
 
-  it('injects built-ins and the stable session id into a foreground request', async () => {
-    const { ctx, bash } = await setupRecording()
+  it('injects the session id and JSONL target path into a foreground request', async () => {
+    const { ctx, bash } = await setupRecording(true)
     const agent = registerFakeAgent(ctx, 'request-fg', () => undefined)
-    const ambient = process.env.DSH_SESSION_ID
+    const path = ctx.sessionPersistence.locate(agent.session.header)?.path
 
     await ctx.tools.execute({
       signal: testToolSignal,
-      callId: ToolCallId('session-env-fg'),
+      callId: CallId('session-env-fg'),
       name: 'bash',
       arguments: { command: 'true', description: 'run command' },
       agent,
@@ -1154,24 +1140,25 @@ describe('the model-facing bash tool builds its request from named args only (no
     expect(bash.requests[0]?.dshEnv).toEqual({
       DSH_HOME: recordingDshHome,
       DSH_SESSION_ID: 'request-fg',
+      DSH_SESSION_JSONL: path,
       DSH_SHELL: '1',
     })
-    expect(process.env.DSH_SESSION_ID).toBe(ambient)
   })
 
   it('injects the same trusted variables into a background request without forwarding model env', async () => {
-    const { ctx, bash } = await setupRecording()
+    const { ctx, bash } = await setupRecording(true)
     const agent = registerFakeAgent(ctx, 'request-bg', () => undefined)
+    const path = ctx.sessionPersistence.locate(agent.session.header)?.path
 
     await ctx.tools.execute({
       signal: testToolSignal,
-      callId: ToolCallId('session-env-bg'),
+      callId: CallId('session-env-bg'),
       name: 'bash',
       arguments: {
         command: 'sleep 1',
         description: 'run command',
         run_in_background: true,
-        env: { DSH_SESSION_ID: 'spoofed' },
+        env: { DSH_SESSION_ID: 'spoofed', DSH_SESSION_JSONL: '/tmp/spoofed' },
       },
       agent,
     })
@@ -1180,19 +1167,41 @@ describe('the model-facing bash tool builds its request from named args only (no
     expect(bash.requests[0]?.dshEnv).toEqual({
       DSH_HOME: recordingDshHome,
       DSH_SESSION_ID: 'request-bg',
+      DSH_SESSION_JSONL: path,
       DSH_SHELL: '1',
     })
   })
 
-  it('keeps parent and child agent session environments isolated', async () => {
+  it('injects built-ins and the stable session id when no JSONL locator is available', async () => {
     const { ctx, bash } = await setupRecording()
+    const agent = registerFakeAgent(ctx, 'request-id-only', () => undefined)
+    const ambient = process.env.DSH_SESSION_ID
+
+    await ctx.tools.execute({
+      signal: testToolSignal,
+      callId: CallId('session-env-id-only'),
+      name: 'bash',
+      arguments: { command: 'true', description: 'run command' },
+      agent,
+    })
+
+    expect(bash.requests[0]?.dshEnv).toEqual({
+      DSH_HOME: recordingDshHome,
+      DSH_SESSION_ID: 'request-id-only',
+      DSH_SHELL: '1',
+    })
+    expect(process.env.DSH_SESSION_ID).toBe(ambient)
+  })
+
+  it('keeps parent and child agent session environments isolated', async () => {
+    const { ctx, bash } = await setupRecording(true)
     const parent = registerFakeAgent(ctx, 'request-parent', () => undefined)
     const child = registerFakeAgent(ctx, 'request-child', () => undefined)
 
     for (const [callId, agent] of [['parent', parent], ['child', child]] as const) {
       await ctx.tools.execute({
         signal: testToolSignal,
-        callId: ToolCallId(`session-env-${callId}`),
+        callId: CallId(`session-env-${callId}`),
         name: 'bash',
         arguments: { command: 'true', description: 'run command' },
         agent,
@@ -1203,14 +1212,17 @@ describe('the model-facing bash tool builds its request from named args only (no
       {
         DSH_HOME: recordingDshHome,
         DSH_SESSION_ID: 'request-parent',
+        DSH_SESSION_JSONL: ctx.sessionPersistence.locate(parent.session.header)?.path,
         DSH_SHELL: '1',
       },
       {
         DSH_HOME: recordingDshHome,
         DSH_SESSION_ID: 'request-child',
+        DSH_SESSION_JSONL: ctx.sessionPersistence.locate(child.session.header)?.path,
         DSH_SHELL: '1',
       },
     ])
+    expect(bash.requests[0]?.dshEnv?.DSH_SESSION_JSONL).not.toBe(bash.requests[1]?.dshEnv?.DSH_SESSION_JSONL)
   })
 
   it('does not forward trusted-only fields even when the model includes them as extra arguments', async () => {
@@ -1220,7 +1232,7 @@ describe('the model-facing bash tool builds its request from named args only (no
     // already set environment variables or feed stdin.
     await ctx.tools.execute({
       signal: testToolSignal,
-      callId: ToolCallId('no-forward-1'),
+      callId: CallId('no-forward-1'),
       name: 'bash',
       arguments: {
         command: 'echo hi',
@@ -1242,7 +1254,7 @@ describe('the model-facing bash tool builds its request from named args only (no
     const { ctx, bash } = await setupRecording()
     const result = await ctx.tools.execute({
       signal: testToolSignal,
-      callId: ToolCallId('no-forward-2'),
+      callId: CallId('no-forward-2'),
       name: 'bash',
       arguments: {
         command: 'sleep 1',

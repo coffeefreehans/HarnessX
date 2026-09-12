@@ -8,7 +8,7 @@ Sources: [`packages/session/session-title/src/index.ts`](../../packages/session/
 
 ## Durable title state
 
-`SessionTitleProviderId` is recorded for provider-produced revisions. `SessionTitleEventData` lists the exact human-message seqs used for the title, while `SessionTitleSnapshot` adds the durable event envelope facts returned by `ctx.sessionTitle.get()` and `foldSessionTitle()`. The `title` projection keeps its version-1 state and client view as only the title string or `null`, so existing persisted cache rows remain readable.
+`SessionTitleProviderId` is recorded for provider-produced revisions. `SessionTitleEventData` lists the exact human-message seqs used for the title, while `SessionTitleSnapshot` adds the durable event envelope facts selected by `foldSessionTitle()`.
 
 ```ts type-equiv
 /** Identifies one session-title provider registration. */
@@ -46,7 +46,7 @@ interface SessionTitleEventData {
   /** Normalized non-empty title text. */
   readonly title: string
   /** Exact human `user/message` seqs used to derive this title; empty for an explicit user rename. */
-  readonly messageSeqs: SessionSeq[]
+  readonly messageSeqs: number[]
   /** Whether the built-in fallback, a registered provider, or the user supplied the title. */
   readonly source: SessionTitleSource
 }
@@ -56,7 +56,7 @@ interface SessionTitleEventData {
 /** Latest folded title plus the title event's durable envelope facts. */
 interface SessionTitleSnapshot extends SessionTitleEventData {
   /** Seq of the latest `session/title` event. */
-  readonly eventSeq: SessionSeq
+  readonly eventSeq: number
   /** Timestamp of the latest `session/title` event. */
   readonly updatedAt: number
 }
@@ -72,7 +72,7 @@ interface SessionTitleLlmRequestEventData {
   /** Registered title-provider identity responsible for the request. */
   readonly titleProvider: SessionTitleProviderId
   /** Exact human `user/message` seqs represented in `messages`. */
-  readonly messageSeqs: SessionSeq[]
+  readonly messageSeqs: number[]
   /** Exact auxiliary LLM route. */
   readonly route: SessionTitleModelProvenance
   /** Exact auxiliary system prompt. */
@@ -92,7 +92,7 @@ The service snapshots eligible messages through one revision. A provider returns
 /** One eligible human text message exposed to title providers. */
 interface SessionTitleUserMessage {
   /** Source `user/message` event seq. */
-  readonly seq: SessionSeq
+  readonly seq: number
   /** Exact concatenated text-block content. */
   readonly text: string
 }
@@ -123,7 +123,7 @@ interface SessionTitleProviderResult {
   /** Proposed title text. */
   readonly title: string
   /** Exact seqs from `request.messages` used by this result. */
-  readonly messageSeqs: readonly SessionSeq[]
+  readonly messageSeqs: readonly number[]
   /** Auxiliary LLM route, when generation used a model. */
   readonly model?: SessionTitleModelProvenance
 }

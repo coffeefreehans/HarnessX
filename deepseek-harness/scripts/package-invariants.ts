@@ -1,21 +1,19 @@
 /**
  * Package-invariant companion discovery and structural checks.
- * The runtime registry stays product-independent; this gate keeps each
- * published companion complete without requiring synthetic empty companions.
+ * The runtime registry stays product-independent; this gate makes ownership
+ * exhaustive across packages without centralizing package checks.
  */
 
 import { existsSync, globSync, readFileSync } from 'node:fs'
 import { dirname, relative, resolve, sep } from 'node:path'
 import ts from 'typescript'
-import { usesFlattenedPackageDependencies } from './package-dependency-policy.ts'
 
-/** Package README sentence that records why an invariant companion is omitted. */
-const OMITTED_COMPANION_REASON = /No (?:(?:runtime )?invariant )?companion is published(?: because|[.:;—])\s+\S/i
+/** Required explanation marker for an intentionally empty installer. */
+const NO_RUNTIME_INVARIANT_MARKER = 'No runtime invariant:'
 
 interface PackageManifest {
   name?: string
-  dsh?: unknown
-  exports?: Record<string, { types?: string; default?: string } | string | null | undefined>
+  exports?: Record<string, { types?: string; default?: string } | string | undefined>
   files?: string[]
   peerDependencies?: Record<string, string>
   devDependencies?: Record<string, string>
@@ -35,14 +33,8 @@ export interface PackageInvariantViolation {
   readonly message: string
 }
 
-/** Discover packages that own an invariant companion. */
-export function packageInvariantOwners(root: string): PackageInvariantOwner[] {
-  return packageInvariantPackages(root)
-    .filter(owner => existsSync(resolve(root, owner.sourcePath)))
-}
-
 /** Discover every package under the repository package tree. */
-function packageInvariantPackages(root: string): PackageInvariantOwner[] {
+export function packageInvariantOwners(root: string): PackageInvariantOwner[] {
   return globSync('packages/*/*/package.json', { cwd: root })
     .map(path => path.split(sep).join('/'))
     .sort()
@@ -64,16 +56,11 @@ function packageInvariantPackages(root: string): PackageInvariantOwner[] {
 /** Return all violations of the package-invariant companion rules. */
 export function collectPackageInvariantViolations(root: string): PackageInvariantViolation[] {
   const violations: PackageInvariantViolation[] = []
-  for (const owner of packageInvariantPackages(root)) {
+  for (const owner of packageInvariantOwners(root)) {
     const manifest = readManifest(resolve(root, owner.manifestPath))
-    const hasCompanion = existsSync(resolve(root, owner.sourcePath))
-    checkManifest(owner, manifest, hasCompanion, violations)
-    checkBuild(owner, root, hasCompanion, violations)
-    if (hasCompanion) {
-      checkSource(owner, root, violations)
-    } else {
-      checkOmissionReason(owner, root, violations)
-    }
+    checkManifest(owner, manifest, violations)
+    checkBuild(owner, root, violations)
+    checkSource(owner, root, violations)
   }
   return violations
 }
@@ -93,29 +80,10 @@ function addViolation(
 function checkManifest(
   owner: PackageInvariantOwner,
   manifest: PackageManifest,
-  hasCompanion: boolean,
   violations: PackageInvariantViolation[],
 ): void {
   const invariantExport = manifest.exports?.['./invariant']
-  if (!hasCompanion) {
-    if (invariantExport !== undefined) {
-      addViolation(
-        violations,
-        owner.manifestPath,
-        'exports["./invariant"] must be omitted when src/invariant.ts is absent',
-      )
-    }
-    if (manifest.files?.includes('lib/invariant.js')) {
-      addViolation(
-        violations,
-        owner.manifestPath,
-        'files must omit lib/invariant.js when src/invariant.ts is absent',
-      )
-    }
-    return
-  }
   if (typeof invariantExport !== 'object'
-    || invariantExport === null
     || invariantExport.types !== './lib/types/invariant.d.ts'
     || invariantExport.default !== './lib/invariant.js') {
     addViolation(
@@ -128,23 +96,18 @@ function checkManifest(
     addViolation(violations, owner.manifestPath, 'files must publish lib/invariant.js')
   }
   if (owner.packageName === '@deepseek-ai/dsh-invariants') return
-  const developmentOnlyInvariant = usesFlattenedPackageDependencies(
-    owner.manifestPath,
-    owner.packageName,
-    manifest.dsh,
-  )
-  const expectedRange = 'workspace:^'
-  const peerRange = manifest.peerDependencies?.['@deepseek-ai/dsh-invariants']
-  if (developmentOnlyInvariant ? peerRange !== undefined : peerRange !== expectedRange) {
-    addViolation(violations, owner.manifestPath, developmentOnlyInvariant
-      ? '@deepseek-ai/dsh-invariants must not be a peerDependency under this package dependency policy'
-      : '@deepseek-ai/dsh-invariants must be a workspace:^ peerDependency')
-  }
-  if (manifest.devDependencies?.['@deepseek-ai/dsh-invariants'] !== expectedRange) {
+  if (manifest.peerDependencies?.['@deepseek-ai/dsh-invariants'] !== 'workspace:^') {
     addViolation(
       violations,
       owner.manifestPath,
-      `@deepseek-ai/dsh-invariants must be a ${expectedRange} devDependency`,
+      '@deepseek-ai/dsh-invariants must be a workspace:^ peerDependency',
+    )
+  }
+  if (manifest.devDependencies?.['@deepseek-ai/dsh-invariants'] !== 'workspace:^') {
+    addViolation(
+      violations,
+      owner.manifestPath,
+      '@deepseek-ai/dsh-invariants must also be a workspace:^ devDependency',
     )
   }
 }
@@ -152,54 +115,23 @@ function checkManifest(
 function checkBuild(
   owner: PackageInvariantOwner,
   root: string,
-  hasCompanion: boolean,
   violations: PackageInvariantViolation[],
 ): void {
   const tsconfigPath = `${owner.dir}/tsconfig.json`
-  if (hasCompanion
-    && owner.packageName !== '@deepseek-ai/dsh-invariants'
+  if (owner.packageName !== '@deepseek-ai/dsh-invariants'
     && !projectReferencesInvariants(root, owner.dir, tsconfigPath)) {
     addViolation(
       violations,
       tsconfigPath,
       'TypeScript project references must include ../../runtime-diagnostics/invariants',
     )
-  } else if (!hasCompanion && projectReferencesInvariants(root, owner.dir, tsconfigPath)) {
-    addViolation(
-      violations,
-      tsconfigPath,
-      'TypeScript project references must omit ../../runtime-diagnostics/invariants when src/invariant.ts is absent',
-    )
   }
 
   const configPath = `${owner.dir}/tsdown.config.ts`
   if (!existsSync(resolve(root, configPath))) return
   const source = readFileSync(resolve(root, configPath), 'utf8')
-  const bundlesCompanion = source.includes('lib/types/invariant.js')
-  if (hasCompanion && !bundlesCompanion) {
+  if (!source.includes('lib/types/invariant.js')) {
     addViolation(violations, configPath, 'package build override must bundle lib/types/invariant.js')
-  } else if (!hasCompanion && bundlesCompanion) {
-    addViolation(
-      violations,
-      configPath,
-      'package build override must omit lib/types/invariant.js when src/invariant.ts is absent',
-    )
-  }
-}
-
-function checkOmissionReason(
-  owner: PackageInvariantOwner,
-  root: string,
-  violations: PackageInvariantViolation[],
-): void {
-  const readmePath = `${owner.dir}/README.md`
-  const absolutePath = resolve(root, readmePath)
-  if (!existsSync(absolutePath) || !OMITTED_COMPANION_REASON.test(readFileSync(absolutePath, 'utf8'))) {
-    addViolation(
-      violations,
-      readmePath,
-      'omitted companion requires a README "No ... companion is published" reason sentence',
-    )
   }
 }
 
@@ -234,6 +166,10 @@ function checkSource(
   violations: PackageInvariantViolation[],
 ): void {
   const absolutePath = resolve(root, owner.sourcePath)
+  if (!existsSync(absolutePath)) {
+    addViolation(violations, owner.sourcePath, 'missing package-owned invariant companion')
+    return
+  }
   const sourceText = readFileSync(absolutePath, 'utf8')
   if (sourceText.includes('@generated')) {
     addViolation(
@@ -299,15 +235,17 @@ function checkSource(
   if (hasDefaultExport(sourceFile)) {
     addViolation(violations, owner.sourcePath, 'must not default-export; Loader must retain the companion namespace')
   }
-  checkInstaller(owner, sourceFile, violations)
+  checkInstaller(owner, sourceFile, sourceText, violations)
 }
 
 function checkInstaller(
   owner: PackageInvariantOwner,
   sourceFile: ts.SourceFile,
+  sourceText: string,
   violations: PackageInvariantViolation[],
 ): void {
   let initializer: ts.Expression | undefined
+  let declarationStatement: ts.VariableStatement | undefined
   for (const statement of sourceFile.statements) {
     if (!ts.isVariableStatement(statement)) continue
     for (const declaration of statement.declarationList.declarations) {
@@ -315,6 +253,7 @@ function checkInstaller(
         && declaration.name.text === 'install'
         && declaration.initializer !== undefined) {
         initializer = declaration.initializer
+        declarationStatement = statement
       }
     }
   }
@@ -324,11 +263,16 @@ function checkInstaller(
     return
   }
   if (ts.isBlock(installer.body) && installer.body.statements.length === 0) {
-    addViolation(
-      violations,
-      owner.sourcePath,
-      'empty install function is unnecessary; omit the companion and its publication wiring',
-    )
+    const declarationText = declarationStatement === undefined
+      ? ''
+      : sourceText.slice(declarationStatement.getFullStart(), declarationStatement.getEnd())
+    if (!declarationText.includes(NO_RUNTIME_INVARIANT_MARKER)) {
+      addViolation(
+        violations,
+        owner.sourcePath,
+        `empty install function must explain why with a "${NO_RUNTIME_INVARIANT_MARKER}" comment`,
+      )
+    }
     return
   }
   const reporter = installer.parameters[1]?.name

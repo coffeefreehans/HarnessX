@@ -4,8 +4,8 @@
  * server→client requests: it answers `workspace/configuration` from static
  * config, and rejects `workspace/applyEdit` (this host never applies edits or
  * runs commands). It caps stderr, surfaces framing/decoder failures as a
- * fatal close, and exposes managed-range termination through the handle so the
- * instance owns teardown; platform mechanics live in the subprocess
+ * fatal close, and exposes tree-scoped termination through the handle so the
+ * instance owns teardown; group/tree mechanics live in the subprocess
  * Service Provider.
  * @module @deepseek-ai/dsh-lsp-stdio/connection
  */
@@ -88,7 +88,7 @@ export class LspConnection {
     this.decoder = new MessageDecoder(spec.maxMessageBytes)
     // stdin/stdout are piped protocol streams this endpoint frames itself;
     // stderr is a collected diagnostic tail (no spill — the bounded tail IS
-    // the contract). The seam owns managed-range signalling and observation.
+    // the contract). The seam owns detachment and tree-scoped signalling.
     this.handle = spawner({
       argv: [spec.command, ...spec.args],
       cwd: spec.cwd,
@@ -129,6 +129,11 @@ export class LspConnection {
     // waiting for a process-close event that may never arrive.
     this.stdin.on('error', (error) => { this.fail(error) })
     this.handle.stdout.on('data', (chunk: Buffer) => { this.onStdout(chunk) })
+  }
+
+  /** The child's pid, or `-1` when the spawn produced no pid (so signalling is a no-op). */
+  get pid(): number {
+    return this.handle.pid
   }
 
   /** The retained stderr tail, for diagnostics on a failed server. */
@@ -204,17 +209,17 @@ export class LspConnection {
     return this.nextId
   }
 
-  /** Terminate the server's provider-managed range (idempotent). */
+  /** Terminate the server's process tree (the seam's SIGTERM→grace→SIGKILL escalation; idempotent). */
   terminate(): void {
     this.handle.terminate()
   }
 
   /**
-   * Wait until the owned managed range is empty.
+   * Wait until the owned process tree has exited.
    * @param signal - optional bound for the wait.
-   * @returns `true` when the range is empty, or `false` when the signal aborted first.
+   * @returns `true` when the tree exited, or `false` when the signal aborted first.
    */
-  async waitForManagedRangeExit(signal?: AbortSignal): Promise<boolean> {
+  async waitForProcessTreeExit(signal?: AbortSignal): Promise<boolean> {
     return await this.handle.waitForExit(signal)
   }
 
@@ -224,7 +229,8 @@ export class LspConnection {
       messages = this.decoder.push(chunk)
     } catch (error) {
       // A framing/JSON failure corrupts the stream position irrecoverably: fail the instance and
-      // terminate the managed range so helper processes do not outlive the leader.
+      // terminate the whole group so helper processes don't outlive the leader (SIGTERM first, then
+      // the kill grace's SIGKILL — a misbehaving server still gets its bounded flush window).
       this.fail(asError(error))
       this.handle.terminate()
       return

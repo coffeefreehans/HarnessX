@@ -10,9 +10,6 @@ import type {
   SessionEventType,
   SessionHeader,
   SessionId,
-  SessionLogOffset,
-  SessionSeq,
-  OptionalSessionSeq,
   SurfaceEvent,
 } from '@deepseek-ai/dsh-session'
 import type { SessionTitleSnapshot } from '@deepseek-ai/dsh-session-title'
@@ -29,7 +26,7 @@ export interface SessionRecord {
   header: SessionHeader
   /** Whether the id currently exists in `ctx.sessions`. */
   live: boolean
-  /** Whether the active persistence backend currently lists the id, including a created-but-unmaterialized session it already observes. */
+  /** Whether the active persistence backend currently materializes the id. */
   persisted: boolean
 }
 
@@ -37,10 +34,8 @@ export interface SessionRecord {
 export interface SessionSurfaceSnapshot {
   /** Cloned session header selected from the same corpus observation as `events`. */
   session: SessionHeader
-  /** Exact number of fork-inherited events in the observed log. */
-  inheritedEventCount: SessionLogOffset
   /** Highest raw-log seq included in the observation, or `null` for an empty log. */
-  capturedThroughSeq: OptionalSessionSeq
+  capturedThroughSeq: number | null
   /** Cloned current surface events in model-history order. */
   events: SurfaceEvent[]
 }
@@ -49,9 +44,7 @@ export interface SessionSurfaceSnapshot {
 export interface SessionLogSnapshot {
   /** Cloned session header selected from the same observation as `events`. */
   session: SessionHeader
-  /** Exact number of fork-inherited events in the observed log. */
-  inheritedEventCount: SessionLogOffset
-  /** Cloned contiguous raw events after in-memory interrupted-turn balancing and replay validation. */
+  /** Cloned contiguous raw events after persistence repair and replay validation. */
   events: SessionEvent[]
 }
 
@@ -60,7 +53,7 @@ export interface SessionEventRecord {
   /** Session that owns the event. */
   sessionId: SessionId
   /** Monotonic event seq within the session. */
-  seq: SessionSeq
+  seq: number
   /** Discriminant of the session event. */
   type: SessionEventType
   /** Event timestamp in Unix epoch milliseconds. */
@@ -105,7 +98,7 @@ export interface SessionEventTraceRequest {
   /** Session that owns the target event. */
   sessionId: SessionId
   /** Target event seq. */
-  seq: SessionSeq
+  seq: number
 }
 
 /** Direct surface replacements and relationships to cited source events for one event. */
@@ -113,15 +106,15 @@ export interface SessionEventTrace {
   /** Lightweight target record. */
   target: SessionEventRecord
   /** Immediate positional replacement event, when the target was shadowed. */
-  replacedBy?: SessionSeq
+  replacedBy?: number
   /** Positional replacers from the immediate replacement to the final replacement. */
-  replacementChain: SessionSeq[]
+  replacementChain: number[]
   /** Surface nodes directly removed when the target itself performed a replacement. */
-  replacedEventSeqs: SessionSeq[]
+  replacedEventSeqs: number[]
   /** Earlier events cited directly as sources, in their recorded order. */
-  sourceEventSeqs: SessionSeq[]
+  sourceEventSeqs: number[]
   /** Later events that directly cite the target as a source, in log order. */
-  derivedEventSeqs: SessionSeq[]
+  derivedEventSeqs: number[]
 }
 
 /** Event relationships bound to the same session-header observation. */
@@ -135,7 +128,7 @@ export interface SessionEventReadRequest {
   /** Session that owns the target event. */
   sessionId: SessionId
   /** Target event seq. */
-  seq: SessionSeq
+  seq: number
   /** Number of preceding raw events to include. */
   before?: number
   /** Number of following raw events to include. */
@@ -146,16 +139,14 @@ export interface SessionEventReadRequest {
 export interface SessionEventWindow {
   /** Cloned header for the live-preferred source read. */
   session: SessionHeader
-  /** Exact number of fork-inherited events in the observed log. */
-  inheritedEventCount: SessionLogOffset
   /** Full cloned target event. */
   target: SessionEvent
   /** Full cloned events from `startSeq` through `endSeq`. */
   events: SessionEvent[]
   /** First seq included in `events`. */
-  startSeq: SessionSeq
+  startSeq: number
   /** Last seq included in `events`. */
-  endSeq: SessionSeq
+  endSeq: number
 }
 
 /** Latest folded title bound to the same session-header observation. */

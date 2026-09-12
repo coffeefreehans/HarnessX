@@ -13,7 +13,7 @@ export type DirectoryPickerBackendKind = 'native' | 'browse'
 
 /** Environment keys the resolution reads (a `process.env` subset). */
 export type DirectoryPickerEnv = Readonly<
-  Partial<Record<'DISPLAY' | 'WAYLAND_DISPLAY', string>>
+  Partial<Record<'SSH_CONNECTION' | 'SSH_TTY' | 'DISPLAY' | 'WAYLAND_DISPLAY', string>>
 >
 
 /** Host facts the backend choice is a pure function of, sampled once at boot. */
@@ -22,9 +22,7 @@ export interface DirectoryPickerHostFacts {
   bindHost: HttpServerConfig['host']
   /** Host process platform. */
   platform: NodeJS.Platform
-  /** SSH launch fact from the inherited process layer, independent of `.env` values. */
-  ssh: boolean
-  /** Environment sample; DISPLAY/WAYLAND_DISPLAY marks a Linux display. */
+  /** Environment sample; SSH marks a remote operator, DISPLAY/WAYLAND_DISPLAY a Linux display. */
   env: DirectoryPickerEnv
   /** Whether a Linux chooser binary the native backend can drive (zenity/kdialog) is on PATH; consulted only when `platform` is linux. */
   linuxChooser: boolean
@@ -48,7 +46,7 @@ const present = (value: string | undefined): boolean => value !== undefined && v
  */
 export function resolveDirectoryPickerBackend(facts: DirectoryPickerHostFacts): DirectoryPickerBackendKind {
   if (facts.bindHost !== '127.0.0.1') return 'browse'
-  if (facts.ssh) return 'browse'
+  if (present(facts.env.SSH_CONNECTION) || present(facts.env.SSH_TTY)) return 'browse'
   if (facts.platform === 'darwin' || facts.platform === 'win32') return 'native'
   if (facts.platform !== 'linux' || !facts.linuxChooser) return 'browse'
   return present(facts.env.DISPLAY) || present(facts.env.WAYLAND_DISPLAY) ? 'native' : 'browse'

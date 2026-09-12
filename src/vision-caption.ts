@@ -11,6 +11,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-settings'
+import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import type {} from './runtime.ts'
 
@@ -19,7 +20,7 @@ const PROBE_ROUTE = '/api/desktop/vision/probe'
 const MAX_JSON_BODY_BYTES = 32 * 1024 * 1024
 const CAPTION_TIMEOUT_MS = 60_000
 const PROBE_TIMEOUT_MS = 30_000
-const PI_AI_SETTINGS = 'llm-pi-ai'
+const PI_AI_SETTINGS = settingsNamespace('llm-pi-ai')
 
 /** One-pixel PNG: the smallest image that still exercises the provider's
  *  vision path end to end. */

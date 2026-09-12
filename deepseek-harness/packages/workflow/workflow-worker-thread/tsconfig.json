@@ -39,7 +39,7 @@
       "path": "../workflow"
     },
     {
-      "path": "../../util/http-proxy"
+      "path": "../../runtime-diagnostics/invariants"
     }
   ]
 }

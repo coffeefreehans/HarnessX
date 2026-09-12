@@ -9,10 +9,7 @@
   ],
   "references": [
     {
-      "path": "../../../vendor/cordis"
-    },
-    {
-      "path": "../store"
+      "path": "../../runtime-diagnostics/invariants"
     }
   ]
 }

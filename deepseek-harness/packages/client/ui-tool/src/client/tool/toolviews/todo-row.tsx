@@ -1,3 +1,12 @@
+// todo_write toolview: plan-flavored summary row replacing the generic
+// "Tool call" card, registered into the keyed 'tool.call.toolview'
+// hole like the bash sample (a product registration, not a sample). The row
+// composes ToolRow (chrome, running sweep, whole-row expand) and swaps in a
+// summary of the written list (counts + active items) from the call args, with
+// the parallel-active count riding ToolRow's non-shrinking summary suffix so a
+// narrow row never clips it; the durable list itself renders in the TodoPanel
+// above the composer, so the row stays one line until expanded.
+
 import { IconChecklistOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
@@ -7,6 +16,7 @@ import { ToolRow } from '../components/ToolRow.tsx'
 import { CONVERSATION_NS as NS } from '../../locale.ts'
 import { planSummary, type PlanItemLike } from './plan-summary.ts'
 
+/** Todo row props: the toolview runtime share plus the standard locale seat. */
 type TodoRowProps = ToolCallViewProps & PropsLocale<'conversation'>
 
 function isItem(value: unknown): value is PlanItemLike {
@@ -44,7 +54,10 @@ function summarize(argsRaw: string, t: TodoRowProps['t']): RowSummary | null {
   }
 }
 
-/** Summarizes a plan update without presenting a cancelled call as completed. */
+/** One-line plan update row (the whole row toggles the call's Input/Output
+ *  sections, ToolRow's unified expand). Non-ok execution states keep the
+ *  shared row's dot semantics — a cancelled call wrote no todo/write, so it
+ *  must not read as a completed update. */
 export function TodoRow({ toolName, block, inspect, t }: TodoRowProps) {
   const model = toolRowModel(toolName, block)
   const argsRaw = ('kind' in block ? block.call?.argsRaw : block.argsRaw) ?? ''
@@ -58,7 +71,7 @@ export function TodoRow({ toolName, block, inspect, t }: TodoRowProps) {
       title={t('todo.rowTitle')}
       summary={summary.text}
       summarySuffix={summary.extra > 0 ? `+${summary.extra}` : null}
-      bodyRaw={model.bodyRaw}
+      body={model.body}
       output={model.output}
       errorSummary={model.errorSummary}
       state={model.state}
@@ -67,10 +80,17 @@ export function TodoRow({ toolName, block, inspect, t }: TodoRowProps) {
   )
 }
 
-/** Registers the todo conversation row. */
+/**
+ * The todo row as a plain registrant plugin following the atomic Tool-view
+ * declaration across independent activation and reload lifetimes.
+ */
 export const todoToolview = {
   name: 'todo-toolview',
   inject: ['slots'],
+  /**
+   * Register the todo row into the Tool-owned keyed view slot.
+   * @param ctx - registrant context (disposal rides ctx.effect inside slots.register).
+   */
   apply(ctx: Context): void {
     ctx.slots.inject('tool.call.toolview', () =>
       ctx.slots.register({ name: 'tool.call.toolview', key: 'todo_write', locale: NS }, TodoRow))

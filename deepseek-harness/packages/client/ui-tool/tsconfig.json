@@ -9,16 +9,7 @@
   ],
   "references": [
     {
-      "path": "../../spill/spill-policy"
-    },
-    {
-      "path": "../../attachment/attachment"
-    },
-    {
       "path": "../../api/remotes/tsconfig.client.json"
-    },
-    {
-      "path": "../../api/workspace-controller/tsconfig.client.json"
     },
     {
       "path": "../../../vendor/cordis"
@@ -27,10 +18,10 @@
       "path": "../connection/tsconfig.client.json"
     },
     {
-      "path": "../locale"
+      "path": "../runtime"
     },
     {
-      "path": "../ui-chat"
+      "path": "../locale"
     },
     {
       "path": "../ui-conversation"
@@ -39,19 +30,10 @@
       "path": "../ui-primitives"
     },
     {
-      "path": "../ui-renderer"
-    },
-    {
-      "path": "../ui-session"
-    },
-    {
       "path": "../ui-slots"
     },
     {
-      "path": "../../core/tools"
-    },
-    {
-      "path": "../../util/workspace-path"
+      "path": "../../runtime-diagnostics/invariants"
     }
   ]
 }

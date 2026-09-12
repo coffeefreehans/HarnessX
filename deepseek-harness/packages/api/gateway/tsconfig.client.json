@@ -6,14 +6,7 @@
     "tsBuildInfoFile": "lib/tsconfig.client.tsbuildinfo"
   },
   "files": [
-    "src/client/index.ts",
-    "src/client/journal-stream.ts",
-    "src/client/remote-events.ts",
-    "src/client/remote-stream.ts",
-    "src/client/snapshot-stream.ts",
-    "src/client/stream-client.ts",
-    "src/remote-error-codes.ts",
-    "src/stream-protocol.ts"
+    "src/client/index.ts"
   ],
   "references": [
     {
@@ -24,12 +17,6 @@
     },
     {
       "path": "../../typert/protocol"
-    },
-    {
-      "path": "../../util/deque"
-    },
-    {
-      "path": "../../util/crypto"
     }
   ]
 }

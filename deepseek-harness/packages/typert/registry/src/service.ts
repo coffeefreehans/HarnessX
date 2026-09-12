@@ -9,12 +9,12 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import type {
   InvocationDescriptor,
-  TypertClientContextAdapter,
+  TypertClientContextBinder,
   TypertContextMap,
   TypertContextRegistry,
   TypertContextWire,
   TypertDisposer,
-  TypertHostContextAdapter,
+  TypertHostContextProvider,
   TypertHostContextResolver,
   TypertLocalRegistry,
   TypertLookupHost,
@@ -334,9 +334,9 @@ function lookupDefinitionEquals(left: TypertLookupDefinition, right: TypertLooku
 }
 
 class ContextStore {
-  private readonly hosts = new Map<string, ProviderEntry<TypertHostContextAdapter>>()
+  private readonly hosts = new Map<string, ProviderEntry<TypertHostContextProvider>>()
   private readonly hostResolvers = new Map<string, ProviderEntry<HostContextResolverEntry>>()
-  private readonly clients = new Map<string, ProviderEntry<TypertClientContextAdapter>>()
+  private readonly clients = new Map<string, ProviderEntry<TypertClientContextBinder>>()
   private readonly changes: ChangeSource
 
   constructor(report: ReportObserverError) {
@@ -347,30 +347,30 @@ class ContextStore {
     return {
       registerHost: <K extends Extract<keyof TypertContextMap, string>>(
         key: K,
-        adapter: TypertHostContextAdapter<TypertContextWire<TypertContextMap[K]>>,
-      ) => this.registerHost(ctx, key, adapter),
+        provider: TypertHostContextProvider<TypertContextWire<TypertContextMap[K]>>,
+      ) => this.registerHost(ctx, key, provider),
       configureHost: <K extends Extract<keyof TypertContextMap, string>>(
         key: K,
         resolver: TypertHostContextResolver<TypertContextWire<TypertContextMap[K]>>,
       ) => this.configureHost(ctx, key, resolver),
       registerClient: <K extends Extract<keyof TypertContextMap, string>>(
         key: K,
-        adapter: TypertClientContextAdapter<TypertContextWire<TypertContextMap[K]>>,
-      ) => this.registerClient(ctx, key, adapter),
+        binder: TypertClientContextBinder<TypertContextWire<TypertContextMap[K]>>,
+      ) => this.registerClient(ctx, key, binder),
       getHost: key => this.getHost(key),
       getClient: key => this.clients.get(key)?.provider,
       subscribe: listener => this.changes.subscribe(ctx, listener),
     }
   }
 
-  private getHost(key: string): TypertHostContextAdapter | undefined {
-    const adapter = this.hosts.get(key)?.provider
-    if (adapter === undefined) return undefined
+  private getHost(key: string): TypertHostContextProvider | undefined {
+    const provider = this.hosts.get(key)?.provider
+    if (provider === undefined) return undefined
     const resolver = this.hostResolvers.get(key)?.provider
-    if (resolver === undefined) return adapter
+    if (resolver === undefined) return provider
     return {
-      wire: adapter.wire,
-      wireTypeSymbol: adapter.wireTypeSymbol,
+      wire: provider.wire,
+      wireTypeSymbol: provider.wireTypeSymbol,
       resolve: id => resolver.resolve(id),
     }
   }
@@ -399,16 +399,16 @@ class ContextStore {
     }, `typert.contexts.configureHost(${JSON.stringify(key)})`)
   }
 
-  private registerHost<Wire>(ctx: Context, key: string, adapter: TypertHostContextAdapter<Wire>): TypertDisposer {
+  private registerHost<Wire>(ctx: Context, key: string, provider: TypertHostContextProvider<Wire>): TypertDisposer {
     validateSegment('Context key', key)
-    validateWireName('Context wire field', adapter.wire)
-    validateNonempty('Context wire type symbol', adapter.wireTypeSymbol)
-    return this.registerProvider(ctx, this.hosts, 'host-context', key, adapter)
+    validateWireName('Context wire field', provider.wire)
+    validateNonempty('Context wire type symbol', provider.wireTypeSymbol)
+    return this.registerProvider(ctx, this.hosts, 'host-context', key, provider)
   }
 
-  private registerClient<Wire>(ctx: Context, key: string, adapter: TypertClientContextAdapter<Wire>): TypertDisposer {
+  private registerClient<Wire>(ctx: Context, key: string, binder: TypertClientContextBinder<Wire>): TypertDisposer {
     validateSegment('Context key', key)
-    return this.registerProvider(ctx, this.clients, 'client-context', key, adapter)
+    return this.registerProvider(ctx, this.clients, 'client-context', key, binder)
   }
 
   private registerProvider<Provider>(
@@ -484,7 +484,7 @@ export class TypertRegistry extends Service implements TypertRegistryContract {
     return this.lookupStore.view(this.ctx)
   }
 
-  /** Host and Client Context adapters. */
+  /** Host Context providers and Client Context binders. */
   get contexts(): TypertContextRegistry {
     return this.contextStore.view(this.ctx)
   }

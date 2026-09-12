@@ -76,9 +76,9 @@ describe('desktop profile composition', () => {
     expect(() => ensureDesktopProfile(home)).toThrow('dsh.profile.bundles must be an array')
   })
 
-  it('assembles the Host shell without replacing the upstream client shell', async () => {
+  it('assembles the Host shell without replacing the upstream client shell', () => {
     const home = temporaryHome()
-    const prepared = await prepareDesktopProfile(undefined, home, 'darwin')
+    const prepared = prepareDesktopProfile(undefined, home, 'darwin')
     const patches = prepared.patches as Array<Record<string, unknown>>
     const inserted = patches.flatMap((patch) => {
       const rows = patch.insert
@@ -149,10 +149,10 @@ describe('desktop profile composition', () => {
     expect(rows.map(row => row.id)).not.toContain('desktop-profiles')
   })
 
-  it('boots a selected Web profile without overriding its compatibility UI rows', async () => {
+  it('boots a selected Web profile without overriding its compatibility UI rows', () => {
     const home = temporaryHome()
     const webDir = join(home, 'profiles', 'web')
-    const bundles = PROFILE_TEMPLATES.web?.bundles
+    const bundles = PROFILE_TEMPLATES.web
     if (bundles === undefined) throw new Error('test requires the shipped Web template')
     initProfile(webDir, bundles)
     writeFileSync(join(webDir, 'cordis.patch.yml'), [
@@ -165,7 +165,7 @@ describe('desktop profile composition', () => {
       '',
     ].join('\n'))
 
-    const prepared = await prepareDesktopProfile(undefined, home, 'darwin', 'web')
+    const prepared = prepareDesktopProfile(undefined, home, 'darwin', 'web')
     const rows = composeEntries([prepared.patches])
 
     expect(prepared.profile.name).toBe('web')
@@ -183,11 +183,11 @@ describe('desktop profile composition', () => {
     }))
   })
 
-  it('projects advanced YAML settings into the Host and client Loader rows', async () => {
+  it('projects advanced YAML settings into the Host and client Loader rows', () => {
     const home = temporaryHome()
     writeFileSync(join(home, 'settings.yaml'), 'dsh-desktop:\n  mode: advanced\n')
 
-    const prepared = await prepareDesktopProfile(undefined, home, 'darwin')
+    const prepared = prepareDesktopProfile(undefined, home, 'darwin')
     const rows = composeEntries([prepared.patches])
 
     expect(prepared.mode).toBe('advanced')
@@ -198,8 +198,7 @@ describe('desktop profile composition', () => {
     expect(rows.find(row => row.id === 'settings')).toEqual(expect.objectContaining({
       config: expect.objectContaining({ dshHome: home }),
     }))
-    // Advanced mode keeps the kernel AppFrame active; the desktop shell only attaches additive surfaces.
-    expect(rows.find(row => row.id === 'ui-layout')?.disabled).toBeFalsy()
+    expect(rows.find(row => row.id === 'ui-layout')?.disabled).toBe(true)
     expect(rows.find(row => row.id === 'ui-sidebar')?.disabled).toBe(false)
     expect(rows.find(row => row.id === 'ui-conversation')?.disabled).toBe(false)
   })
@@ -226,7 +225,7 @@ describe('desktop profile composition', () => {
     expect(() => readDesktopShellMode({ path })).toThrow('invalid settings document')
   })
 
-  it('pins the desktop pwsh provider on Windows without replacing process boundaries', async () => {
+  it('pins the desktop pwsh provider on Windows without replacing process boundaries', () => {
     const home = temporaryHome()
     writeFileSync(join(home, 'cordis.patch.yml'), [
       '- id: pwsh-sandbox',
@@ -236,7 +235,7 @@ describe('desktop profile composition', () => {
       '',
     ].join('\n'))
 
-    const prepared = await prepareDesktopProfile(undefined, home, 'win32')
+    const prepared = prepareDesktopProfile(undefined, home, 'win32')
     const rows = composeEntries([prepared.patches])
     const picker = rows.find(row => row.id === 'directory-picker')
 
@@ -265,7 +264,7 @@ describe('desktop profile composition', () => {
     }))
   })
 
-  it('preserves an explicitly disabled upstream pwsh provider and a third-party replacement', async () => {
+  it('preserves an explicitly disabled upstream pwsh provider and a third-party replacement', () => {
     const home = temporaryHome()
     writeFileSync(join(home, 'cordis.patch.yml'), [
       '- id: pwsh-sandbox',
@@ -277,7 +276,7 @@ describe('desktop profile composition', () => {
       '',
     ].join('\n'))
 
-    const prepared = await prepareDesktopProfile(undefined, home, 'win32')
+    const prepared = prepareDesktopProfile(undefined, home, 'win32')
     const rows = composeEntries([prepared.patches])
 
     expect(rows.find(row => row.id === 'pwsh-sandbox')).toEqual(expect.objectContaining({

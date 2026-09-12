@@ -6,37 +6,23 @@
 import { Context, FiberState, Service, type Fiber } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
-import type { ZodType } from 'zod'
 import type { Branded } from '@deepseek-ai/dsh-brand'
-import { isAgentLoopRequest } from '@deepseek-ai/dsh-llm'
+import { assertNever, deepFreeze, isAgentLoopRequest } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm'
-import { assertNever, deepFreeze } from '@deepseek-ai/dsh-util-values'
 import type {
   Session,
   SessionEvent,
 } from '@deepseek-ai/dsh-session'
-import { SessionSeq } from '@deepseek-ai/dsh-session'
+// Type-only: resolves ctx.sessionProjections for the optional unit child.
 import type {} from '@deepseek-ai/dsh-session-projection'
-import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
-import type {} from '@deepseek-ai/dsh-agent'
-export type {
-  SessionTitleEventData,
-  SessionTitleModelProvenance,
-  SessionTitleSnapshot,
-  SessionTitleSource,
-  SessionTitleUserMessage,
-  TitleProjection,
-} from './types.ts'
+// The `title` projection-key declaration lives in src/types.ts (its one home);
+// this re-export projects the type face onto the package root AND keeps the
+// module edge in the emitted index.d.ts, so aggregate programs consuming the
+// declarations still receive the SessionProjectionMap merge.
+export type * from './types.ts'
 import { fallbackSessionTitle, normalizeSessionTitle } from './normalize.ts'
-import type {
-  SessionTitleEventData,
-  SessionTitleModelProvenance,
-  SessionTitleSnapshot,
-  SessionTitleSource,
-  SessionTitleUserMessage,
-  TitleInputState,
-  TitleProjection,
-} from './types.ts'
+
+export { fallbackSessionTitle, normalizeSessionTitle, truncateTitleUtf8 } from './normalize.ts'
 
 /** Identifies one session-title provider registration. */
 export type SessionTitleProviderId = Branded<'SessionTitleProviderId'>
@@ -50,7 +36,44 @@ export function SessionTitleProviderId(id: string): SessionTitleProviderId {
   return id as SessionTitleProviderId
 }
 
-export { fallbackSessionTitle, normalizeSessionTitle, truncateTitleUtf8 } from './normalize.ts'
+/** Exact auxiliary model route that produced a title. */
+export interface SessionTitleModelProvenance {
+  /** Registered LLM provider route. */
+  readonly provider: string
+  /** Provider model id. */
+  readonly model: string
+}
+
+/** Durable ownership record for an accepted session title. */
+export type SessionTitleSource =
+  | { readonly kind: 'fallback' }
+  | {
+    readonly kind: 'provider'
+    readonly provider: SessionTitleProviderId
+    readonly model?: SessionTitleModelProvenance
+  }
+  | {
+    /** Explicit user rename: pins the title — automatic generation stops scheduling. */
+    readonly kind: 'user'
+  }
+
+/** Payload of the log-only `session/title` event. */
+export interface SessionTitleEventData {
+  /** Normalized non-empty title text. */
+  readonly title: string
+  /** Exact human `user/message` seqs used to derive this title; empty for an explicit user rename. */
+  readonly messageSeqs: number[]
+  /** Whether the built-in fallback, a registered provider, or the user supplied the title. */
+  readonly source: SessionTitleSource
+}
+
+/** Latest folded title plus the title event's durable envelope facts. */
+export interface SessionTitleSnapshot extends SessionTitleEventData {
+  /** Seq of the latest `session/title` event. */
+  readonly eventSeq: number
+  /** Timestamp of the latest `session/title` event. */
+  readonly updatedAt: number
+}
 
 /** Required deterministic fallback and accepted-title limits. */
 export interface Config {
@@ -88,6 +111,14 @@ export class SessionTitleInvalidError extends Error {
   override readonly name = 'SessionTitleInvalidError'
 }
 
+/** One eligible human text message exposed to title providers. */
+export interface SessionTitleUserMessage {
+  /** Source `user/message` event seq. */
+  readonly seq: number
+  /** Exact concatenated text-block content. */
+  readonly text: string
+}
+
 /** Automatic generation cadence owned by a registered provider. */
 export type SessionTitleAutomaticMode = 'first-prompt' | 'all-prompts'
 
@@ -108,7 +139,7 @@ export interface SessionTitleProviderResult {
   /** Proposed title text. */
   readonly title: string
   /** Exact seqs from `request.messages` used by this result. */
-  readonly messageSeqs: readonly SessionSeq[]
+  readonly messageSeqs: readonly number[]
   /** Auxiliary LLM route, when generation used a model. */
   readonly model?: SessionTitleModelProvenance
 }
@@ -127,17 +158,48 @@ export interface SessionTitleProvider {
   generate(request: SessionTitleProviderRequest): Promise<SessionTitleProviderResult>
 }
 
-/** Extract one eligible human text message from a session event. */
-function sessionTitleUserMessageOf(event: SessionEvent): SessionTitleUserMessage | undefined {
-  if (event.type !== 'user/message' || event.data.source.kind !== 'user') return undefined
-  const content = event.data.content
-  const text = content
-    .filter((block): block is Extract<(typeof content)[number], { type: 'text' }> => block.type === 'text')
-    .map(block => block.text)
-    .join('\n')
-  if (normalizeSessionTitle(text, Number.MAX_SAFE_INTEGER).length === 0) return undefined
-  return { seq: event.seq, text }
+/**
+ * Collect human text-bearing user messages in log order.
+ * @param events - session log or persisted replay.
+ * @param throughSeq - optional inclusive event boundary.
+ * @returns eligible messages with exact source seqs.
+ */
+export function collectSessionTitleMessages(
+  events: readonly SessionEvent[],
+  throughSeq?: number,
+): SessionTitleUserMessage[] {
+  const messages: SessionTitleUserMessage[] = []
+  for (const event of events) {
+    if (throughSeq !== undefined && event.seq > throughSeq) break
+    if (event.type !== 'user/message' || event.data.source.kind !== 'user') continue
+    const content = event.data.content
+    const text = content
+      .filter((block): block is Extract<(typeof content)[number], { type: 'text' }> => block.type === 'text')
+      .map(block => block.text)
+      .join('\n')
+    if (normalizeSessionTitle(text, Number.MAX_SAFE_INTEGER).length === 0) continue
+    messages.push({ seq: event.seq, text })
+  }
+  return messages
 }
+
+/**
+ * Fold the latest logged title without consulting mutable metadata.
+ * @param events - live or persisted session log.
+ * @returns the latest immutable title snapshot, or `undefined`.
+ */
+export function foldSessionTitle(events: readonly SessionEvent[]): SessionTitleSnapshot | undefined {
+  const event = events.findLast(item => item.type === 'session/title')
+  if (event === undefined) return undefined
+  return deepFreeze({
+    title: event.data.title,
+    messageSeqs: [...event.data.messageSeqs],
+    source: copySessionTitleSource(event.data.source),
+    eventSeq: event.seq,
+    updatedAt: event.time,
+  })
+}
+
 /** Defensive copy of a logged title source (the snapshot must not alias log-owned objects). */
 function copySessionTitleSource(source: SessionTitleSource): SessionTitleSource {
   switch (source.kind) {
@@ -171,7 +233,7 @@ interface ProviderRegistration {
 interface PendingAutomaticWork {
   readonly registration: ProviderRegistration
   readonly revision: number
-  readonly throughSeq: SessionSeq
+  readonly throughSeq: number
 }
 
 /** Provider call currently allowed to commit for one session. */
@@ -195,105 +257,9 @@ function assertPositiveInteger(name: keyof Config, value: number): void {
   }
 }
 
-/**
- * Convert title projection state into an immutable snapshot.
- * @param state - the title unit's folded state.
- * @returns the immutable snapshot.
- */
-function titleSnapshotFromState(state: TitleProjection): SessionTitleSnapshot {
-  return deepFreeze({
-    title: state.title,
-    messageSeqs: [...state.messageSeqs],
-    source: copySessionTitleSource(state.source),
-    eventSeq: state.eventSeq,
-    updatedAt: state.updatedAt,
-  })
-}
-
-const EMPTY_TITLE_INPUT: TitleInputState = { first: null, count: 0, lastSeq: null }
-
-const sessionTitleUserMessageSchema: ZodType<SessionTitleUserMessage> = zod.object({
-  seq: zod.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).transform(SessionSeq),
-  text: zod.string(),
-}).strict()
-
-const titleInputStateSchema: ZodType<TitleInputState> = zod.object({
-  first: sessionTitleUserMessageSchema.nullable(),
-  count: zod.number().int().nonnegative(),
-  lastSeq: zod.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).transform(SessionSeq).nullable(),
-}).strict().superRefine((state, context) => {
-  const empty = state.first === null && state.lastSeq === null && state.count === 0
-  const populated = state.first !== null
-    && state.lastSeq !== null
-    && state.count > 0
-    && state.first.seq <= state.lastSeq
-  if (!empty && !populated) {
-    context.addIssue({
-      code: 'custom',
-      message: 'title input state must pair its count with first and last message seqs',
-    })
-  }
-})
-
-/**
- * Collect eligible human text messages from a session log, in seq order.
- * The full eligible prefix is only materialized for one provider generation,
- * so it is scanned from the log at execution time rather than retained by
- * the O(1) `titleInput` projection.
- * @param events - the session event log.
- * @param throughSeq - optional inclusive upper seq bound.
- * @returns eligible messages with exact source seqs.
- */
-function collectSessionTitleMessages(
-  events: readonly SessionEvent[],
-  throughSeq?: SessionSeq,
-): SessionTitleUserMessage[] {
-  const messages: SessionTitleUserMessage[] = []
-  for (const event of events) {
-    if (throughSeq !== undefined && event.seq > throughSeq) break
-    const message = sessionTitleUserMessageOf(event)
-    if (message !== undefined) messages.push(message)
-  }
-  return messages
-}
-
-const titleViewSchema: ZodType<string | null> = zod.string().min(1).nullable()
-
-/** Latest logged title text and its client view. */
-export const titleProjectionDefinition = {
-  key: 'title',
-  stateVersion: 1,
-  stateSchema: titleViewSchema,
-  init: () => null,
-  apply: (state, event) => (event.type === 'session/title'
-    ? event.data.title
-    : state),
-  wire: {
-    viewSchema: titleViewSchema,
-    view: state => state,
-  },
-} satisfies ProjectionDefinition<'title', string | null>
-
-/**
- * Fold the latest logged title without consulting mutable metadata.
- * @param events - live or persisted session log.
- * @returns the latest immutable title snapshot, or `undefined`.
- */
-export function foldSessionTitle(events: readonly SessionEvent[]): SessionTitleSnapshot | undefined {
-  const event = events.findLast(item => item.type === 'session/title')
-  if (event === undefined) return undefined
-  return titleSnapshotFromState({
-    title: event.data.title,
-    messageSeqs: event.data.messageSeqs,
-    source: event.data.source,
-    eventSeq: event.seq,
-    updatedAt: event.time,
-  })
-}
-
 /** Log-backed title fold plus asynchronous fallback generation. */
 export class SessionTitleService extends Service {
-  static inject = ['sessions', 'sessionProjections']
+  static inject = ['sessions']
   static Config: z<Config> = z.object({
     fallbackMaxWords: z.number().step(1).min(1).required(),
     fallbackMaxBytes: z.number().step(1).min(1).required(),
@@ -335,22 +301,20 @@ export class SessionTitleService extends Service {
       this.work.clear()
     }, 'sessionTitle lifecycle')
 
-    ctx.sessionProjections.register(titleProjectionDefinition)
-
-    ctx.sessionProjections.register<'titleInput', TitleInputState>({
-      key: 'titleInput',
-      stateVersion: 3,
-      stateSchema: titleInputStateSchema,
-      init: () => EMPTY_TITLE_INPUT,
-      apply: (state, event) => {
-        const message = sessionTitleUserMessageOf(event)
-        if (message === undefined) return state
-        return {
-          first: state.first ?? message,
-          count: state.count + 1,
-          lastSeq: message.seq,
-        }
-      },
+    // The title projection unit: pure last-wins fold of session/title events
+    // (the same events foldSessionTitle consumes), serving the plain title
+    // string clients list rows read. The unit child activates only when a
+    // projection registry is composed (headless assemblies stay unaffected).
+    ctx.inject(['sessionProjections'], (projectionCtx) => {
+      const titleSchema = zod.union([zod.string().min(1), zod.null()])
+      projectionCtx.sessionProjections.register<'title', string | null>({
+        key: 'title',
+        stateSchema: titleSchema,
+        init: () => null,
+        apply: (state, event) => (event.type === 'session/title' ? event.data.title : state),
+        wire: { viewSchema: titleSchema, view: state => state },
+        stateVersion: 1,
+      })
     })
 
     ctx.on('session/event', (session, event) => {
@@ -383,7 +347,7 @@ export class SessionTitleService extends Service {
    * @returns latest title snapshot, or `undefined` before eligible input.
    */
   get(session: Session): SessionTitleSnapshot | undefined {
-    return foldSessionTitle(session.snapshotEvents())
+    return foldSessionTitle(session.events)
   }
 
   /**
@@ -433,14 +397,15 @@ export class SessionTitleService extends Service {
       throw new Error(`session "${session.id}" is not live in this store`)
     }
     const registration = this.registration
-    const input = this.titleInputOf(session)
-    if (registration === undefined || registration.closing || input.lastSeq === null) {
+    const messages = collectSessionTitleMessages(session.events)
+    const latest = messages.at(-1)
+    if (registration === undefined || registration.closing || latest === undefined) {
       // Explicit refresh is the unpin even without a provider: a standing
       // user title must not short-circuit ensureFallback into a no-op, so
       // re-derive and append the fallback over it when one is derivable.
       const current = this.get(session)
-      const first = input.first
-      if (current?.source.kind === 'user' && first !== null) {
+      const [first] = messages
+      if (current?.source.kind === 'user' && first !== undefined) {
         this.appendFallback(session, first)
         signal?.throwIfAborted()
         return this.get(session)
@@ -454,7 +419,7 @@ export class SessionTitleService extends Service {
     const work = this.activate({
       registration,
       revision,
-      throughSeq: input.lastSeq,
+      throughSeq: latest.seq,
     }, state, signal)
     const config = session.requestHeader()?.config
     const route = config === undefined ? undefined : { provider: config.provider, model: config.model }
@@ -497,14 +462,14 @@ export class SessionTitleService extends Service {
   /** Schedule fallback creation and any provider cadence for one eligible event. */
   private onUserMessage(session: Session, event: Extract<SessionEvent, { type: 'user/message' }>): void {
     if (!this.serviceActive()) return
-    if (event.data.source.kind !== 'user' || sessionTitleUserMessageOf(event) === undefined) return
+    if (event.data.source.kind !== 'user' || collectSessionTitleMessages([event]).length === 0) return
     // A user rename pins the title: no automatic revision may override it.
     if (this.get(session)?.source.kind === 'user') return
     const registration = this.registration
     if (registration !== undefined && !registration.closing) {
-      const count = this.titleInputOf(session).count
+      const messages = collectSessionTitleMessages(session.events, event.seq)
       const shouldSchedule = registration.provider.automatic === 'all-prompts'
-        || (session.header.parentSession === undefined && count === 1 && this.get(session) === undefined)
+        || (session.header.parentSession === undefined && messages.length === 1 && this.get(session) === undefined)
       if (shouldSchedule) {
         const state = this.stateFor(session)
         const revision = this.supersede(state, 'newer user message superseded title generation')
@@ -541,9 +506,9 @@ export class SessionTitleService extends Service {
     const state = session === undefined ? undefined : this.work.get(session)
     const pending = state?.pending
     if (session === undefined || state === undefined || pending === undefined) return
-    const boundary = this.ctx.sessionProjections.stateOf(session, 'turnBoundary')?.lastStepBoundary
+    const boundary = session.events.findLast(event => event.type === 'step/start' || event.type === 'step/end')
     const route = session.requestHeader()?.config
-    if (boundary?.kind !== 'start'
+    if (boundary?.type !== 'step/start'
       || boundary.seq <= pending.throughSeq
       || route?.provider !== options.provider
       || route.model !== options.model) return
@@ -593,7 +558,7 @@ export class SessionTitleService extends Service {
       this.assertCurrent(session, work)
       await this.ensureFallback(session)
       this.assertCurrent(session, work)
-      const messages = collectSessionTitleMessages(session.snapshotEvents(), work.throughSeq)
+      const messages = collectSessionTitleMessages(session.events, work.throughSeq)
       const result = await work.registration.provider.generate({
         session,
         messages,
@@ -633,19 +598,18 @@ export class SessionTitleService extends Service {
     if (!Array.isArray(candidate.messageSeqs) || candidate.messageSeqs.length === 0) {
       throw new Error('session-title provider must identify at least one source message seq')
     }
-    const messageSeqs: SessionSeq[] = []
+    const messageSeqs: number[] = []
     const order = new Map(messages.map((message, index) => [message.seq, index]))
     let previous = -1
     for (const seq of candidate.messageSeqs as unknown[]) {
-      if (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 0) {
+      if (typeof seq !== 'number') {
         throw new Error('session-title provider messageSeqs must be unique, ordered seqs from the request')
       }
-      const sessionSeq = SessionSeq(seq)
-      const index = order.get(sessionSeq)
-      if (index === undefined || index <= previous) {
+      const index = order.get(seq)
+      if (!Number.isSafeInteger(seq) || seq < 0 || index === undefined || index <= previous) {
         throw new Error('session-title provider messageSeqs must be unique, ordered seqs from the request')
       }
-      messageSeqs.push(sessionSeq)
+      messageSeqs.push(seq)
       previous = index
     }
     const modelCandidate = candidate.model
@@ -714,10 +678,6 @@ export class SessionTitleService extends Service {
       this.work.set(session, state)
     }
     return state
-  }
-
-  private titleInputOf(session: Session): TitleInputState {
-    return this.ctx.sessionProjections.stateOf(session, 'titleInput') as TitleInputState
   }
 
   /** Queue detached service work and retain it through service disposal. */
@@ -797,8 +757,8 @@ export class SessionTitleService extends Service {
     this.assertServiceActive()
     const current = this.get(session)
     if (current !== undefined) return current
-    const first = this.titleInputOf(session).first
-    if (first === null) return undefined
+    const [first] = collectSessionTitleMessages(session.events)
+    if (first === undefined) return undefined
     const title = fallbackSessionTitle(
       first.text,
       this.config.fallbackMaxWords,

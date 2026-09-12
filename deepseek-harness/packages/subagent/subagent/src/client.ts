@@ -1,8 +1,7 @@
 /**
- * Browser-safe subagent projection and control vocabulary.
+ * Browser-safe subagent projection vocabulary.
  *
  * @module @deepseek-ai/dsh-subagent/client
  */
 
-export type * from './control-types.ts'
-export type { SubagentCatalogEntry, SubagentIdentityProjection, SubagentTimingProjection } from './projection-types.ts'
+export type { SubagentIdentityProjection, SubagentTimingProjection } from './projection-types.ts'

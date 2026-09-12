@@ -27,10 +27,8 @@ function failureDetail(result: SubagentResult): string {
 }
 
 /**
- * Map a child result to the task outcome: completed carries final text, local
- * cancellation (`aborted` without a diagnostic) is killed, and provider-
- * diagnosed remote aborts plus every other reason are failed without partial
- * output.
+ * Map a child result to the task outcome: completed carries final text,
+ * aborted is killed, and every other reason is failed without partial output.
  * @param result - child terminal result.
  * @returns outcome for the `ctx.jobs` registration.
  */
@@ -39,9 +37,7 @@ function runOutcome(result: SubagentResult): JobOutcome {
     case 'completed':
       return { status: 'completed', output: finalText(result.output) }
     case 'aborted':
-      return result.diagnostic === undefined
-        ? { status: 'killed' }
-        : { status: 'failed', detail: failureDetail(result) }
+      return { status: 'killed' }
     case 'error':
     case 'max-tokens':
     case 'refusal':

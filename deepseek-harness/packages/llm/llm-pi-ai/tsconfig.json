@@ -12,9 +12,6 @@
       "path": "../../util/launch-environment"
     },
     {
-      "path": "../../util/brand"
-    },
-    {
       "path": "../../../vendor/cosmokit"
     },
     {
@@ -30,9 +27,6 @@
       "path": "../../attachment/attachment"
     },
     {
-      "path": "../../fs/fs"
-    },
-    {
       "path": "../../credentials/credentials"
     },
     {
@@ -42,10 +36,10 @@
       "path": "../../settings/settings"
     },
     {
-      "path": "../../util/timeout"
+      "path": "../../runtime-diagnostics/invariants"
     },
     {
-      "path": "../../util/http-proxy"
+      "path": "../../util/timeout"
     }
   ]
 }

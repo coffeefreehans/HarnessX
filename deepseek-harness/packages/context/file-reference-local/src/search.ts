@@ -15,36 +15,9 @@ export { activeAtToken, formatFileMention } from '@deepseek-ai/dsh-file-referenc
 /** Default maximum file and directory candidates rendered for one query. */
 export const DEFAULT_FILE_SEARCH_MAX_RESULTS = 20
 /** Default maximum entries retained in one workspace search index. */
-export const DEFAULT_FILE_SEARCH_MAX_ENTRIES = 50_000
-/**
- * Directory basenames omitted from traversal unless the deployment overrides
- * them: version-control and dependency stores plus build-output names that no
- * ecosystem also uses for sources. Generated files carry the basenames of the
- * sources that produced them, so an unfiltered tree both spends the entry
- * budget twice and ranks `dist/x.js` beside `src/x.ts` for every query.
- *
- * `lib` is deliberately absent: Ruby gems and many npm packages keep their
- * sources there, and excluding it would make `@` miss those sources entirely
- * and silently. A workspace that builds into `lib` adds it through
- * `excludedDirectories`.
- */
-export const DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES = [
-  '.git',
-  'node_modules',
-  'dist',
-  'build',
-  'out',
-  'coverage',
-  'target',
-  '.next',
-  '.nuxt',
-  '.turbo',
-  '.venv',
-  '__pycache__',
-  '.pytest_cache',
-  '.mypy_cache',
-  '.gradle',
-] as const
+export const DEFAULT_FILE_SEARCH_MAX_ENTRIES = 10_000
+/** Directory basenames omitted from traversal unless the deployment overrides them. */
+export const DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES = ['.git', 'node_modules'] as const
 
 /** Resolved limits and exclusions for one workspace index. */
 export interface FileSearchConfig {
@@ -68,25 +41,14 @@ interface IndexGeneration {
   promise: Promise<IndexedPath[]>
 }
 
-/** A completed traversal and the invalidation counter it observed at its start. */
-interface SettledIndex {
-  entries: IndexedPath[]
-  startedAt: number
-}
-
 /**
  * Cancellable, reusable fuzzy index rooted at one agent working directory.
  * Directory-scoped queries list live state; bare fuzzy queries share one
- * bounded traversal. Only the first query of a workspace waits for that
- * traversal — an invalidated index keeps answering while its replacement
- * builds behind the caret.
+ * bounded traversal until the `@` interaction ends or a tool result invalidates it.
  */
 export class WorkspaceFileSearch {
   private readonly excludedDirectories: ReadonlySet<string>
-  private settled: SettledIndex | undefined
   private generation: IndexGeneration | undefined
-  /** Monotonic invalidation counter; a settled index below it is stale. */
-  private invalidations = 0
   private disposed = false
 
   constructor(
@@ -121,7 +83,7 @@ export class WorkspaceFileSearch {
       const fragment = slash < 0 ? '' : query.slice(slash + 1)
       return this.listDirectory(directory, fragment, signal)
     }
-    const indexed = await this.indexFor(signal)
+    const indexed = await waitForPromise(this.ensureIndex(), signal)
     return rankCandidates(
       indexed.filter(candidate => visibleForGlobalQuery(candidate.path, query)),
       query,
@@ -129,71 +91,31 @@ export class WorkspaceFileSearch {
     )
   }
 
-  /**
-   * Mark the index stale so a later bare query observes a fresh tree.
-   *
-   * The stale entries are kept and keep answering: a rebuild costs one
-   * traversal of the whole workspace, and putting that in front of the caret
-   * is what a caller invalidating on every tool result would otherwise pay.
-   */
+  /** Discard the current index so the next bare query observes a fresh tree. */
   invalidate(): void {
-    this.invalidations += 1
+    this.generation?.controller.abort(new Error('file search index invalidated'))
+    this.generation = undefined
   }
 
   /** Abort traversal and make later queries return no candidates. */
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
-    this.generation?.controller.abort(new Error('file search index disposed'))
-    this.generation = undefined
-    this.settled = undefined
-  }
-
-  /**
-   * The entries a bare fuzzy query ranks. Only the first query of a workspace
-   * waits for a traversal; afterwards a stale index answers immediately and
-   * its replacement builds in the background.
-   * @param signal - cancels this caller's wait without killing a shared traversal.
-   * @returns indexed paths, at most one invalidation behind the tree.
-   */
-  private async indexFor(signal: AbortSignal): Promise<readonly IndexedPath[]> {
-    const settled = this.settled
-    if (settled === undefined) return waitForPromise(this.ensureIndex(), signal)
-    if (settled.startedAt < this.invalidations) {
-      void this.ensureIndex().catch(() => {
-        // A background refresh failure is not this caller's error: the stale
-        // entries still answer and `settled.startedAt` stays behind, so the
-        // next bare query starts a fresh attempt.
-      })
-    }
-    return settled.entries
+    this.invalidate()
   }
 
   private ensureIndex(): Promise<IndexedPath[]> {
     if (this.generation !== undefined) return this.generation.promise
     const controller = new AbortController()
-    const startedAt = this.invalidations
     const generation = {
       controller,
       promise: Promise.resolve([] as IndexedPath[]),
     } satisfies IndexGeneration
-    generation.promise = this.scanWorkspace(controller.signal).then(
-      (entries) => {
-        /* v8 ignore next -- disposal aborts this traversal, so it reaches the
-         * rejection handler instead; the guard only covers a scan that finished
-         * its last directory in the instant before the abort landed, and must
-         * not hand a disposed index its entries back. */
-        if (this.disposed) return entries
-        this.generation = undefined
-        this.settled = { entries, startedAt }
-        return entries
-      },
-      (error: unknown) => {
-        /* v8 ignore next -- dispose clears `generation` synchronously; this only protects an unexpected scan failure */
-        if (this.generation === generation) this.generation = undefined
-        throw error
-      },
-    )
+    generation.promise = this.scanWorkspace(controller.signal).catch((error: unknown) => {
+      /* v8 ignore next -- every owned abort clears `generation` synchronously; this only protects an unexpected scan failure */
+      if (this.generation === generation) this.generation = undefined
+      throw error
+    })
     this.generation = generation
     return generation.promise
   }
@@ -208,13 +130,7 @@ export class WorkspaceFileSearch {
       if (directory === undefined) {
         throw new Error('file search selected a missing directory')
       }
-      // The root is not a subtree: an unreadable branch costs its own
-      // candidates, but an unreadable root means the traversal learned
-      // nothing. Letting that settle would publish an empty index over
-      // entries that are still good and leave no invalidation to retry from.
-      const entries = cursor === 0
-        ? await readWorkspaceRoot(directory.absolute, signal)
-        : await readDirectory(directory.absolute, signal)
+      const entries = await readDirectory(directory.absolute, signal)
       for (const entry of entries) {
         signal.throwIfAborted()
         const path = directory.relative === '' ? entry.name : `${directory.relative}/${entry.name}`
@@ -281,13 +197,6 @@ async function resolveDisplayDirectory(
   return absolute
 }
 
-async function readWorkspaceRoot(absolute: string, signal: AbortSignal) {
-  signal.throwIfAborted()
-  const entries = await readdir(absolute, { withFileTypes: true })
-  signal.throwIfAborted()
-  return entries.sort((left, right) => compareText(left.name, right.name))
-}
-
 async function readDirectory(absolute: string, signal: AbortSignal) {
   signal.throwIfAborted()
   try {
@@ -295,12 +204,10 @@ async function readDirectory(absolute: string, signal: AbortSignal) {
     signal.throwIfAborted()
     return entries.sort((left, right) => compareText(left.name, right.name))
   } catch (_error: unknown) {
-    /* v8 ignore start -- Windows chmod cannot make the unreadable-directory fixture fail readdir; POSIX behavior covers this fallback. */
     signal.throwIfAborted()
     // An unreadable/missing subtree contributes no candidates; other readable
     // branches remain useful and autocomplete is advisory.
     return []
-    /* v8 ignore stop */
   }
 }
 

@@ -10,12 +10,11 @@ import type {
   WorkflowAgentEndInfo, WorkflowAgentInfo, WorkflowResult, WorkflowRun,
   WorkflowRunId as WorkflowRunIdType, WorkflowStartRequest,
 } from '@deepseek-ai/dsh-workflow'
-import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import { CallId } from '@deepseek-ai/dsh-llm'
 import SubagentRuntime from '@deepseek-ai/dsh-subagent'
 import WorkerThreadWorkflowEngine from '@deepseek-ai/dsh-workflow-worker-thread'
 import * as toolWorkflow from '../src/index.ts'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 
 const testToolSignal = new AbortController().signal
 
@@ -97,7 +96,7 @@ function execute(ctx: Context, args: unknown, extra?: {
 }): Promise<ToolExecutionResult> {
   return ctx.tools.execute({
     signal: testToolSignal,
-    callId: ToolCallId('call-1'),
+    callId: CallId('call-1'),
     name: 'workflow',
     arguments: args,
     ...extra?.agent ? { agent: extra.agent } : {},
@@ -146,7 +145,7 @@ describe('dsh-tool-workflow', () => {
     engine.settleRun(runId, { value: 1, stopReason: 'completed', agentsStarted: 1 })
     expect((await pending).isError).toBe(false)
     expect(engine.disposed).toBe(1)
-    expect(session.snapshotEvents().map(event => [event.type, event.data])).toEqual([
+    expect(session.events.map(event => [event.type, event.data])).toEqual([
       ['tool-workflow/run-start', { runId: 'run-1', name: 'audit' }],
       ['tool-workflow/agent-start', {
         runId: 'run-1', seq: 1, label: '', phase: '', childId: 'child-1',
@@ -166,10 +165,10 @@ describe('dsh-tool-workflow', () => {
       value: null, stopReason: 'completed', agentsStarted: 0,
     })
     await vi.waitFor(() => { expect(engine.disposed).toBe(1) })
-    expect(session.snapshotEvents().map(event => event.type)).toEqual(['tool-workflow/run-start'])
+    expect(session.events.map(event => event.type)).toEqual(['tool-workflow/run-start'])
     barrier.resolve(undefined)
     expect((await pending).isError).toBe(false)
-    expect(session.snapshotEvents().map(event => event.type)).toEqual([
+    expect(session.events.map(event => event.type)).toEqual([
       'tool-workflow/run-start', 'tool-workflow/run-end',
     ])
   })
@@ -190,9 +189,9 @@ describe('dsh-tool-workflow', () => {
     engine.settleRun(secondId, { value: null, stopReason: 'error', error: 'child failed', agentsStarted: 1 })
     expect((await first).isError).toBe(false)
     expect((await second).isError).toBe(true)
-    expect(session.snapshotEvents().filter(event => event.type === 'tool-workflow/agent-start'))
+    expect(session.events.filter(event => event.type === 'tool-workflow/agent-start'))
       .toHaveLength(1)
-    expect(session.snapshotEvents().filter(event => event.type === 'tool-workflow/run-end').map(event => event.data))
+    expect(session.events.filter(event => event.type === 'tool-workflow/run-end').map(event => event.data))
       .toEqual([
         { runId: 'run-1', stopReason: 'completed' },
         { runId: 'run-2', stopReason: 'error' },
@@ -208,7 +207,7 @@ describe('dsh-tool-workflow', () => {
     await vi.waitFor(() => { expect(engine.requests).toHaveLength(1) })
     engine.settleRun(WorkflowRunId('run-1'), { value: null, stopReason: 'completed', agentsStarted: 0 })
     expect((await pending).isError).toBe(false)
-    expect(session.snapshotEvents()).toEqual([])
+    expect(session.events).toEqual([])
   })
 
   it.each([
@@ -240,7 +239,7 @@ describe('dsh-tool-workflow', () => {
     expect(engine.disposed).toBe(1)
     expect(warnings).toHaveLength(1)
     expect(warnings[0]).toContain(failedType)
-    const types = session.snapshotEvents().map(event => event.type)
+    const types = session.events.map(event => event.type)
     const expectedPrefixes = {
       'tool-workflow/run-start': [],
       'tool-workflow/agent-start': ['tool-workflow/run-start'],
@@ -380,10 +379,6 @@ describe('dsh-tool-workflow', () => {
     const section = sections.find(s => s.name === 'tool:orchestrate')
     expect(section?.text).toContain('orchestrate')
     expect(sections.some(s => s.name === 'tool:workflow')).toBe(false)
-    ctx.systemPrompt.section({ name: 'tool:cordis-order-probe', order: 115.5, text: 'Cordis' })
-    expect((await ctx.systemPrompt.assemble()).sections
-      .filter(s => s.name === 'tool:cordis-order-probe' || s.name === 'tool:orchestrate')
-      .map(s => s.name)).toEqual(['tool:cordis-order-probe', 'tool:orchestrate'])
     await fiber.dispose()
     expect(ctx.tools.get('orchestrate')).toBeUndefined()
     // …and gone with the fiber — a reload must not leak a stale section.
@@ -425,11 +420,10 @@ describe('dsh-tool-workflow', () => {
       const ctx = new Context()
       await ctx.plugin(SystemPrompt)
       await ctx.plugin(ToolRuntime)
-      await ctx.plugin(SessionProjectionRegistry)
       await ctx.plugin(SubagentRuntime)
       ctx.subagents.registerProvider({
         name: 'spawn',
-        capabilities: { agentOptions: true, outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
+        capabilities: { outputSchema: true, depthLimit: true, toolFilter: true, persona: true },
         inheritsParentContext: false,
         start: () => Promise.reject(new Error('the parked-script fixture must not start a child')),
       })

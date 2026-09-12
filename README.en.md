@@ -11,7 +11,7 @@
 
 HarnessX is an independently maintained desktop client for DeepSeek Harness. It owns the Electron window, system tray, local runtime, terminal, profile switching, and plugin management while composing the agents, sessions, tools, and Web UI from a pinned DeepSeek Harness source snapshot.
 
-Release `v0.1.9` is available from the independent public repository with x64 and ARM64 installers for Windows and macOS, plus portable archives for both platforms.
+Release `v0.1.9` is available from the independent public repository with x64 and ARM64 installers for Windows and macOS. Portable archives remain local test artifacts and are not uploaded to the public Release.
 
 ## Downloads
 
@@ -35,7 +35,7 @@ Release `v0.1.9` is available from the independent public repository with x64 an
 - Native Windows terminal entry point
 - Plugin sources, catalog, and installation job management
 - Application update checks and installer downloads
-- Separate Windows x64 and ARM64 installers and portable builds
+- Separate Windows x64 and ARM64 installers and local portable test builds
 - Desktop-owned "HARNESSX" settings group: desktop-owned settings pages (notifications, multimodal models, and others) kept separate from the kernel so upstream upgrades cannot overwrite them
 - Multimodal image support: when the current model cannot accept images, pictures are first described by a universal vision model and sent as text; custom endpoints can declare image input per model (the settings page is off by default in this release, but the capability is in place)
 - Desktop preferences now persist host-side (a `prefs.json` under the DSH home), surviving app restarts and kernel web-server port changes

@@ -1,5 +1,4 @@
-import type { ToolCallId } from '@deepseek-ai/dsh-llm'
-import type { SessionSeq } from '@deepseek-ai/dsh-session/types'
+import type { CallId } from '@deepseek-ai/dsh-llm'
 
 /** Character-budget policy for deterministic tool-result pruning. */
 export interface ToolResultPruneConfig {
@@ -21,11 +20,11 @@ export interface ResolvedConfig {
 /** Cited source event and size accounting for one landed surface replacement. */
 export interface PrunedEntry {
   /** Full-fidelity tool-result event shadowed by the replacement. */
-  readonly originalSeq: SessionSeq
+  readonly originalSeq: number
   /** Newly appended pruned tool-result event. */
-  readonly replacementSeq: SessionSeq
+  readonly replacementSeq: number
   /** Tool call shared by the original and replacement. */
-  readonly callId: ToolCallId
+  readonly callId: CallId
   /** Original text size in Unicode code points. */
   readonly charsBefore: number
   /** Replacement text size in Unicode code points. */

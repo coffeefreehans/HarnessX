@@ -3,10 +3,7 @@ import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
 import type {} from '@deepseek-ai/dsh-commands/types'
 import type {
   ConversationNodeDefinition,
-} from '@deepseek-ai/dsh-client-ui-conversation/client'
-
-/** The command name whose runs this projection owns. */
-export const GOAL_COMMAND = 'goal'
+} from '@deepseek-ai/dsh-client-runtime/client'
 
 /** Goal-owned human command input projected independently of model messages. */
 export interface GoalCommandInputData {
@@ -15,7 +12,7 @@ export interface GoalCommandInputData {
   readonly time: number
 }
 
-declare module '@deepseek-ai/dsh-client-ui-chat/client' {
+declare module '@deepseek-ai/dsh-client-ui-conversation/client' {
   interface ChatNodeDataMap {
     /** Human-entered `/goal` command input. */
     'command-input': GoalCommandInputData
@@ -39,7 +36,7 @@ export function goalCommandText(event: SessionEvent<'command/run'>): string {
 export const goalCommandInputDefinition: ConversationNodeDefinition<GoalCommandInputState> = {
   kind: 'goal-command-input',
   target: 'chat',
-  match: event => event.type === 'command/run' && event.data.name === GOAL_COMMAND
+  match: event => event.type === 'command/run' && event.data.name === 'goal'
     ? { id: String(event.data.commandId), role: 'start' }
     : null,
   start: (_context, match) => {

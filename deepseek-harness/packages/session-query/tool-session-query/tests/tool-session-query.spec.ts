@@ -1,20 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context, type Fiber } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { createUserMessage, ToolCallId, HarnessError , createMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, CallId, HarnessError , createMessage } from '@deepseek-ai/dsh-llm'
 import { MAX_TIMER_DELAY_MS, TimeoutReason } from '@deepseek-ai/dsh-timeout'
 import * as TimeoutPolicy from '@deepseek-ai/dsh-tool-call-timeout-policy'
 import SessionStore, {
   SESSION_FORMAT_VERSION,
   SessionId,
-  SessionSeq,
   type Session,
-  type SessionEvent,
   type SessionHeader,
   type SessionId as SessionIdValue,
 } from '@deepseek-ai/dsh-session'
-import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
-import { turnBoundaryProjectionDefinition } from '@deepseek-ai/dsh-agent-loop'
 import SessionQueryEngine, {
   SessionQueryError,
   SessionSearchCursor,
@@ -46,7 +42,6 @@ function header(id: string, cwd: string | undefined, createdAt = 1, parentSessio
     version: SESSION_FORMAT_VERSION,
     id: SessionId(id),
     createdAt,
-    isSeeded: false,
     ...cwd === undefined ? {} : { cwd },
     ...parentSession === undefined ? {} : { parentSession },
   }
@@ -96,7 +91,7 @@ function sessionHit(
     persisted: false,
     bestMatch: {
       sessionId: SessionId(id),
-      seq: SessionSeq(4),
+      seq: 4,
       type: 'assistant/message',
       time: 200,
       surface: 'current',
@@ -105,7 +100,7 @@ function sessionHit(
   }
 }
 
-function eventHit(sessionId: SessionIdValue, seq: SessionSeq, text = 'needle excerpt'): SessionEventSearchHit {
+function eventHit(sessionId: SessionIdValue, seq: number, text = 'needle excerpt'): SessionEventSearchHit {
   return {
     sessionId,
     seq,
@@ -184,7 +179,7 @@ class FakeQuery extends SessionQueryEngine {
             title: value,
             messageSeqs: [],
             source: { kind: 'fallback' },
-            eventSeq: SessionSeq(0),
+            eventSeq: 0,
             updatedAt: 1,
           },
         },
@@ -200,10 +195,6 @@ interface Mounted {
   call(name: string, args: unknown, options?: { agent?: Agent; signal?: AbortSignal }): Promise<ToolExecutionResult>
 }
 
-function registerTurnBoundary(ctx: Context): void {
-  ctx.sessionProjections.register(turnBoundaryProjectionDefinition)
-}
-
 async function mount(
   config: ToolSessionQuery.Config = {},
   callerCwd: string | null = '/work',
@@ -212,8 +203,6 @@ async function mount(
   const ctx = new Context()
   activeContexts.push(ctx)
   await ctx.plugin(SessionStore)
-  await ctx.plugin(SessionProjectionRegistry)
-  registerTurnBoundary(ctx)
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
   if (enforceTimeout) await ctx.plugin(TimeoutPolicy)
@@ -229,7 +218,7 @@ async function mount(
     call: (toolName, args, options = {}) => ctx.tools.execute({
       name: toolName,
       arguments: args,
-      callId: ToolCallId(`call-${++calls}`),
+      callId: CallId(`call-${++calls}`),
       signal: options.signal ?? new AbortController().signal,
       ...options.agent === undefined ? { agent: fakeAgent(caller) } : { agent: options.agent },
     }),
@@ -312,7 +301,7 @@ describe('registration and schemas', () => {
       expect(mounted.ctx.tools.executionMode({
         name,
         arguments: args,
-        callId: ToolCallId(`mode-${name}`),
+        callId: CallId(`mode-${name}`),
         signal: new AbortController().signal,
         agent: fakeAgent(mounted.caller),
       })).toEqual({ kind })
@@ -590,7 +579,7 @@ describe('workspace authority and lineage redaction', () => {
     const missing = await mounted.ctx.tools.execute({
       name: 'session_trace',
       arguments: {},
-      callId: ToolCallId('missing-agent'),
+      callId: CallId('missing-agent'),
       signal: new AbortController().signal,
     })
     expect(errorCode(missing)).toBe('SESSION_QUERY_TOOL_MISSING_AGENT')
@@ -1156,7 +1145,7 @@ describe('workspace authority and lineage redaction', () => {
 
     FakeQuery.eventSearch = () => Promise.resolve({
       session: movedHeader,
-      items: [eventHit(target.id, SessionSeq(0), 'secret event hit')],
+      items: [eventHit(target.id, 0, 'secret event hit')],
     })
     const search = await mounted.call('session_event_search', {
       session_id: target.id,
@@ -1173,7 +1162,7 @@ describe('workspace authority and lineage redaction', () => {
     expect(errorCode(await mounted.call('session_trace', { session_id: target.id })))
       .toBe('SESSION_QUERY_TOOL_UNAUTHORIZED')
 
-    const eventTrace = await mounted.ctx.sessionQuery.traceEvent({ sessionId: target.id, seq: SessionSeq(0) })
+    const eventTrace = await mounted.ctx.sessionQuery.traceEvent({ sessionId: target.id, seq: 0 })
     vi.spyOn(mounted.ctx.sessionQuery, 'traceEvent').mockResolvedValueOnce({
       ...eventTrace,
       session: movedHeader,
@@ -1181,7 +1170,7 @@ describe('workspace authority and lineage redaction', () => {
     expect(errorCode(await mounted.call('session_event_trace', { session_id: target.id, seq: 0 })))
       .toBe('SESSION_QUERY_TOOL_UNAUTHORIZED')
 
-    const eventWindow = await mounted.ctx.sessionQuery.readEvent({ sessionId: target.id, seq: SessionSeq(0) })
+    const eventWindow = await mounted.ctx.sessionQuery.readEvent({ sessionId: target.id, seq: 0 })
     vi.spyOn(mounted.ctx.sessionQuery, 'readEvent').mockResolvedValueOnce({
       ...eventWindow,
       session: movedHeader,
@@ -1201,7 +1190,7 @@ describe('workspace authority and lineage redaction', () => {
           title: 'secret moved title',
           messageSeqs: [],
           source: { kind: 'fallback' },
-          eventSeq: SessionSeq(0),
+          eventSeq: 0,
           updatedAt: 1,
         },
       },
@@ -1216,7 +1205,7 @@ describe('workspace authority and lineage redaction', () => {
     const appendLegacy = mounted.caller.append.bind(mounted.caller) as unknown as (
       type: string,
       data: unknown,
-    ) => SessionEvent
+    ) => Session['events'][number]
     const secret = appendLegacy(
       'context/message',
       {
@@ -1585,7 +1574,7 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
     const mounted = await mount()
     FakeQuery.eventSearch = request => Promise.resolve({
       session: header(request.sessionId, '/work'),
-      items: [eventHit(request.sessionId, SessionSeq(1))],
+      items: [eventHit(request.sessionId, 1)],
     })
     await mounted.call('session_event_search', {
       query: 'prior',
@@ -1623,19 +1612,19 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
       { query: 'q' },
       { agent: fakeAgent(noStep) },
     )
-    expect(errorCode(missing)).toBe('SESSION_QUERY_INVALID_FILTER')
+    expect(errorCode(missing)).toBe('SESSION_QUERY_TOOL_NO_CURRENT_STEP')
 
     const other = createSession(mounted.ctx, 'paged-events', '/work')
     const cursor = SessionSearchCursor('events-next')
     FakeQuery.eventSearch = request => request.cursor === undefined
       ? Promise.resolve({
         session: header(other.id, '/work'),
-        items: [eventHit(other.id, SessionSeq(1))],
+        items: [eventHit(other.id, 1)],
         nextCursor: cursor,
       })
       : Promise.resolve({
         session: header(other.id, '/work'),
-        items: [eventHit(other.id, SessionSeq(2)), eventHit(other.id, SessionSeq(3))],
+        items: [eventHit(other.id, 2), eventHit(other.id, 3)],
       })
     const result = await mounted.call('session_event_search', {
       session_id: other.id,
@@ -1643,26 +1632,6 @@ describe('search paging, prior-history bounds, titles, and cancellation', () => 
     })
     expect(FakeQuery.eventRequests.map(request => request.cursor)).toEqual([undefined, cursor])
     expect(text(result)).toContain('Result cap reached')
-  })
-
-  it('rejects current-session search without the turnBoundary fold', async () => {
-    const ctx = new Context()
-    activeContexts.push(ctx)
-    await ctx.plugin(SessionStore)
-    await ctx.plugin(SessionProjectionRegistry)
-    await ctx.plugin(SystemPrompt)
-    await ctx.plugin(ToolRuntime)
-    await ctx.plugin(FakeQuery)
-    await ctx.plugin(ToolSessionQuery)
-    const session = createSession(ctx, 'no-boundary-caller', '/work')
-    const result = await ctx.tools.execute({
-      name: 'session_event_search',
-      arguments: { query: 'q' },
-      callId: ToolCallId('call-no-boundary'),
-      signal: new AbortController().signal,
-      agent: fakeAgent(session),
-    })
-    expect(errorCode(result)).toBe('SESSION_QUERY_TOOL_NO_CURRENT_STEP')
   })
 
   it('preserves base results when a title read fails, annotates the code, and logs the full error', async () => {
@@ -1992,21 +1961,26 @@ describe('trace and exact read rendering', () => {
       { surfaceOp: 'append' },
     )
     session.append(
-      'user/message',
-      createUserMessage({
-        content: [{ type: 'text', text: 'replacement' }],
-        source: { kind: 'plugin', plugin: 'test' },
-      }),
+      'assistant/message',
       {
-        surfaceOp: { op: 'replace', startSeq: SessionSeq(0), endSeq: SessionSeq(0) },
-        sourceEventSeqs: [SessionSeq(0)],
+        turn: 1,
+        step: 1,
+        message: createMessage({
+          role: 'assistant',
+          content: [{ type: 'text', text: 'replacement' }],
+          source: {
+            kind: 'model',
+            ...{ provider: 'test', model: 'test' },
+          },
+        }),
       },
+      { surfaceOp: { op: 'replace', start: 0, end: 0 }, sourceEventSeqs: [0] },
     )
     const result = await mounted.call('session_event_trace', { session_id: session.id, seq: 0 })
     expect(text(result)).toContain('Replacement chain: 1')
     expect(text(result)).toContain('Events cited directly as sources: none')
     expect(text(result)).toContain('Direct derived events: 1')
-    expect(text(result)).toContain(new Date(session.snapshotEvents()[0]?.time ?? 0).toISOString())
+    expect(text(result)).toContain(new Date(session.events[0]?.time ?? 0).toISOString())
   })
 
   it('renders unabridged fenced target JSON and readable semantic or log-only neighbor summaries', async () => {
@@ -2022,7 +1996,6 @@ describe('trace and exact read rendering', () => {
     session.append(
       'assistant/message',
       {
-        stream: [],
         turn: 1,
         step: 1,
         message: createMessage({
@@ -2039,7 +2012,7 @@ describe('trace and exact read rendering', () => {
     const appendLegacy = session.append.bind(session) as unknown as (
       type: string,
       data: unknown,
-    ) => SessionEvent
+    ) => Session['events'][number]
     appendLegacy(
       'context/message',
       { content: [{ type: 'text', text: 'after semantic text' }], source: { kind: 'plugin', plugin: 'test' } },

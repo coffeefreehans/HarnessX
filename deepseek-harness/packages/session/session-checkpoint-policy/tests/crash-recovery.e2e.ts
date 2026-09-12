@@ -6,7 +6,7 @@ import { execa } from 'execa'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import SessionStore, {
-  SessionId, TOOL_OUTCOME_UNKNOWN, interruptedTurnClosers,
+  SessionId, TOOL_OUTCOME_UNKNOWN,
   type SessionEvent,
 } from '@deepseek-ai/dsh-session'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
@@ -64,21 +64,12 @@ async function crashAt(mode: 'request' | 'tool'): Promise<{ root: string; marker
   }
 }
 
-// Read the crashed durable log and balance it the way a resuming reader does:
-// the stored events stay untouched; `interruptedTurnClosers` supplies the
-// in-memory closers for the interrupted tail turn.
 async function load(root: string): Promise<SessionEvent[]> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
   await ctx.plugin(JsonlSessionPersistence, { root, compression: 'none' })
   try {
-    const handle = await ctx.sessionPersistence.open(sessionId, 'read')
-    try {
-      const { events } = await handle.read()
-      return [...events, ...interruptedTurnClosers(events)]
-    } finally {
-      await handle.close()
-    }
+    return [...(await ctx.sessionPersistence.load(sessionId)).events]
   } finally {
     await ctx.fiber.dispose()
   }
@@ -95,7 +86,7 @@ describe.skipIf(process.platform === 'win32')('semantic checkpoint hard-crash re
     const events = await load(crashed.root)
     expect(events.map(event => event.type)).toEqual([
       'agent/inbox/spliced', 'turn/start', 'agent/inbox/spliced',
-      'step/start', 'system/message', 'user/message', 'request/header', 'request/context', 'step/end', 'turn/end',
+      'step/start', 'user/message', 'request/header', 'request/context', 'step/end', 'turn/end',
     ])
     expect(events.at(-1)).toMatchObject({
       type: 'turn/end', data: { reason: { kind: 'interrupted' } },

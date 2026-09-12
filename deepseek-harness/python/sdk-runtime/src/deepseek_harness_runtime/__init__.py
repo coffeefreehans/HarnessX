@@ -1,22 +1,22 @@
-"""Locate and execute the bundled dsh CLI shipped with the Python SDK runtime.
+"""Locate the bundled DeepSeek Harness SDK runtime shipped with this package.
 
 Two runtime carriers coexist under ``runtime/``, both injected by the repo's
 ``scripts/build-exe-for-python-sdk.ts`` build (neither is checked into git):
 
 - **exe (production)**: single-file Node executables named
-  ``deepseek-harness-sdk-runtime-<platform>-<arch>`` for Linux/macOS and an
-  ``.exe`` counterpart for Windows. Each has a sibling ripgrep executable;
-  macOS also uses a sibling ``-spawn-helper``. The target machine needs no
-  Node installation.
+  ``dsh-jsonrpc-agent-pkg-<platform>-<arch>`` (platform in {linux, macos}, arch in
+  {x64, arm64}) with a sibling ``-rg`` executable; macOS also uses a sibling
+  ``-spawn-helper``. The target machine needs no Node installation.
 - **node (dev-only)**: the full deploy closure under ``runtime/node/``
   (``package.json`` + ``node_modules/``), executed as ``node
-  runtime/node/node_modules/@deepseek-ai/dsh/lib/bin.js`` on a
+  runtime/node/node_modules/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/packaged-bin.js`` on a
   system Node >= 22.19. It is the current checkout's source build, never
   selected automatically, and excluded from wheel/sdist distributions.
 
-Both carriers execute the same dsh command grammar. The Python SDK selects the
-``sdk`` profile and requires an explicit Harness home; the installed ``dsh``
-console command requires ``DSH_HOME`` for the same reason.
+``runtime/cordis.yml`` IS checked in: it is the default agent configuration
+the client SDK injects via ``$DSH_CORDIS_CONFIG`` for zero-config runs — the
+runtime itself always requires an explicit config and has no built-in
+fallback.
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ from __future__ import annotations
 import os
 import platform
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -32,7 +31,7 @@ PACKAGE_METADATA_FILENAME = "deepseek-harness-runtime.json"
 
 RUNTIME_MODE_ENV_VAR = "DSH_RUNTIME_MODE"
 
-_PLATFORM_TAGS = {"linux": "linux", "darwin": "macos", "win32": "win"}
+_PLATFORM_TAGS = {"linux": "linux", "darwin": "macos"}
 _ARCH_TAGS = {"x86_64": "x64", "amd64": "x64", "arm64": "arm64", "aarch64": "arm64"}
 
 _EXE_ACQUISITION_HINT = (
@@ -53,6 +52,21 @@ def bundled_package_dir() -> Path:
     return root
 
 
+def bundled_default_config_path() -> Path:
+    """Path of the checked-in default runtime configuration (``runtime/cordis.yml``).
+
+    The client SDK injects this path via ``$DSH_CORDIS_CONFIG`` when the caller
+    supplies no config and the launch resolves to the bundled runtime — the
+    runtime binary itself always demands an explicit config.
+    """
+    path = bundled_package_dir() / "runtime" / "cordis.yml"
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"deepseek-harness-runtime-bin is missing the default runtime config at {path}"
+        )
+    return path
+
+
 def bundled_runtime_path() -> Path:
     """Absolute path of the bundled single-file runtime executable for the current platform.
 
@@ -64,18 +78,13 @@ def bundled_runtime_path() -> Path:
     touching callers).
     """
     tag = _current_platform_tag()
-    extension = ".exe" if tag.startswith("win-") else ""
-    path = bundled_package_dir() / "runtime" / f"deepseek-harness-sdk-runtime-{tag}{extension}"
+    path = bundled_package_dir() / "runtime" / f"dsh-jsonrpc-agent-pkg-{tag}"
     if not path.is_file():
         raise FileNotFoundError(
             f"deepseek-harness-runtime-bin is missing the runtime executable at {path}. "
             + _EXE_ACQUISITION_HINT
         )
-    ripgrep = (
-        path.with_name(f"{path.stem}-rg.exe")
-        if tag.startswith("win-")
-        else Path(f"{path}-rg")
-    )
+    ripgrep = Path(f"{path}-rg")
     if not ripgrep.is_file():
         raise FileNotFoundError(
             f"deepseek-harness-runtime-bin is missing the ripgrep sidecar at {ripgrep}. "
@@ -117,15 +126,11 @@ def resolve_bundled_launch_args(mode: str | None = None) -> tuple[str, ...]:
 def _current_platform_tag() -> str:
     plat = _PLATFORM_TAGS.get(sys.platform)
     arch = _ARCH_TAGS.get(platform.machine().lower())
-    if (
-        plat is None
-        or arch is None
-        or (plat == "win" and arch != "x64")
-    ):
+    if plat is None or arch is None:
         raise FileNotFoundError(
-            "no bundled DeepSeek Harness SDK runtime exists for this platform "
+            "no bundled dsh-jsonrpc-agent executable exists for this platform "
             f"(sys.platform={sys.platform!r}, machine={platform.machine()!r}); supported: "
-            "Linux x64/arm64, macOS x64/arm64, and Windows x64. " + _EXE_ACQUISITION_HINT
+            "linux/macos on x64/arm64. " + _EXE_ACQUISITION_HINT
         )
     return f"{plat}-{arch}"
 
@@ -136,9 +141,9 @@ def _node_launch_args() -> tuple[str, str]:
         node_root
         / "node_modules"
         / "@deepseek-ai"
-        / "dsh"
+        / "dsh-sdk-jsonrpc-demo"
         / "lib"
-        / "bin.js"
+        / "packaged-bin.js"
     )
     if not bin_js.is_file():
         raise FileNotFoundError(
@@ -156,27 +161,11 @@ def _node_launch_args() -> tuple[str, str]:
     return (node, str(bin_js))
 
 
-def main() -> None:
-    """Launch the CLI with explicit DSH_HOME; wait on Windows, replace the process on POSIX."""
-    if not os.environ.get("DSH_HOME", "").strip():
-        print(
-            "dsh: the Python runtime command requires an explicit DSH_HOME; "
-            "it never uses ~/.dsh implicitly",
-            file=sys.stderr,
-        )
-        raise SystemExit(2)
-    argv = (*resolve_bundled_launch_args(), *sys.argv[1:])
-    if sys.platform == "win32":
-        # Windows CRT exec does not replace the process; wait and preserve the runtime status.
-        raise SystemExit(subprocess.run(argv, env=os.environ).returncode)
-    os.execvpe(argv[0], argv, os.environ)
-
-
 __all__ = [
     "PACKAGE_METADATA_FILENAME",
     "RUNTIME_MODE_ENV_VAR",
+    "bundled_default_config_path",
     "bundled_package_dir",
     "bundled_runtime_path",
-    "main",
     "resolve_bundled_launch_args",
 ]

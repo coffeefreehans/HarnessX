@@ -6,7 +6,6 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
-import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import {
   SessionQueryError,
@@ -58,7 +57,7 @@ async function executeSessionSearch(
   exec: ToolRunContext,
   maxResults: number,
 ): Promise<string> {
-  const caller = workspaceAccess.callerOf(exec, ctx)
+  const caller = workspaceAccess.callerOf(exec)
   const cwd = caller.header.cwd
   if (cwd === undefined) {
     throw new HarnessError(
@@ -120,22 +119,20 @@ async function executeEventSearch(
   exec: ToolRunContext,
   maxResults: number,
 ): Promise<string> {
-  const caller = workspaceAccess.callerOf(exec, ctx)
+  const caller = workspaceAccess.callerOf(exec)
   const sessionId = workspaceAccess.targetId(args, caller)
   await workspaceAccess.authorizeTarget(ctx, caller, sessionId, exec.signal)
   const query = toolInput.normalizeQuery(args.query)
   const range = toolInput.sequenceRange(args.seq_from, args.seq_to)
   if (sessionId === caller.id) {
-    const stepStartSeq = caller.boundary?.lastStepStartSeq
-    if (stepStartSeq === undefined) {
+    const stepStart = caller.events.findLast(event => event.type === 'step/start')
+    if (stepStart === undefined) {
       throw new HarnessError(
         'current-session search requires an active step boundary',
         'SESSION_QUERY_TOOL_NO_CURRENT_STEP',
       )
     }
-    // `null` (no step started yet) caps the range to a degenerate `to` the
-    // filter validation rejects — the loop never runs tools outside a step.
-    range.to = Math.min(range.to ?? Number.MAX_SAFE_INTEGER, (stepStartSeq ?? 0) - 1)
+    range.to = Math.min(range.to ?? Number.MAX_SAFE_INTEGER, stepStart.seq - 1)
   }
   const title = await workspaceAccess.readTitle(ctx, caller, sessionId, exec.signal)
   if (range.from !== undefined && range.to !== undefined && range.from > range.to) {
@@ -173,7 +170,7 @@ async function executeSessionTrace(
   args: SessionTargetArgs,
   exec: ToolRunContext,
 ): Promise<string> {
-  const caller = workspaceAccess.callerOf(exec, ctx)
+  const caller = workspaceAccess.callerOf(exec)
   const sessionId = workspaceAccess.targetId(args, caller)
   await workspaceAccess.authorizeTarget(ctx, caller, sessionId, exec.signal)
   const trace = await serviceBoundary.call(ctx, exec.signal, 'session lineage trace', () =>
@@ -206,12 +203,11 @@ async function executeEventTrace(
   exec: ToolRunContext,
 ): Promise<string> {
   toolInput.assertNonNegativeSafeInteger('seq', args.seq)
-  const seq = SessionSeq(args.seq)
-  const caller = workspaceAccess.callerOf(exec, ctx)
+  const caller = workspaceAccess.callerOf(exec)
   const sessionId = workspaceAccess.targetId(args, caller)
   await workspaceAccess.authorizeTarget(ctx, caller, sessionId, exec.signal)
   const trace = await serviceBoundary.call(ctx, exec.signal, 'event trace', () =>
-    ctx.sessionQuery.traceEvent({ sessionId, seq }, exec.signal))
+    ctx.sessionQuery.traceEvent({ sessionId, seq: args.seq }, exec.signal))
   workspaceAccess.assertObservedTargetAuthorized(caller, sessionId, trace.session)
   const title = await workspaceAccess.readTitle(ctx, caller, sessionId, exec.signal)
   return presentation.formatEventTrace(sessionId, title, trace)
@@ -223,16 +219,15 @@ async function executeEventRead(
   exec: ToolRunContext,
 ): Promise<string> {
   toolInput.assertNonNegativeSafeInteger('seq', args.seq)
-  const seq = SessionSeq(args.seq)
   if (args.before !== undefined) toolInput.assertNonNegativeSafeInteger('before', args.before)
   if (args.after !== undefined) toolInput.assertNonNegativeSafeInteger('after', args.after)
-  const caller = workspaceAccess.callerOf(exec, ctx)
+  const caller = workspaceAccess.callerOf(exec)
   const sessionId = workspaceAccess.targetId(args, caller)
   await workspaceAccess.authorizeTarget(ctx, caller, sessionId, exec.signal)
   const window = await serviceBoundary.call(ctx, exec.signal, 'event read', () =>
     ctx.sessionQuery.readEvent({
       sessionId,
-      seq,
+      seq: args.seq,
       ...args.before === undefined ? {} : { before: args.before },
       ...args.after === undefined ? {} : { after: args.after },
     }, exec.signal))

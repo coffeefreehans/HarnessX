@@ -1,7 +1,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
 import type { IndexInjection } from '@deepseek-ai/dsh-host-webserver'
-import { SettingsProvider, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
+import { SettingsProvider, settingsNamespace, type SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import {
   DEFAULT_PREFERENCE, THEME_SETTINGS_NAMESPACE, apply,
 } from '@deepseek-ai/dsh-client-ui-theme'
@@ -33,13 +33,11 @@ describe('ui-theme host', () => {
     await ctx.plugin(MemorySettings).await()
     const fiber = ctx.plugin({ apply })
     await fiber.await()
-    const ns = THEME_SETTINGS_NAMESPACE
-    expect(ctx.settings.get(ns)).toEqual({ preference: DEFAULT_PREFERENCE, fontSize: 14 })
-    await ctx.settings.update(ns, { preference: 'dark', fontSize: 16 })
-    expect(ctx.settings.get(ns)).toEqual({ preference: 'dark', fontSize: 16 })
+    const ns = settingsNamespace(THEME_SETTINGS_NAMESPACE)
+    expect(ctx.settings.get(ns)).toEqual({ preference: DEFAULT_PREFERENCE })
+    await ctx.settings.update(ns, { preference: 'dark' })
+    expect(ctx.settings.get(ns)).toEqual({ preference: 'dark' })
     await expect(ctx.settings.update(ns, { preference: 'sepia' })).rejects.toThrow()
-    await expect(ctx.settings.update(ns, { fontSize: 11 })).rejects.toThrow()
-    await expect(ctx.settings.update(ns, { fontSize: 18 })).rejects.toThrow()
     await fiber.dispose()
     expect(ctx.settings.describe().map(row => row.ns)).not.toContain(ns)
   })
@@ -53,10 +51,8 @@ describe('ui-theme host', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ kind: 'script', placement: 'body' })
     expect(scriptText(rows[0])).toContain('const preference = "system"')
-    expect(scriptText(rows[0])).toContain('"14px"')
-    await ctx.settings.update(THEME_SETTINGS_NAMESPACE, { preference: 'dark', fontSize: 17 })
+    await ctx.settings.update(settingsNamespace(THEME_SETTINGS_NAMESPACE), { preference: 'dark' })
     expect(scriptText(collect(ctx)[0])).toContain('const preference = "dark"')
-    expect(scriptText(collect(ctx)[0])).toContain('"17px"')
     await fiber.dispose()
     expect(collect(ctx)).toEqual([])
   })

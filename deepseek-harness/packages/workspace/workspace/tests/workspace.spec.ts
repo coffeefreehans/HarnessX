@@ -7,10 +7,8 @@ import Storage from '@deepseek-ai/dsh-storage'
 import type { StorageBackend } from '@deepseek-ai/dsh-storage'
 import { DomainFacility } from '@deepseek-ai/dsh-storage-domain'
 import type { DomainChanged } from '@deepseek-ai/dsh-storage-domain'
-import SessionStore, { SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionHeader } from '@deepseek-ai/dsh-session'
-import { SessionPersistenceRevision } from '@deepseek-ai/dsh-session-persistence'
-import type { SessionPersistenceSnapshot } from '@deepseek-ai/dsh-session-persistence'
 import { MemoryMediaPool, MemoryStorageBackend } from '../../../storage/storage-domain/tests/helpers/memory-backend.ts'
 import WorkspaceRegistry, {
   WorkspaceId,
@@ -18,15 +16,13 @@ import WorkspaceRegistry, {
   WorkspaceOrderInvalidError,
 } from '../src/index.ts'
 import type { WorkspaceDomainState, WorkspaceRecord } from '../src/index.ts'
-import { defaultWorkspaceTitle, fullyQualifiedWorkspacePath } from '../src/paths.ts'
 
 const DOMAIN_VERSION = 2
 
 const header = (id: string, cwd?: string, createdAt = 0): SessionHeader => ({
-  version: SESSION_FORMAT_VERSION,
+  version: 0,
   id: SessionId(id),
   createdAt,
-  isSeeded: false,
   ...(cwd === undefined ? {} : { cwd }),
 })
 
@@ -49,11 +45,10 @@ async function harness(options: HarnessOptions = {}) {
   ctx.provide('storageDomain', facility)
 
   let listed = options.sessions ?? []
-  const list = vi.fn(async (): Promise<SessionPersistenceSnapshot[]> =>
-    listed.map(header => ({ header, revision: SessionPersistenceRevision(`rev-${header.id}`) })))
-  const open = vi.fn(() => { throw new Error('event bodies must not be opened') })
-  const stat = vi.fn(() => { throw new Error('per-session stat must not be needed') })
-  ctx.provide('sessionPersistence', { list, open, stat } as never)
+  const list = vi.fn(async () => listed)
+  const load = vi.fn(() => { throw new Error('event bodies must not be loaded') })
+  const inspect = vi.fn(() => { throw new Error('event bodies must not be inspected') })
+  ctx.provide('sessionPersistence', { list, load, inspect } as never)
 
   if (options.sessionStore === true) {
     await ctx.plugin(SessionStore)
@@ -78,8 +73,8 @@ async function harness(options: HarnessOptions = {}) {
     changes,
     initChanges,
     list,
-    open,
-    stat,
+    load,
+    inspect,
     setSessions: (headers: SessionHeader[]) => { listed = headers },
   }
 }
@@ -196,7 +191,7 @@ describe('WorkspaceRegistry lifecycle and bootstrap', () => {
     expect(ctx.get('workspaceRegistry')).toBeUndefined()
     expect(pool.media.has('workspace')).toBe(false)
 
-    const list = vi.fn(async () => [] as SessionPersistenceSnapshot[])
+    const list = vi.fn(async () => [] as SessionHeader[])
     ctx.provide('sessionPersistence', { list } as never)
     await fiber.await()
     expect(ctx.workspaceRegistry.list()).toEqual([])
@@ -224,8 +219,8 @@ describe('WorkspaceRegistry lifecycle and bootstrap', () => {
     })
 
     expect(result.list).toHaveBeenCalledTimes(1)
-    expect(result.open).not.toHaveBeenCalled()
-    expect(result.stat).not.toHaveBeenCalled()
+    expect(result.load).not.toHaveBeenCalled()
+    expect(result.inspect).not.toHaveBeenCalled()
     expect(result.registry.list().map(workspace => workspace.path)).toEqual([newer, older])
     expect(result.registry.list().map(workspace => workspace.sessionIds)).toEqual([
       ['newer-only'],
@@ -357,24 +352,6 @@ describe('WorkspaceRegistry lifecycle and bootstrap', () => {
 })
 
 describe('WorkspaceRegistry create and lookup', () => {
-  it('accepts fully qualified roots and directories without accepting drive-relative paths', () => {
-    expect(fullyQualifiedWorkspacePath('C:\\', 'win32')).toBe(true)
-    expect(fullyQualifiedWorkspacePath('C:\\work', 'win32')).toBe(true)
-    expect(fullyQualifiedWorkspacePath('\\\\server\\share', 'win32')).toBe(true)
-    expect(defaultWorkspaceTitle('C:\\', 'win32')).toBe('C:\\')
-    expect(defaultWorkspaceTitle('C:\\work', 'win32')).toBe('work')
-    expect(defaultWorkspaceTitle('\\\\server\\share', 'win32')).toBe('share')
-    expect(fullyQualifiedWorkspacePath('C:', 'win32')).toBe(false)
-    expect(fullyQualifiedWorkspacePath('C:work', 'win32')).toBe(false)
-    expect(fullyQualifiedWorkspacePath('\\work', 'win32')).toBe(false)
-    expect(fullyQualifiedWorkspacePath('.', 'win32')).toBe(false)
-    expect(fullyQualifiedWorkspacePath('/', 'linux')).toBe(true)
-    expect(fullyQualifiedWorkspacePath('/work', 'darwin')).toBe(true)
-    expect(defaultWorkspaceTitle('/', 'linux')).toBe('/')
-    expect(defaultWorkspaceTitle('/work', 'darwin')).toBe('work')
-    expect(fullyQualifiedWorkspacePath('work', 'linux')).toBe(false)
-  })
-
   it('creates newest-first and idempotently reuses a canonical path without retitling', async () => {
     const firstDir = await makeDir('first')
     const secondDir = await makeDir('second')
@@ -423,14 +400,6 @@ describe('WorkspaceRegistry create and lookup', () => {
     await expect(registry.create(join(parent, 'missing'))).rejects.toMatchObject({ code: 'ENOENT' })
     await expect(registry.create(file)).rejects.toThrow(/not a directory/)
     await expect(registry.resolveByPath(join(parent, 'missing'))).rejects.toMatchObject({ code: 'ENOENT' })
-    expect(registry.list()).toEqual([])
-  })
-
-  it('rejects a resolvable relative path instead of adopting it from the Host cwd', async () => {
-    const { registry } = await harness()
-    const fromHostCwd = '.'
-    await expect(registry.create(fromHostCwd)).rejects.toThrow(/fully qualified/)
-    await expect(registry.resolveByPath(fromHostCwd)).rejects.toThrow(/fully qualified/)
     expect(registry.list()).toEqual([])
   })
 
@@ -521,8 +490,8 @@ describe('WorkspaceRegistry create and lookup', () => {
     expect(result.pool.media.get('workspace')!.tables.get('workspaces')!.has(workspace.id)).toBe(false)
     await expect(realpath(dir)).resolves.toBe(dir)
     expect(result.list).toHaveBeenCalledTimes(1)
-    expect(result.open).not.toHaveBeenCalled()
-    expect(result.stat).not.toHaveBeenCalled()
+    expect(result.load).not.toHaveBeenCalled()
+    expect(result.inspect).not.toHaveBeenCalled()
 
     const reregistered = await result.registry.create(dir)
     expect(reregistered.id).not.toBe(workspace.id)

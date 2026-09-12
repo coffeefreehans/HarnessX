@@ -5,7 +5,7 @@
  * working-directory resolution (config override, else the delegating parent
  * session's workspace), the never-reject result settlement, and the standard
  * run-handle publication. Backends compose these with their own wire drivers;
- * the process machinery itself (spawn, env scrub, managed-range teardown)
+ * the process machinery itself (spawn, env scrub, tree-scoped teardown)
  * belongs to the `dsh-subprocess` seam.
  *
  * @module @deepseek-ai/dsh-subagent/out-of-process
@@ -41,21 +41,13 @@ function limitSubagentDiagnostic(diagnostic: string): string {
     + DIAGNOSTIC_TRUNCATION_SUFFIX
 }
 
-/** Enforce the byte limit on a provider-returned diagnostic. */
-function normalizeSubagentDiagnostic(result: SubagentResult): SubagentResult {
-  return result.diagnostic === undefined
-    ? result
-    : { ...result, diagnostic: limitSubagentDiagnostic(result.diagnostic) }
-}
-
 /**
  * The capability advertisement of an out-of-process backend: NONE. A child in
  * another process cannot honor parent-enforced start features
- * (`agentOptions`/`outputSchema`/`maxDepth`/`toolFilter`/`persona`), so the service rejects a
+ * (`outputSchema`/`maxDepth`/`toolFilter`/`persona`), so the service rejects a
  * request needing any of them before `start` runs — never accepted-then-ignored.
  */
 export const NO_START_CAPABILITIES: SubagentCapabilities = Object.freeze({
-  agentOptions: false,
   outputSchema: false,
   depthLimit: false,
   toolFilter: false,
@@ -184,8 +176,7 @@ export interface RunResultSettlement {
  * rejects after publication. A normally completed or rejected attempt resolves
  * as `aborted` when cancellation already settled locally; another rejection is
  * flattened to `stopReason: 'error'` through the contained diagnostic sink.
- * Provider-returned diagnostics use the same byte limit. The abort listener is
- * removed on every path.
+ * The abort listener is removed on every path.
  * @param parts - the attempt, output snapshot, cancellation state, sink, and signal wiring.
  * @returns the terminal result (never a rejection).
  */
@@ -194,7 +185,7 @@ export async function settleRunResult(parts: RunResultSettlement): Promise<Subag
     const result = await parts.attempt()
     return parts.cancelled()
       ? { output: parts.collectOutput(), stopReason: 'aborted' }
-      : normalizeSubagentDiagnostic(result)
+      : result
   } catch (error: unknown) {
     // Cover a rejection already queued when cancellation arrives.
     if (parts.cancelled()) return { output: parts.collectOutput(), stopReason: 'aborted' }

@@ -1,8 +1,8 @@
 /** Browser-side HarnessX update settings page. */
 
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -24,13 +24,12 @@ export type UpdatesKey =
   | 'checking'
   | 'downloadAndInstall'
   | 'processing'
-  | 'downloading'
   | 'currentVersion'
-  | 'kernelVersion'
   | 'latestVersion'
   | 'notChecked'
   | 'arch'
   | 'publishedAt'
+  | 'releaseTitle'
   | 'lastChecked'
   | 'releaseNotes'
   | 'noReleaseNotes'
@@ -62,13 +61,12 @@ const zh: Record<UpdatesKey, string> = {
   checking: '检查中…',
   downloadAndInstall: '下载并安装',
   processing: '处理中…',
-  downloading: '下载中',
   currentVersion: '当前版本',
-  kernelVersion: '内核版本',
   latestVersion: '最新版本',
   notChecked: '尚未检查',
   arch: 'CPU 架构',
   publishedAt: '发布时间',
+  releaseTitle: '版本标题',
   lastChecked: '上次检查',
   releaseNotes: '版本说明',
   noReleaseNotes: '暂无版本说明。',
@@ -101,13 +99,12 @@ const en: Record<UpdatesKey, string> = {
   checking: 'Checking…',
   downloadAndInstall: 'Download and Install',
   processing: 'Processing…',
-  downloading: 'Downloading',
   currentVersion: 'Current Version',
-  kernelVersion: 'Kernel Version',
   latestVersion: 'Latest Version',
   notChecked: 'Not checked yet',
   arch: 'Architecture',
   publishedAt: 'Published At',
+  releaseTitle: 'Release Title',
   lastChecked: 'Last Checked',
   releaseNotes: 'Release Notes',
   noReleaseNotes: 'No release notes available.',
@@ -137,8 +134,6 @@ const NS = 'settings.updates'
 interface UpdateSnapshot {
   /** Installed application version. */
   currentVersion: string
-  /** DeepSeek Harness kernel (runtime package family) version. */
-  kernelVersion?: string
   /** Current CPU architecture. */
   arch: string
   /** Whether this package can download an installer. */
@@ -147,8 +142,6 @@ interface UpdateSnapshot {
   checking: boolean
   /** Version currently being downloaded. */
   downloadingVersion?: string
-  /** Download progress of `downloadingVersion`, as an integer 0-100. */
-  downloadProgress?: number
   /** Latest version returned by GitHub. */
   latestVersion?: string
   /** Update comparison result. */
@@ -178,11 +171,6 @@ const UPDATE_STYLES = `
 .harnessxUpdatesButtonPrimary { border-color: var(--dsw-alias-accent, #2563eb); background: var(--dsw-alias-accent, #2563eb); color: #fff; }
 .harnessxUpdatesButtonPrimary:hover { color: #fff; filter: brightness(.96); }
 .harnessxUpdatesButton:disabled { opacity: .5; cursor: not-allowed; }
-.harnessxUpdatesButtonDownloading { position: relative; overflow: hidden; opacity: 1; cursor: progress; border-color: var(--dsw-alias-accent, #2563eb); background: var(--dsw-alias-bg-subtle, #f7f7f8); color: var(--dsw-alias-accent, #2563eb); --harnessx-download-progress: 0%; }
-.harnessxUpdatesButtonDownloading:hover { color: var(--dsw-alias-accent, #2563eb); }
-.harnessxUpdatesButtonDownloadingFill { position: absolute; inset: 0 auto 0 0; width: var(--harnessx-download-progress); background: var(--dsw-alias-accent, #2563eb); transition: width .25s ease; }
-.harnessxUpdatesButtonDownloadingLabel { position: relative; }
-.harnessxUpdatesButtonDownloadingLabelOnFill { position: absolute; inset: 0; display: inline-flex; align-items: center; justify-content: center; color: #fff; clip-path: inset(0 calc(100% - var(--harnessx-download-progress)) 0 0); }
 .harnessxUpdatesGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; margin-top: 20px; border-top: 1px solid var(--dsw-alias-border-l1, #ececf1); border-left: 1px solid var(--dsw-alias-border-l1, #ececf1); }
 .harnessxUpdatesField { min-width: 0; padding: 14px 16px; border-right: 1px solid var(--dsw-alias-border-l1, #ececf1); border-bottom: 1px solid var(--dsw-alias-border-l1, #ececf1); }
 .harnessxUpdatesField dt { margin: 0 0 5px; color: var(--dsw-alias-text-secondary, #686875); font-size: 12px; }
@@ -216,7 +204,7 @@ export function applyUpdates(ctx: ClientContext): void {
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'application-updates',
-    order: 110,
+    order: 100,
     label: () => ctx.locale.bind(NS)('nav'),
     locale: NS,
   }, UpdateSettingsSection))
@@ -265,18 +253,6 @@ function UpdateSettingsSection(props: PropsRuntime<'settings.section'> & PropsLo
   const latestVersion = snapshot?.latestVersion ?? t('notChecked')
   const busy = action !== undefined || snapshot?.checking === true || snapshot?.downloadingVersion !== undefined
   const canDownload = snapshot?.status === 'update-available' && snapshot.canDownload
-  const downloading = snapshot?.downloadingVersion !== undefined
-  const downloadPercent = Math.min(100, Math.max(0, snapshot?.downloadProgress ?? 0))
-
-  // The download POST only resolves when the installer is complete; poll the
-  // coordinator so the button can follow live 0-100 progress meanwhile.
-  useEffect(() => {
-    if (!downloading) return
-    const timer = window.setInterval(() => {
-      void requestSnapshot('/api/desktop/updates/status').then(setSnapshot).catch(() => undefined)
-    }, 500)
-    return () => { window.clearInterval(timer) }
-  }, [downloading])
 
   return (
     <section className="harnessxUpdates">
@@ -296,31 +272,14 @@ function UpdateSettingsSection(props: PropsRuntime<'settings.section'> & PropsLo
         >
           {action === 'check' ? t('checking') : t('checkUpdates')}
         </button>
-        {downloading ? (
-          <button
-            className="harnessxUpdatesButton harnessxUpdatesButtonDownloading"
-            type="button"
-            disabled
-            style={{ '--harnessx-download-progress': `${String(downloadPercent)}%` } as CSSProperties}
-          >
-            <span className="harnessxUpdatesButtonDownloadingFill" aria-hidden="true" />
-            <span className="harnessxUpdatesButtonDownloadingLabel harnessxUpdatesButtonDownloadingLabelOnFill" aria-hidden="true">
-              {t('downloading')} {String(downloadPercent)}%
-            </span>
-            <span className="harnessxUpdatesButtonDownloadingLabel">
-              {t('downloading')} {String(downloadPercent)}%
-            </span>
-          </button>
-        ) : (
-          <button
-            className="harnessxUpdatesButton harnessxUpdatesButtonPrimary"
-            type="button"
-            disabled={busy || !canDownload}
-            onClick={() => { void runAction('download') }}
-          >
-            {action === 'download' ? t('processing') : t('downloadAndInstall')}
-          </button>
-        )}
+        <button
+          className="harnessxUpdatesButton harnessxUpdatesButtonPrimary"
+          type="button"
+          disabled={busy || !canDownload}
+          onClick={() => { void runAction('download') }}
+        >
+          {action === 'download' || snapshot?.downloadingVersion !== undefined ? t('processing') : t('downloadAndInstall')}
+        </button>
         {snapshot?.releaseUrl !== undefined && (
           <a className="harnessxUpdatesButton" href={snapshot.releaseUrl} target="_blank" rel="noreferrer">
             {t('openRelease')}
@@ -339,10 +298,10 @@ function UpdateSettingsSection(props: PropsRuntime<'settings.section'> & PropsLo
 
       <dl className="harnessxUpdatesGrid">
         <div className="harnessxUpdatesField"><dt>{t('currentVersion')}</dt><dd>{currentVersion}</dd></div>
-        <div className="harnessxUpdatesField"><dt>{t('kernelVersion')}</dt><dd>{snapshot?.kernelVersion ?? '—'}</dd></div>
         <div className="harnessxUpdatesField"><dt>{t('latestVersion')}</dt><dd>{latestVersion}</dd></div>
         <div className="harnessxUpdatesField"><dt>{t('arch')}</dt><dd>{snapshot?.arch ?? '—'}</dd></div>
         <div className="harnessxUpdatesField"><dt>{t('publishedAt')}</dt><dd>{formatDate(snapshot?.publishedAt)}</dd></div>
+        <div className="harnessxUpdatesField"><dt>{t('releaseTitle')}</dt><dd>{snapshot?.releaseName ?? '—'}</dd></div>
         <div className="harnessxUpdatesField"><dt>{t('lastChecked')}</dt><dd>{formatDate(snapshot?.lastCheckedAt)}</dd></div>
       </dl>
 

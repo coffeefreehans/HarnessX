@@ -9,13 +9,13 @@
   ],
   "references": [
     {
-      "path": "../../../vendor/cordis"
+      "path": "../../runtime-diagnostics/invariants"
     },
     {
       "path": "../ui-slots"
     },
     {
-      "path": "../ui-renderer"
+      "path": "../runtime"
     },
     {
       "path": "../ui-workspace"

@@ -23,8 +23,6 @@ export type IndexInjection =
    * loader resolves worker-only URLs such as `/plugins/...`).
    */
   | { kind: 'script-src'; placement: IndexInjectionPlacement; src: string }
-  /** Advisory preload for an external classic script; static workers may ignore it. */
-  | { kind: 'script-preload'; src: string }
   /** A `<style>` element in the head. `text` must not contain `</style`, which would close the element early. */
   | { kind: 'style'; text: string }
   /** Raw markup fragment. */
@@ -59,8 +57,6 @@ function renderRow(row: IndexInjection): { placement: IndexInjectionPlacement; m
       return { placement: row.placement, markup: `<script>${row.text}</script>` }
     case 'script-src':
       return { placement: row.placement, markup: `<script src="${escapeHtmlAttribute(row.src)}"></script>` }
-    case 'script-preload':
-      return { placement: 'head', markup: `<link rel="preload" as="script" href="${escapeHtmlAttribute(row.src)}">` }
     case 'style':
       return { placement: 'head', markup: `<style>${row.text}</style>` }
     case 'html':
@@ -76,19 +72,9 @@ function splice(html: string, at: number, markup: string): string {
 }
 
 /**
- * Tail script settling the boot-readiness deferred (`__DSH_BOOT_READY__`):
- * the client entry awaits its `.promise` before reading any injected state.
- * Whichever side runs first creates the deferred (`??=`), so a bootstrap that
- * applies the table asynchronously installs it ahead of the entry module and
- * settles it after the last row; the served form below creates and resolves
- * it in one statement, because every row is already in the document text.
- */
-const READY_MARKUP = '<script>(globalThis.__DSH_BOOT_READY__ ??= Promise.withResolvers()).resolve()</script>'
-
-/**
  * Render rows into an index.html body: head rows immediately after the
  * opening head tag, body rows immediately after the opening body tag, each
- * group in table order, and the boot-readiness tail after the last body row.
+ * group in table order.
  * @param html - the raw index.html body.
  * @param rows - the collected injection table.
  * @returns the html with every row rendered.
@@ -101,7 +87,6 @@ export function renderIndexInjections(html: string, rows: readonly IndexInjectio
     if (rendered.placement === 'head') head += rendered.markup
     else body += rendered.markup
   }
-  body += READY_MARKUP
   let out = html
   if (head !== '') {
     const open = /<head(?:\s[^>]*)?>/i.exec(out)

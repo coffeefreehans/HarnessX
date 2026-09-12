@@ -7,8 +7,7 @@ import {
 } from '../src/client/notifications.ts'
 import { playCompletionSound } from '../src/client/sound.ts'
 import { applySessionNotifications } from '../src/client/session-notifications.ts'
-import type { Context as ClientContext } from '@deepseek-ai/cordis'
-import type { SessionId } from '@deepseek-ai/dsh-client-connection/client'
+import type { ClientContext, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 
 describe('client notifications and sound', () => {
   beforeEach(() => {

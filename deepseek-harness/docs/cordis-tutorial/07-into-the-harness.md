@@ -10,9 +10,8 @@ Create `greet-tool.ts` in `tmp/cordis-tutorial`:
 
 ```ts
 import type { Context } from '@deepseek-ai/cordis'
-import { brandString } from '@deepseek-ai/dsh-brand'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import type { ToolCallId } from '@deepseek-ai/dsh-llm'
+import { CallId } from '@deepseek-ai/dsh-llm'
 
 export const name = 'greet-tool'
 export const inject = ['tools']
@@ -34,10 +33,10 @@ export function apply(ctx: Context) {
   }))
 
   // Drive one call through the real execution pipeline, standing in for
-  // the model. ToolCallId brands the correlation id a provider would issue.
+  // the model. CallId brands the correlation id a provider would issue.
   void (async () => {
     const result = await ctx.tools.execute({
-      callId: brandString<ToolCallId>('demo-1'),
+      callId: CallId('demo-1'),
       name: 'greet',
       arguments: { name: 'Cordis' },
       signal: new AbortController().signal,
@@ -96,7 +95,7 @@ The logger fired first: `tools/result` is emitted as part of result materializat
 
 ## From here to a full agent
 
-A real agent is this composition plus more plugins: an LLM adapter, the agent loop, persistence, and an application entry. Compare the [base profile layer](../../packages/bundle/base/cordis.patch.yml) and [headless layer](../../packages/bundle/headless/cordis.patch.yml) — you can read their entries now. Add your `greet-tool.ts` through a small `--patch` overlay.
+A real agent is this composition plus more plugins: an LLM adapter, the agent loop, persistence, an entry point. Compare [examples/headless-agent/cordis.yml](../../examples/headless-agent/cordis.yml) — you can read every entry in it now. Add your `greet-tool.ts` to a copy of that file.
 
 Where to go next:
 

@@ -1,40 +1,25 @@
 import { createUserMessage, createMessage } from '@deepseek-ai/dsh-llm'
 import { describe, expect, it, vi } from 'vitest'
 import { Context, type Fiber } from '@deepseek-ai/cordis'
-import SessionStore, { SessionLogOffset, SessionSeq, SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
-import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
+import SessionStore, { SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader, SessionId as SessionIdType } from '@deepseek-ai/dsh-session'
-import SessionPersistence, {
-  SessionPersistenceCorruptionError,
-  SessionPersistenceNotFoundError,
-  SessionPersistenceRevision,
-  SessionReadOnlyError,
-} from '@deepseek-ai/dsh-session-persistence'
-import type {
-  SessionAccess,
-  SessionHandle,
-  SessionHandleReadOptions,
-  SessionHandleReadResult,
-  SessionPersistenceSnapshot,
-} from '@deepseek-ai/dsh-session-persistence'
+import SessionPersistence, { SessionPersistenceCorruptionError, SessionPersistenceRevision } from '@deepseek-ai/dsh-session-persistence'
 import SessionQueryEngine, {
   SESSION_QUERY_DEFAULT_PERSISTED_INSPECT_CONCURRENCY,
   type SessionEventSurface,
   type SessionQueryErrorCode,
 } from '@deepseek-ai/dsh-session-query'
-import { SessionTitleProviderId, SessionTitleService } from '@deepseek-ai/dsh-session-title'
+import { SessionTitleProviderId } from '@deepseek-ai/dsh-session-title'
 import { TestSessionQueryEngine } from './test-service.ts'
 
-const TITLE_SERVICE_CONFIG = { fallbackMaxWords: 8, fallbackMaxBytes: 64, maxTitleBytes: 256 }
-
 function header(id: string, createdAt = 1, extra: Partial<SessionHeader> = {}): SessionHeader {
-  return { version: SESSION_FORMAT_VERSION, id: SessionId(id), createdAt, isSeeded: false, ...extra }
+  return { version: SESSION_FORMAT_VERSION, id: SessionId(id), createdAt, ...extra }
 }
 
 function eventLog(text = 'hello'): SessionEvent[] {
   return [{
     type: 'user/message',
-    seq: SessionSeq(0),
+    seq: 0,
     time: 10,
     data: createUserMessage({
       content: [{ type: 'text', text }], source: { kind: 'user' },
@@ -43,130 +28,103 @@ function eventLog(text = 'hello'): SessionEvent[] {
   }]
 }
 
-class TestHandle implements SessionHandle {
-  readonly inheritedEventCount = SessionLogOffset(0)
-
-  constructor(
-    readonly id: SessionIdType,
-    readonly header: SessionHeader,
-    readonly access: SessionAccess,
-  ) {}
-
-  read(offset = 0, length?: number, options?: SessionHandleReadOptions): Promise<SessionHandleReadResult> {
-    TestPersistence.readCalls.push(this.id)
-    TestPersistence.readSignals.push(options?.signal)
-    const slice = (events: SessionEvent[]): SessionEvent[] => {
-      const from = events.filter(event => event.seq >= offset)
-      return length === undefined ? from : from.slice(0, length)
-    }
-    if (TestPersistence.readOverride !== undefined) {
-      return TestPersistence.readOverride(this.id, options?.signal).then(loaded => ({
-        eventState: 'detached', events: structuredClone(slice(loaded.events)),
-      } as const))
-    }
-    if (TestPersistence.readFailure !== undefined) return rejectUnknown(TestPersistence.readFailure)
-    const entry = TestPersistence.entries.get(this.id)
-    if (entry === undefined) return Promise.reject(new SessionPersistenceNotFoundError(this.id))
-    const result = structuredClone(entry.events)
-    TestPersistence.readEffect?.()
-    TestPersistence.readEffect = undefined
-    return Promise.resolve({ eventState: 'detached', events: slice(result) })
-  }
-
-  append(events: readonly SessionEvent[]): Promise<void> {
-    if (this.access === 'read') return Promise.reject(new SessionReadOnlyError(this.id, 'append'))
-    const entry = TestPersistence.entries.get(this.id)
-    if (entry === undefined) return Promise.reject(new SessionPersistenceNotFoundError(this.id))
-    entry.events.push(...structuredClone(events))
-    return Promise.resolve()
-  }
-
-  flush(): Promise<void> {
-    if (this.access === 'read') return Promise.reject(new SessionReadOnlyError(this.id, 'flush'))
-    return Promise.resolve()
-  }
-
-  close(): Promise<void> {
-    return Promise.resolve()
-  }
-
-  [Symbol.asyncDispose](): Promise<void> {
-    return this.close()
-  }
-}
-
-function entryRevision(entry: { events: SessionEvent[] }): SessionPersistenceRevision {
-  return SessionPersistenceRevision(`events:${entry.events.length}`)
-}
-
 class TestPersistence extends SessionPersistence {
+  override readonly supportsRawArtifacts = false
+
   static entries = new Map<SessionIdType, { meta: SessionHeader; events: SessionEvent[] }>()
   static listFailure: unknown
-  static listOverride: ((signal?: AbortSignal) => Promise<SessionPersistenceSnapshot[]>) | undefined
-  static readFailure: unknown
-  static readEffect: (() => void) | undefined
-  static readOverride: ((
+  static listOverride: ((signal?: AbortSignal) => Promise<SessionHeader[]>) | undefined
+  static inspectFailure: unknown
+  static inspectEffect: (() => void) | undefined
+  static inspectOverride: ((
     id: SessionIdType,
     signal?: AbortSignal,
   ) => Promise<{ meta: SessionHeader; events: SessionEvent[] }>) | undefined
   static afterList: (() => void) | undefined
   static listCalls = 0
-  static readCalls: SessionIdType[] = []
+  static inspectCalls: SessionIdType[] = []
   static listSignals: Array<AbortSignal | undefined> = []
-  static readSignals: Array<AbortSignal | undefined> = []
+  static inspectSignals: Array<AbortSignal | undefined> = []
 
   static reset(entries: readonly { meta: SessionHeader; events: SessionEvent[] }[] = []): void {
     this.entries = new Map(entries.map(entry => [entry.meta.id, structuredClone(entry)]))
     this.listFailure = undefined
     this.listOverride = undefined
-    this.readFailure = undefined
-    this.readEffect = undefined
-    this.readOverride = undefined
+    this.inspectFailure = undefined
+    this.inspectEffect = undefined
+    this.inspectOverride = undefined
     this.afterList = undefined
     this.listCalls = 0
-    this.readCalls = []
+    this.inspectCalls = []
     this.listSignals = []
-    this.readSignals = []
+    this.inspectSignals = []
   }
 
-  create(header: SessionHeader): Promise<SessionHandle> {
-    TestPersistence.entries.set(header.id, { meta: structuredClone(header), events: [] })
-    return Promise.resolve(new TestHandle(header.id, structuredClone(header), 'write'))
+  locate(_meta: SessionHeader): undefined {
+    return undefined
   }
 
-  // Appends are durable on resolution here; nothing buffers, so the service-wide flush is a no-op.
-  async flush(): Promise<void> {}
+  create(meta: SessionHeader): Promise<void> {
+    TestPersistence.entries.set(meta.id, { meta: structuredClone(meta), events: [] })
+    return Promise.resolve()
+  }
 
-  open(id: SessionIdType, access: SessionAccess): Promise<SessionHandle> {
+  append(id: SessionIdType, events: readonly SessionEvent[]): Promise<void> {
     const entry = TestPersistence.entries.get(id)
-    if (entry === undefined) return Promise.reject(new SessionPersistenceNotFoundError(id))
-    return Promise.resolve(new TestHandle(id, structuredClone(entry.meta), access))
+    if (entry === undefined) return Promise.reject(new Error('missing test session'))
+    entry.events.push(...structuredClone(events))
+    return Promise.resolve()
   }
 
-  stat(id: SessionIdType): Promise<SessionPersistenceSnapshot | undefined> {
+  load(id: SessionIdType): Promise<{ meta: SessionHeader; events: SessionEvent[] }> {
+    return this.inspect(id)
+  }
+
+  inspect(
+    id: SessionIdType,
+    signal?: AbortSignal,
+  ): Promise<{ meta: SessionHeader; events: SessionEvent[] }> {
+    TestPersistence.inspectCalls.push(id)
+    TestPersistence.inspectSignals.push(signal)
+    if (TestPersistence.inspectOverride !== undefined) {
+      return TestPersistence.inspectOverride(id, signal)
+    }
+    if (TestPersistence.inspectFailure !== undefined) return rejectUnknown(TestPersistence.inspectFailure)
     const entry = TestPersistence.entries.get(id)
-    if (entry === undefined) return Promise.resolve(undefined)
-    return Promise.resolve({ header: structuredClone(entry.meta), revision: entryRevision(entry) })
+    if (entry === undefined) return Promise.reject(new Error('missing test session'))
+    const result = structuredClone(entry)
+    TestPersistence.inspectEffect?.()
+    TestPersistence.inspectEffect = undefined
+    return Promise.resolve(result)
   }
 
-  list(options?: { signal?: AbortSignal }): Promise<readonly SessionPersistenceSnapshot[]> {
+  async readFrom(id: SessionIdType, fromSeq: number, signal?: AbortSignal): Promise<{ meta: SessionHeader; events: SessionEvent[] }> {
+    const whole = await this.inspect(id, signal)
+    return { meta: whole.meta, events: whole.events.filter(event => event.seq >= fromSeq) }
+  }
+
+  list(signal?: AbortSignal): Promise<SessionHeader[]> {
     TestPersistence.listCalls += 1
-    TestPersistence.listSignals.push(options?.signal)
-    if (TestPersistence.listOverride !== undefined) return TestPersistence.listOverride(options?.signal)
+    TestPersistence.listSignals.push(signal)
+    if (TestPersistence.listOverride !== undefined) return TestPersistence.listOverride(signal)
     if (TestPersistence.listFailure !== undefined) return rejectUnknown(TestPersistence.listFailure)
-    const snapshots = [...TestPersistence.entries.values()].map(entry => ({
-      header: structuredClone(entry.meta),
-      revision: entryRevision(entry),
-    }))
+    const headers = [...TestPersistence.entries.values()].map(entry => structuredClone(entry.meta))
     TestPersistence.afterList?.()
-    return Promise.resolve(snapshots)
+    return Promise.resolve(headers)
+  }
+
+
+  async listSnapshots() {
+    return [...TestPersistence.entries.values()].map(entry => ({
+      header: structuredClone(entry.meta),
+      revision: SessionPersistenceRevision(`events:${entry.events.length}`),
+    }))
   }
 }
 
 async function liveContext(config: ConstructorParameters<typeof TestSessionQueryEngine>[1] = {}): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
-  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(TestSessionQueryEngine, config)
   return ctx
 }
@@ -210,12 +168,12 @@ const cancellableExactReads: readonly CancellableExactRead[] = [
   {
     name: 'traceEvent',
     inspects: true,
-    run: (ctx, sessionId, signal) => ctx.sessionQuery.traceEvent({ sessionId, seq: SessionSeq(0) }, signal),
+    run: (ctx, sessionId, signal) => ctx.sessionQuery.traceEvent({ sessionId, seq: 0 }, signal),
   },
   {
     name: 'readEvent',
     inspects: true,
-    run: (ctx, sessionId, signal) => ctx.sessionQuery.readEvent({ sessionId, seq: SessionSeq(0) }, signal),
+    run: (ctx, sessionId, signal) => ctx.sessionQuery.readEvent({ sessionId, seq: 0 }, signal),
   },
 ] as const
 
@@ -284,7 +242,7 @@ describe.each(cancellableSessionListings)('$name cancellation', ({ run }) => {
     const controller = new AbortController()
     const reason = new Error('session listing cancelled before persistence returned')
     const started = Promise.withResolvers<undefined>()
-    const listing = Promise.withResolvers<SessionPersistenceSnapshot[]>()
+    const listing = Promise.withResolvers<SessionHeader[]>()
     TestPersistence.listOverride = (_signal) => {
       started.resolve(undefined)
       return listing.promise
@@ -312,7 +270,7 @@ describe.each(cancellableExactReads)('$name cancellation', ({ inspects, run }) =
 
     await expect(run(ctx, persisted.id, controller.signal)).rejects.toBe(reason)
     expect(TestPersistence.listCalls).toBe(0)
-    expect(TestPersistence.readCalls).toEqual([])
+    expect(TestPersistence.inspectCalls).toEqual([])
   })
 
   it('forwards in-flight list cancellation and waits for cleanup before rejecting', async () => {
@@ -354,7 +312,7 @@ describe.each(cancellableExactReads)('$name cancellation', ({ inspects, run }) =
     expect(settled).toBe(false)
     expect(active).toBe(true)
     expect(TestPersistence.listSignals).toEqual([controller.signal])
-    expect(TestPersistence.readCalls).toEqual([])
+    expect(TestPersistence.inspectCalls).toEqual([])
 
     cleanup.resolve(undefined)
     await expect(pending).rejects.toBe(reason)
@@ -373,7 +331,7 @@ describe.each(cancellableExactReads)('$name cancellation', ({ inspects, run }) =
     const release = Promise.withResolvers<undefined>()
     let active = false
     if (inspects) {
-      TestPersistence.readOverride = async () => {
+      TestPersistence.inspectOverride = async () => {
         active = true
         started.resolve(undefined)
         await release.promise
@@ -386,7 +344,7 @@ describe.each(cancellableExactReads)('$name cancellation', ({ inspects, run }) =
         started.resolve(undefined)
         await release.promise
         active = false
-        return [{ header: structuredClone(persisted), revision: SessionPersistenceRevision('override:0') }]
+        return [structuredClone(persisted)]
       }
     }
 
@@ -402,7 +360,7 @@ describe.each(cancellableExactReads)('$name cancellation', ({ inspects, run }) =
     expect(settled).toBe(false)
     expect(active).toBe(true)
     expect(TestPersistence.listSignals).toEqual([controller.signal])
-    expect(TestPersistence.readSignals).toEqual(inspects ? [controller.signal] : [])
+    expect(TestPersistence.inspectSignals).toEqual(inspects ? [controller.signal] : [])
 
     release.resolve(undefined)
     await expect(pending).rejects.toBe(reason)
@@ -424,7 +382,7 @@ describe.each(cancellableExactReads.filter(read => read.inspects))(
       const abortObserved = Promise.withResolvers<undefined>()
       const cleanup = Promise.withResolvers<undefined>()
       let active = false
-      TestPersistence.readOverride = async (_sessionId, signal) => {
+      TestPersistence.inspectOverride = async (_sessionId, signal) => {
         if (signal === undefined) throw new Error('expected exact-read inspection signal')
         active = true
         const aborted = new Promise<void>((resolve) => {
@@ -452,7 +410,7 @@ describe.each(cancellableExactReads.filter(read => read.inspects))(
       expect(settled).toBe(false)
       expect(active).toBe(true)
       expect(TestPersistence.listSignals).toEqual([controller.signal])
-      expect(TestPersistence.readSignals).toEqual([controller.signal])
+      expect(TestPersistence.inspectSignals).toEqual([controller.signal])
 
       cleanup.resolve(undefined)
       await expect(pending).rejects.toBe(reason)
@@ -466,7 +424,7 @@ describe('session-query exact reads', () => {
     const valid = header('valid-log', 2)
     const corrupt = header('corrupt-log', 1)
     const validEvents = eventLog('valid')
-    const corruptEvents = [{ ...eventLog('bad')[0]!, seq: SessionSeq(1) }]
+    const corruptEvents = [{ ...eventLog('bad')[0]!, seq: 1 }]
     TestPersistence.reset([
       { meta: valid, events: validEvents },
       { meta: corrupt, events: corruptEvents },
@@ -475,11 +433,7 @@ describe('session-query exact reads', () => {
     await ctx.plugin(TestPersistence)
 
     const snapshot = await ctx.sessionQuery.readSession(valid.id)
-    expect(snapshot).toEqual({
-      session: valid,
-      inheritedEventCount: SessionLogOffset(0),
-      events: validEvents,
-    })
+    expect(snapshot).toEqual({ session: valid, events: validEvents })
     Object.assign(snapshot.events[0]!, { time: 999 })
     expect(TestPersistence.entries.get(valid.id)?.events[0]?.time).toBe(10)
     await expect(ctx.sessionQuery.readSession(corrupt.id)).rejects.toThrow('seed event at index 0 has seq 1')
@@ -490,7 +444,7 @@ describe('session-query exact reads', () => {
     TestPersistence.reset([{ meta: shared, events: eventLog('persisted') }])
     const ctx = await liveContext()
     await ctx.plugin(TestPersistence)
-    TestPersistence.readEffect = () => {
+    TestPersistence.inspectEffect = () => {
       ctx.sessions.create(shared.id, {
         seed: eventLog('live'),
         meta: { createdAt: shared.createdAt },
@@ -509,11 +463,11 @@ describe('session-query exact reads', () => {
         meta: persistedHeader,
         events: [{
           type: 'session/title',
-          seq: SessionSeq(0),
+          seq: 0,
           time: 20,
           data: {
             title: 'Persisted title',
-            messageSeqs: [SessionSeq(4)],
+            messageSeqs: [4],
             source: { kind: 'fallback' },
           },
         }],
@@ -522,22 +476,21 @@ describe('session-query exact reads', () => {
         meta: sharedHeader,
         events: [{
           type: 'session/title',
-          seq: SessionSeq(0),
+          seq: 0,
           time: 30,
           data: {
             title: 'Stale durable title',
-            messageSeqs: [SessionSeq(1)],
+            messageSeqs: [1],
             source: { kind: 'fallback' },
           },
         }],
       },
     ])
     const ctx = await liveContext()
-    await ctx.plugin(SessionTitleService, TITLE_SERVICE_CONFIG)
     const shared = ctx.sessions.create(sharedHeader.id, { meta: { createdAt: 3 } })
     shared.append('session/title', {
       title: 'Live title',
-      messageSeqs: [SessionSeq(7)],
+      messageSeqs: [7],
       source: {
         kind: 'provider',
         provider: SessionTitleProviderId('query-test'),
@@ -559,7 +512,7 @@ describe('session-query exact reads', () => {
     const second = header('batch-title-second', 2)
     const titleEvent = (title: string, time: number): SessionEvent => ({
       type: 'session/title',
-      seq: SessionSeq(0),
+      seq: 0,
       time,
       data: {
         title,
@@ -572,7 +525,6 @@ describe('session-query exact reads', () => {
       { meta: second, events: [titleEvent('Second title', 20)] },
     ])
     const ctx = await liveContext()
-    await ctx.plugin(SessionTitleService, TITLE_SERVICE_CONFIG)
     await ctx.plugin(TestPersistence)
     const signal = new AbortController().signal
     const missing = SessionId('batch-title-missing')
@@ -590,9 +542,9 @@ describe('session-query exact reads', () => {
     expect(results[0]).toMatchObject({ value: { session: second, title: { title: 'Second title' } } })
     expect(results[1]).toMatchObject({ value: { session: first, title: { title: 'First title' } } })
     expect(TestPersistence.listCalls).toBe(1)
-    expect(TestPersistence.readCalls).toEqual([second.id, first.id])
+    expect(TestPersistence.inspectCalls).toEqual([second.id, first.id])
     expect(TestPersistence.listSignals).toEqual([signal])
-    expect(TestPersistence.readSignals).toEqual([signal, signal])
+    expect(TestPersistence.inspectSignals).toEqual([signal, signal])
   })
 
   it('bounds persisted title inspection concurrency while preserving ordered results', async () => {
@@ -605,7 +557,7 @@ describe('session-query exact reads', () => {
     await ctx.plugin(TestPersistence)
     let active = 0
     let maximum = 0
-    TestPersistence.readOverride = async (id) => {
+    TestPersistence.inspectOverride = async (id) => {
       active += 1
       maximum = Math.max(maximum, active)
       await new Promise<void>(resolve => setImmediate(resolve))
@@ -619,7 +571,7 @@ describe('session-query exact reads', () => {
 
     expect(maximum).toBe(SESSION_QUERY_DEFAULT_PERSISTED_INSPECT_CONCURRENCY)
     expect(TestPersistence.listCalls).toBe(1)
-    expect(TestPersistence.readCalls).toEqual(entries.map(entry => entry.meta.id))
+    expect(TestPersistence.inspectCalls).toEqual(entries.map(entry => entry.meta.id))
     expect(results.map(result => result.sessionId)).toEqual(entries.map(entry => entry.meta.id))
     expect(results.every(result => result.status === 'fulfilled')).toBe(true)
   })
@@ -634,13 +586,13 @@ describe('session-query exact reads', () => {
     await ctx.plugin(TestPersistence)
     const timeline: string[] = []
     const releases = new Map<SessionIdType, () => void>()
-    TestPersistence.readOverride = id => new Promise((resolve) => {
+    TestPersistence.inspectOverride = id => new Promise((resolve) => {
       timeline.push(`inspect:${id}`)
       releases.set(id, () => {
         const marker = `full-log-marker:${id}`
         const titleEvent = {
           type: 'session/title',
-          seq: SessionSeq(1),
+          seq: 1,
           time: 20,
           data: {
             title: `Projected ${id}`,
@@ -665,9 +617,9 @@ describe('session-query exact reads', () => {
     const ids = entries.map(entry => entry.meta.id)
 
     const pending = ctx.sessionQuery.readTitleSnapshots(ids)
-    await vi.waitFor(() => { expect(TestPersistence.readCalls).toHaveLength(4) })
+    await vi.waitFor(() => { expect(TestPersistence.inspectCalls).toHaveLength(4) })
     release(ids[0]!)
-    await vi.waitFor(() => { expect(TestPersistence.readCalls).toHaveLength(5) })
+    await vi.waitFor(() => { expect(TestPersistence.inspectCalls).toHaveLength(5) })
 
     // Heap-retention assertions would depend on nondeterministic GC. This ordering
     // is the deterministic guard: a retain-all implementation cannot touch the
@@ -691,7 +643,7 @@ describe('session-query exact reads', () => {
     const reason = new Error('title deadline')
     let started!: () => void
     const inspectStarted = new Promise<void>((resolve) => { started = resolve })
-    TestPersistence.readOverride = (_id, signal) => new Promise((_resolve, reject) => {
+    TestPersistence.inspectOverride = (_id, signal) => new Promise((_resolve, reject) => {
       started()
       signal?.addEventListener('abort', () => { reject(reason) }, { once: true })
     })
@@ -702,7 +654,7 @@ describe('session-query exact reads', () => {
 
     await expect(pending).rejects.toBe(reason)
     expect(TestPersistence.listSignals).toEqual([controller.signal])
-    expect(TestPersistence.readSignals).toEqual([controller.signal])
+    expect(TestPersistence.inspectSignals).toEqual([controller.signal])
   })
 
   it('drains started title inspections after cancellation without starting queued ids', async () => {
@@ -711,15 +663,15 @@ describe('session-query exact reads', () => {
       events: eventLog(`queued-${index}`),
     }))
     TestPersistence.reset(entries)
-    const persistedReadConcurrency = 2
-    const ctx = await liveContext({ persistedReadConcurrency })
+    const persistedInspectConcurrency = 2
+    const ctx = await liveContext({ persistedInspectConcurrency })
     await ctx.plugin(TestPersistence)
     const controller = new AbortController()
     const reason = new Error('cancel queued title batch')
     const releases: Array<() => void> = []
     let abortsObserved = 0
     let inspectionsSettled = 0
-    TestPersistence.readOverride = (_id, signal) => new Promise((_resolve, reject) => {
+    TestPersistence.inspectOverride = (_id, signal) => new Promise((_resolve, reject) => {
       signal?.addEventListener('abort', () => { abortsObserved += 1 }, { once: true })
       releases.push(() => {
         inspectionsSettled += 1
@@ -737,20 +689,20 @@ describe('session-query exact reads', () => {
       () => { batchSettled = true },
     )
     await vi.waitFor(() => {
-      expect(TestPersistence.readCalls).toHaveLength(persistedReadConcurrency)
+      expect(TestPersistence.inspectCalls).toHaveLength(persistedInspectConcurrency)
     })
     controller.abort(reason)
-    await vi.waitFor(() => { expect(abortsObserved).toBe(persistedReadConcurrency) })
+    await vi.waitFor(() => { expect(abortsObserved).toBe(persistedInspectConcurrency) })
 
     expect(batchSettled).toBe(false)
-    expect(TestPersistence.readCalls)
-      .toEqual(entries.slice(0, persistedReadConcurrency).map(entry => entry.meta.id))
+    expect(TestPersistence.inspectCalls)
+      .toEqual(entries.slice(0, persistedInspectConcurrency).map(entry => entry.meta.id))
     for (const release of releases) release()
 
     await expect(pending).rejects.toBe(reason)
-    expect(inspectionsSettled).toBe(persistedReadConcurrency)
-    expect(TestPersistence.readCalls)
-      .toEqual(entries.slice(0, persistedReadConcurrency).map(entry => entry.meta.id))
+    expect(inspectionsSettled).toBe(persistedInspectConcurrency)
+    expect(TestPersistence.inspectCalls)
+      .toEqual(entries.slice(0, persistedInspectConcurrency).map(entry => entry.meta.id))
   })
 
   it('passes cancellation into a stalled persisted title listing and rejects with its reason', async () => {
@@ -773,7 +725,7 @@ describe('session-query exact reads', () => {
 
     await expect(pending).rejects.toBe(reason)
     expect(TestPersistence.listSignals).toEqual([controller.signal])
-    expect(TestPersistence.readCalls).toEqual([])
+    expect(TestPersistence.inspectCalls).toEqual([])
   })
 
   it('isolates title read and fold failures while preferring a live owner attached during inspection', async () => {
@@ -783,7 +735,7 @@ describe('session-query exact reads', () => {
     const inspectFailure = new Error('one title inspect failed')
     const malformedTitle = {
       type: 'session/title',
-      seq: SessionSeq(0),
+      seq: 0,
       time: 30,
       data: {
         title: 'malformed',
@@ -796,9 +748,8 @@ describe('session-query exact reads', () => {
       { meta: malformed, events: [malformedTitle] },
     ])
     const ctx = await liveContext()
-    await ctx.plugin(SessionTitleService, TITLE_SERVICE_CONFIG)
     await ctx.plugin(TestPersistence)
-    TestPersistence.readOverride = (id) => {
+    TestPersistence.inspectOverride = (id) => {
       if (id === failed.id) return Promise.reject(inspectFailure)
       const entry = TestPersistence.entries.get(id)
       if (entry === undefined) return Promise.reject(new Error('missing test session'))
@@ -833,7 +784,7 @@ describe('session-query exact reads', () => {
     })
     expect(results[2]).toMatchObject({ sessionId: malformed.id, status: 'rejected' })
     if (results[2]?.status !== 'rejected') throw new Error('expected malformed title rejection')
-    expect(results[2].reason).toBeInstanceOf(Error)
+    expect(results[2].reason).toBeInstanceOf(TypeError)
   })
 
   it('preserves live batch results across missing persistence, listing failure, and late attachment', async () => {
@@ -950,18 +901,25 @@ describe('session-query exact reads', () => {
       }),
       { surfaceOp: 'append' },
     )
-    session.append('assistant/attempt', {
+    session.append('assistant/chunk', {
       turn: 1,
       step: 1,
-      stream: [{ type: 'text-chunks', time0: 0, index: 0, dt: [], texts: ['draft'] }],
+      chunk: { type: 'text-delta', index: 0, text: 'draft' },
     })
     session.append(
-      'user/message',
-      createUserMessage({
-        content: [{ type: 'text', text: 'replacement' }],
-        source: { kind: 'plugin', plugin: 'test' },
-      }),
-      { surfaceOp: { op: 'replace', startSeq: first.seq, endSeq: first.seq }, sourceEventSeqs: [first.seq] },
+      'assistant/message',
+      {
+        turn: 1, step: 1,
+        message: createMessage({
+          role: 'assistant',
+          content: [{ type: 'text', text: 'replacement' }],
+          source: {
+            kind: 'model',
+            ...{ provider: 'mock', model: 'mock' },
+          },
+        }),
+      },
+      { surfaceOp: { op: 'replace', start: first.seq, end: first.seq }, sourceEventSeqs: [first.seq] },
     )
 
     expect((await ctx.sessionQuery.listEvents(session.id)).slice(2).map(record => record.surface))
@@ -978,17 +936,17 @@ describe('session-query exact reads', () => {
       }),
       { surfaceOp: 'append' },
     )
-    session.append('assistant/attempt', {
+    session.append('assistant/chunk', {
       turn: 1,
       step: 1,
-      stream: [{ type: 'text-chunks', time0: 0, index: 0, dt: [], texts: ['draft'] }],
+      chunk: { type: 'text-delta', index: 0, text: 'draft' },
     })
     session.append(
       'user/message',
       createUserMessage({
         content: [{ type: 'text', text: 'checkpoint' }], source: { kind: 'plugin', plugin: 'compact' },
       }),
-      { surfaceOp: { op: 'replace', startSeq: first.seq, endSeq: first.seq }, sourceEventSeqs: [first.seq] },
+      { surfaceOp: { op: 'replace', start: first.seq, end: first.seq }, sourceEventSeqs: [first.seq] },
     )
     const retained = session.append(
       'user/message',
@@ -1002,12 +960,11 @@ describe('session-query exact reads', () => {
       createUserMessage({
         content: [{ type: 'text', text: 'latest checkpoint' }], source: { kind: 'plugin', plugin: 'compact' },
       }),
-      { surfaceOp: { op: 'replace', startSeq: SessionSeq(2), endSeq: retained.seq }, sourceEventSeqs: [SessionSeq(2), retained.seq] },
+      { surfaceOp: { op: 'replace', start: 2, end: retained.seq }, sourceEventSeqs: [2, retained.seq] },
     )
     session.append(
       'assistant/message',
       {
-        stream: [],
         turn: 2, step: 1,
         message: createMessage({
           role: 'assistant',
@@ -1034,8 +991,7 @@ describe('session-query exact reads', () => {
     }).toThrow()
     Object.assign(snapshot.session, { cwd: '/mutated' })
 
-    const logged = session.eventAt(SessionSeq(4))
-    expect(logged?.type === 'user/message' && logged.data.content).toHaveLength(1)
+    expect(session.events[4]?.type === 'user/message' && session.events[4].data.content).toHaveLength(1)
     expect(session.header.cwd).toBe('/work')
   })
 
@@ -1062,7 +1018,7 @@ describe('session-query exact reads', () => {
       )
     }
 
-    const result = await ctx.sessionQuery.readEvent({ sessionId: session.id, seq: SessionSeq(2), before: 1, after: 1 })
+    const result = await ctx.sessionQuery.readEvent({ sessionId: session.id, seq: 2, before: 1, after: 1 })
     expect([result.startSeq, result.endSeq, result.target.seq]).toEqual([1, 3, 2])
     expect(result.session).toEqual(session.header)
     Object.assign(result.session, { createdAt: -1 })
@@ -1071,15 +1027,14 @@ describe('session-query exact reads', () => {
       (result.events[0]!.data as { content: unknown[] }).content = []
     }).toThrow()
     expect(session.header.createdAt).not.toBe(-1)
-    const logged = session.eventAt(SessionSeq(1))
-    expect(logged?.type === 'user/message' && logged.data.content).toHaveLength(1)
+    expect(session.events[1]?.type === 'user/message' && session.events[1].data.content).toHaveLength(1)
 
-    await expect(ctx.sessionQuery.readEvent({ sessionId: session.id, seq: SessionSeq(9) }))
+    await expect(ctx.sessionQuery.readEvent({ sessionId: session.id, seq: 9 }))
       .rejects.toThrow(expectCode('SESSION_QUERY_EVENT_NOT_FOUND'))
     for (const request of [
-      { sessionId: session.id, seq: SessionSeq(0), before: -1 },
-      { sessionId: session.id, seq: SessionSeq(0), before: 2 },
-      { sessionId: session.id, seq: SessionSeq(0), after: 0.5 },
+      { sessionId: session.id, seq: 0, before: -1 },
+      { sessionId: session.id, seq: 0, before: 2 },
+      { sessionId: session.id, seq: 0, after: 0.5 },
     ]) {
       await expect(ctx.sessionQuery.readEvent(request)).rejects.toThrow(expectCode('SESSION_QUERY_INVALID_WINDOW'))
     }
@@ -1106,13 +1061,13 @@ describe('session-query exact reads', () => {
 
     expect((await ctx.sessionQuery.listSessions()).map(record => [record.header.id, record.live, record.persisted]))
       .toEqual([[shared.id, true, true], [durable.id, false, true]])
-    const liveRead = await ctx.sessionQuery.readEvent({ sessionId: shared.id, seq: SessionSeq(1) })
+    const liveRead = await ctx.sessionQuery.readEvent({ sessionId: shared.id, seq: 1 })
     expect(liveRead.target.type === 'user/message' && liveRead.target.data.content[0])
       .toMatchObject({ text: 'live' })
     await expect(ctx.sessionQuery.readSurface(shared.id)).resolves.toMatchObject({
       events: [{ data: { content: [{ text: 'live' }] } }],
     })
-    await expect(ctx.sessionQuery.readEvent({ sessionId: durable.id, seq: SessionSeq(0) }))
+    await expect(ctx.sessionQuery.readEvent({ sessionId: durable.id, seq: 0 }))
       .resolves.toMatchObject({ session: durable })
     await expect(ctx.sessionQuery.readSurface(durable.id)).resolves.toMatchObject({
       session: durable,
@@ -1144,16 +1099,16 @@ describe('session-query exact reads', () => {
     )
     await ctx.plugin(TestPersistence)
     TestPersistence.listFailure = new Error('list unavailable')
-    TestPersistence.readFailure = new Error('inspect unavailable')
+    TestPersistence.inspectFailure = new Error('inspect unavailable')
     const signal = new AbortController().signal
 
     await expect(ctx.sessionQuery.listEvents(live.id)).resolves.toHaveLength(2)
-    await expect(ctx.sessionQuery.traceEvent({ sessionId: live.id, seq: SessionSeq(1) }, signal))
-      .resolves.toMatchObject({ session: { id: live.id }, target: { seq: SessionSeq(1) } })
-    await expect(ctx.sessionQuery.readEvent({ sessionId: live.id, seq: SessionSeq(1) }, signal))
-      .resolves.toMatchObject({ target: { seq: SessionSeq(1) } })
+    await expect(ctx.sessionQuery.traceEvent({ sessionId: live.id, seq: 1 }, signal))
+      .resolves.toMatchObject({ session: { id: live.id }, target: { seq: 1 } })
+    await expect(ctx.sessionQuery.readEvent({ sessionId: live.id, seq: 1 }, signal))
+      .resolves.toMatchObject({ target: { seq: 1 } })
     expect(TestPersistence.listSignals).toEqual([])
-    expect(TestPersistence.readSignals).toEqual([])
+    expect(TestPersistence.inspectSignals).toEqual([])
     await expect(ctx.sessionQuery.listSessions()).rejects.toThrow(expectCode('SESSION_QUERY_PERSISTENCE_FAILED'))
     await expect(ctx.sessionQuery.listEvents(SessionId('durable'))).rejects.toThrow(expectCode('SESSION_QUERY_PERSISTENCE_FAILED'))
   })
@@ -1167,7 +1122,7 @@ describe('session-query exact reads', () => {
       'stored prefix failed validation',
       { cause: new Error('torn final record') },
     )
-    TestPersistence.readFailure = corruption
+    TestPersistence.inspectFailure = corruption
 
     await expect(ctx.sessionQuery.readSession(durable.id)).rejects.toMatchObject({
       code: 'SESSION_QUERY_CORRUPT_SESSION',
@@ -1186,10 +1141,10 @@ describe('session-query exact reads', () => {
     await expect(ctx.sessionQuery.listEvents(SessionId('absent')))
       .rejects.toThrow(expectCode('SESSION_QUERY_SESSION_NOT_FOUND'))
 
-    TestPersistence.readFailure = 'raw failure'
+    TestPersistence.inspectFailure = 'raw failure'
     await expect(ctx.sessionQuery.listEvents(durable.id))
       .rejects.toThrow(expectCode('SESSION_QUERY_PERSISTENCE_FAILED'))
-    TestPersistence.readFailure = undefined
+    TestPersistence.inspectFailure = undefined
     const durableEntry = TestPersistence.entries.get(durable.id)!
     durableEntry.meta = { ...durableEntry.meta, cwd: '/changed-after-list' }
     TestPersistence.afterList = () => {
@@ -1207,12 +1162,12 @@ describe('session-query exact reads', () => {
       meta: persisted,
       events: [{
         type: 'user/message',
-        seq: SessionSeq(0),
+        seq: 0,
         time: 1,
         data: createUserMessage({
           content: [{ type: 'text', text: 'hidden' }], source: { kind: 'user' },
         }),
-      }] as unknown as SessionEvent[],
+      }],
     }])
     const persistence = await ctx.plugin(TestPersistence)
     await expect(ctx.sessionQuery.listEvents(persisted.id))
@@ -1224,10 +1179,8 @@ describe('session-query exact reads', () => {
     expect(new TestSessionQueryEngine(direct)).toBeInstanceOf(SessionQueryEngine)
     for (const config of [
       { readWindowMax: -1 },
-      { persistedReadConcurrency: 0 },
-      { persistedReadConcurrency: Number.MAX_SAFE_INTEGER + 1 },
-      { preparedSessionCacheSize: 0 },
-      { preparedSessionCacheSize: Number.MAX_SAFE_INTEGER + 1 },
+      { persistedInspectConcurrency: 0 },
+      { persistedInspectConcurrency: Number.MAX_SAFE_INTEGER + 1 },
     ]) {
       const invalid = new Context()
       await invalid.plugin(SessionStore)
@@ -1236,20 +1189,9 @@ describe('session-query exact reads', () => {
     }
   })
 
-  it('exposes caller-owned observation leases through observeSession', async () => {
-    const ctx = await liveContext()
-    const live = ctx.sessions.create(SessionId('observe-live'))
-
-    using observed = await ctx.sessionQuery.observeSession(live.id)
-
-    expect(observed.source).toBe('live')
-    expect(observed.header.id).toBe(live.id)
-  })
-
   it('leaves the optional persistence dependency optional', async () => {
     const ctx = new Context()
     await ctx.plugin(SessionStore)
-    await ctx.plugin(SessionProjectionRegistry)
     const fiber = await ctx.plugin(TestSessionQueryEngine)
     expect(ctx.sessionQuery).toBeInstanceOf(TestSessionQueryEngine)
     await fiber.dispose()
@@ -1260,7 +1202,6 @@ describe('session-query exact reads', () => {
     TestPersistence.reset()
     const ctx = new Context()
     await ctx.plugin(SessionStore)
-    await ctx.plugin(SessionProjectionRegistry)
     const query = await ctx.plugin(TestSessionQueryEngine)
     const persistence = await ctx.plugin(TestPersistence)
     const optional = (ctx.sessionQuery as unknown as {

@@ -1,10 +1,8 @@
 /** Message value types, identity, and immutable construction helpers. */
 
-import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
-import { brandString } from '@deepseek-ai/dsh-brand'
-import { deepFreeze } from '@deepseek-ai/dsh-util-values'
-import type { MessageId, ToolCallId } from './brand.ts'
-import type { ContentBlock, ToolResultBlock } from './types.ts'
+import { MessageId, type CallId } from './brand.ts'
+import { deepFreeze } from './call-config.ts'
+import type { ContentBlock, StreamChunk, ToolResultBlock } from './types.ts'
 
 /** Provider/model identity and adapter-private replay data for an assistant message. */
 export interface AssistantProvenance {
@@ -28,7 +26,7 @@ export interface ModelMessageSource extends AssistantProvenance {
 /** Required source of a user-role message carrying one tool result. */
 export interface ToolMessageSource {
   kind: 'tool'
-  callId: ToolCallId
+  callId: CallId
 }
 
 /**
@@ -150,16 +148,6 @@ export interface AssistantMessage extends Message {
   readonly source: ModelMessageSource
 }
 
-/**
- * A system-role specialization of the shared message representation: one
- * rendered system prompt attributed to the plugin that assembled it. Empty
- * `content` means "no system prompt" and projects to no wire message.
- */
-export interface SystemMessage extends Message {
-  readonly role: 'system'
-  readonly source: MessageSourceMap['plugin']
-}
-
 /** A tool-result specialization whose model-facing block retains call correlation. */
 export interface ToolResultMessage extends Message {
   readonly role: 'user'
@@ -192,7 +180,7 @@ export function createMessage<T extends NewMessage>(
 ): T & Pick<Message, 'id'> {
   return freezeMessage({
     ...input,
-    id: brandString<MessageId>(randomUUID()),
+    id: MessageId(crypto.randomUUID()),
   })
 }
 
@@ -228,24 +216,9 @@ export function createAssistantMessage(
   })
 }
 
-/**
- * Create and freeze one identified system-role message holding a rendered
- * system prompt.
- * @param text - the complete rendered prompt; `''` records "no system prompt".
- * @param plugin - the plugin that assembled the prompt.
- * @returns an immutable system message with a fresh stable identity.
- */
-export function createSystemMessage(text: string, plugin: string): SystemMessage {
-  return createMessage({
-    role: 'system',
-    content: text.length === 0 ? [] : [{ type: 'text', text }],
-    source: { kind: 'plugin', plugin },
-  })
-}
-
 /** Input whose acceptance creates one tool-result message. */
 export interface ToolResultMessageInput {
-  readonly callId: ToolCallId
+  readonly callId: CallId
   readonly content: ContentBlock[]
   readonly isError: boolean
 }
@@ -265,4 +238,24 @@ export function createToolResultMessage(input: ToolResultMessageInput): ToolResu
       isError: input.isError,
     }],
   })
+}
+
+/**
+ * Whether a stream chunk carries visible model output (the first-token
+ * boundary shared by client step timing and the whole-log sessionStats
+ * projection). Empty deltas (heartbeats, empty tool-call frames) do not count
+ * as a first token.
+ * @param chunk - the stream chunk to test.
+ * @returns true when the chunk contains a non-empty text/reasoning/tool delta.
+ */
+export function isTokenDelta(chunk: StreamChunk): boolean {
+  switch (chunk.type) {
+    case 'text-delta':
+    case 'reasoning-delta':
+      return chunk.text !== ''
+    case 'tool-call-delta':
+      return chunk.argumentsDelta !== '' || chunk.name !== undefined
+    default:
+      return false
+  }
 }

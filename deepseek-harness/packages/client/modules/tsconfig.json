@@ -11,7 +11,6 @@
     { "path": "../../../vendor/cordis" },
     { "path": "../../../vendor/loader" },
     { "path": "../../host/webserver" },
-    { "path": "../../util/package-manifest" },
     { "path": "../../runtime-diagnostics/invariants" }
   ]
 }

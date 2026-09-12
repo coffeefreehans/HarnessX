@@ -1,46 +1,34 @@
 // @vitest-environment jsdom
 /**
  * Scenario-chain integration (scenarios A/C/D/H/I): the real per-session
- * InputTriggerController pipeline over a real session scope (Client Sessions over
+ * InputTriggerController pipeline over a real session scope (SessionRuntime over
  * a listed host session) + a command source implementing the decision
  * table's relevant cells + the real SessionInput machine (scoped-event
  * listeners wired the way the hub does) + the real InputBar. ui-commands
  * itself is not a dependency of this package; the source below is the
  * decision-table contract at the `InputTriggerSource` boundary.
  */
-import type { GlobalStandardProps } from '@deepseek-ai/dsh-client-ui-slots'
-import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
+import { Context } from '@deepseek-ai/cordis'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
-import type { SessionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client'
-import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
+import {
+  EMPTY_CHAT_SNAPSHOT, EMPTY_CONVERSATION_VIEWS, SessionRuntime,
+} from '@deepseek-ai/dsh-client-runtime/client'
 import { InputTriggerService } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import type {
-  ClientSessionContext, SubmitEnvelope,
+  ClientSessionContext, CommandClaim, PickOutcome, SubmitEnvelope, SubmitImageAttachment, SubmitOutcome,
 } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
-import type {
-  CommandClaim, PickOutcome, SubmitAttachment, SubmitOutcome,
-} from '../src/client/contract/input.ts'
-import {
-  bindSnapshotSelector, conversationSnapshot, makeTranslate, sessionSnapshot, SlotTestRuntime,
-} from '@deepseek-ai/dsh-client-test-runtime'
-import type { SessionPendingInteractionSnapshot } from '@deepseek-ai/dsh-client-ui-session/client'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { FakeApiClient, fakeRemote, ok } from '../../runtime/tests/fake-api.client.ts'
+import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
-import type { DraftAttachmentId } from '../src/client/contract/input.ts'
+import type { DraftAttachmentId } from '../src/client/input/contract.ts'
 import { SessionInputShell } from '../src/client/input/facade.ts'
 import { InputBar } from '../src/client/skeleton/InputBar.tsx'
 import type { InputBarProps } from '../src/client/skeleton/InputBar.tsx'
 import { zh } from '../src/client/locales.ts'
-
-// Every fixture carries the resource hook the resources plugin merges into GlobalStandardProps.
-const useResource = (() => ({ status: 'none' as const, value: undefined, failure: undefined })) as GlobalStandardProps['useResource']
-
-// jsdom implements no Range geometry (Lexical's scroll-into-view measures the
-// caret with one once the surface is genuinely contenteditable).
-Range.prototype.getBoundingClientRect = () => ({
-  top: 0, bottom: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}),
-})
-
+import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ConversationSnapshot } from '@deepseek-ai/dsh-client-runtime/client'
 
 afterEach(cleanup)
 
@@ -48,19 +36,19 @@ afterEach(cleanup)
 interface FakeCommand {
   name: string
   description: string
-  input?: { hint: string; attachments?: boolean }
+  input?: { hint: string; images?: boolean }
 }
 
 /** Decision-table source over an in-memory directory (menu/space/enter columns for leadingInput + execute). */
 function commandSource(
   commands: FakeCommand[],
-  execute: (line: string, images?: readonly SubmitAttachment[]) => Promise<SubmitOutcome>,
+  execute: (line: string, images?: readonly SubmitImageAttachment[]) => Promise<SubmitOutcome>,
 ) {
   const resolve = (name: string): FakeCommand | undefined => commands.find(c => c.name === name)
   const leadingClaim = (desc: FakeCommand): CommandClaim => ({
     token: `/${desc.name} `,
     ...(desc.input !== undefined ? { hint: desc.input.hint } : {}),
-    ...(desc.input?.attachments === true ? { attachments: true } : {}),
+    ...(desc.input?.images === true ? { images: true } : {}),
     submit: (args, _actx, images) => execute(`/${desc.name} ${args}`, images),
   })
   const executed: string[] = []
@@ -109,66 +97,69 @@ function commandSource(
 const COMMANDS: FakeCommand[] = [
   { name: 'goal', description: '设定目标', input: { hint: '目标内容' } },
   { name: 'compact', description: '压缩上下文' },
-  { name: 'vision', description: '识别图片', input: { hint: '想问什么', attachments: true } },
+  { name: 'vision', description: '识别图片', input: { hint: '想问什么', images: true } },
 ]
 
-const PNG: SubmitAttachment = { type: 'image', mediaType: 'image/png', data: 'AA==' }
+const PNG: SubmitImageAttachment = { mediaType: 'image/png', data: 'AA==' }
 
-/** Real scope bench: a Controller-owned Session scope + InputTriggerController + shell listeners. */
+/** Real scope bench: SessionRuntime over one listed session + InputTriggerController + shell listeners (the hub wiring shape). */
 async function scopedBench(register?: (inputTriggers: InputTriggerService) => void) {
-  const runtime = await SlotTestRuntime.create()
-  onTestFinished(() => runtime.dispose())
-  const ctx = runtime.ctx
-  const sessionId = 'scenario-s1' as SessionId
-  await runtime.sessions.add({ id: sessionId, summary: { cwd: '/w/a' } })
+  const ctx = new Context()
+  const api = new FakeApiClient()
+  api.onWorkspaceList = () => Promise.resolve(ok({ items: [] }))
+  const sessionId = 'scenario-s1' as Parameters<SessionRuntime['open']>[0]
+  api.onList = () => Promise.resolve(ok({
+    items: [{ sessionId, updatedAt: 1, running: false, blank: false, cwd: '/w/a' }],
+  }) as never)
+  const sessions = new SessionRuntime(ctx, api, fakeRemote()) // provides 'sessions' itself
+  await sessions.refresh()
+  await Promise.resolve() // manager notifier flush
   await ctx.plugin(InputTriggerService).await()
   const inputTriggers = ctx.get('inputTriggers') as InputTriggerService
   register?.(inputTriggers)
-  const actx = runtime.sessions.scope(sessionId)!
+  const actx = sessions.scope(sessionId)!
   const controller = inputTriggers.sessionOf(actx)
   const sink = vi.fn(() => Promise.resolve<SubmitOutcome>({ kind: 'success' }))
   const serialize = vi.fn((ids: readonly DraftAttachmentId[]) => Promise.resolve(ids.map(() => PNG)))
   const release = vi.fn()
-  const shell = new SessionInputShell({ actx, inputTriggers: () => controller, defaultSink: sink, commandAttachments: { serialize, release, unsupportedNotice: (token: string) => `${token.trim()} attachments-unsupported` } })
+  const shell = new SessionInputShell({ actx, inputTriggers: () => controller, defaultSink: sink, commandImages: { serialize, release, unsupportedNotice: (token: string) => `${token.trim()} images-unsupported` } })
   // The hub's listener wiring, verbatim.
   actx.on('slash/input-begin-command', req => shell.beginCommand(req.claim, req.span) ? true : undefined)
   actx.on('slash/input-insert-reference', req => shell.insertReference(req.reference, req.span) ? true : undefined)
   actx.on('slash/input-consume-token', req => shell.consumeToken(req.guard) ? true : undefined)
   const wiring = shell
-  const sessionStore = createSnapshotStore<SessionSnapshot>(sessionSnapshot(sessionId))
+  const sessionStore = createSnapshotStore<ConversationSnapshot>({
+    sessionId, views: EMPTY_CONVERSATION_VIEWS, chat: EMPTY_CHAT_SNAPSHOT,
+    nodes: [], turnTimings: new Map(), turnEnds: new Map(), partial: null, runningCalls: [],
+    pending: [], queue: [], running: false, composerPhase: 'active', removed: false,
+    openState: 'open', openError: null, hasMore: false, loadingOlder: false,
+    promptError: null, blank: false, subagent: null, lastAgentError: null,
+  })
   const barProps: InputBarProps = {
-    usePanelInfo: selector => selector({ activePanelId: null }),
     sessionId,
-    SessionProvider: ({ children }) => children,
+    SessionProvider: ({ children }) => children(sessionId),
     useSession: bindSnapshotSelector(sessionStore),
     useSessions: bindSnapshotSelector(createSnapshotStore({
       ids: [], byId: {}, current: undefined, phase: 'ready',
       subagentsByParent: {}, jobsBySession: {}, currentAddress: undefined,
     })),
-    useSessionPendingInteraction: bindSnapshotSelector(
-      createSnapshotStore<SessionPendingInteractionSnapshot>(new Map()),
-    ),
-    useResource,
     useWorkspaces: bindSnapshotSelector(createSnapshotStore({
       items: [], archivedSessionIds: [], state: 'idle', phase: 'ready', error: null,
       baselinesReady: true, recentWorkspaceId: undefined,
     })),
     useProjection: (() => undefined),
-    useConversation: bindSnapshotSelector(createSnapshotStore(conversationSnapshot())),
     useInput: bindSnapshotSelector(shell.state),
     inputActions: shell.actions,
     keyboard: shell,
-    addFiles: () => null,
-    useFileUploads: bindSnapshotSelector(createSnapshotStore({})),
-    retryFileUpload: undefined,
-    removeAttachment: () => {},
+    addImages: () => null,
+    removeImage: () => {},
     // Every id resolves so the bar's registry prune never drops a test image.
-    resolveDraftAttachments: ids => ids.map(id => ({
+    draftImages: ids => ids.map(id => ({
       kind: 'image' as const, id,
       file: new File([Uint8Array.of(1)], `${id}.png`, { type: 'image/png' }),
       previewUrl: `blob:${id}`,
     })),
-    useBusyEnter: bindSnapshotSelector(createSnapshotStore<'queue' | 'steer'>('queue')),
+    resolveSubmitMode: () => 'queue',
     toggleCommandMenu: (selection) => {
       const snapshot = shell.snapshot
       controller.toggleSource('command', {
@@ -185,15 +176,16 @@ async function scopedBench(register?: (inputTriggers: InputTriggerService) => vo
     renderSlot: (() => null) as InputBarProps['renderSlot'],
     stop: vi.fn(),
     command: () => Promise.resolve(true),
+    // Mirrors the real lookup chain (conversation namespace, then common).
     t: makeTranslate(zh, commonZh),
     variant: 'composer',
   }
   const view = render(<InputBar {...barProps} />)
-  const textarea = view.container.querySelector<HTMLDivElement>('[data-composer-input]')!
+  const textarea = view.container.querySelector('textarea')!
   const type = (text: string): void => {
-    act(() => { shell.setDraft(text) })
+    fireEvent.change(textarea, { target: { value: text } })
   }
-  return { runtime, inputTriggers, controller, shell, wiring, view, textarea, type, sink, serialize, release }
+  return { ctx, inputTriggers, controller, shell, wiring, view, textarea, type, sink, serialize, release }
 }
 
 async function bench(executeImpl?: (line: string) => Promise<SubmitOutcome>) {
@@ -212,23 +204,22 @@ describe('scenario A: menu-pick /goal, type args, enter submits', () => {
     await vi.waitFor(() => {
       const menu = b.controller.menu.getSnapshot()
       expect(menu.open).toBe(true)
-      expect(menu.groups[0]?.items.map((i: { name: string }) => i.name)).toContain('goal')
+      expect(menu.groups[0]?.items.map(i => i.name)).toContain('goal')
     })
     // Pointer pick (menu path executes through the bound target inside the pipeline).
     act(() => { b.controller.pick('command', 0) })
     expect(b.shell.snapshot.phase).toBe('claimed')
-    expect(b.shell.snapshot.draft).toBe('/goal ')
-    act(() => { b.shell.editor.update(() => {}, { discrete: true }) }) // flush the queued decoration refresh
-    expect(b.view.container.querySelector('[data-lexical-text][style*="warn-label"]')?.textContent).toBe('/goal ')
+    expect(b.textarea.value).toBe('/goal ')
+    expect(b.view.container.querySelector('[data-decoration="token"]')?.textContent).toBe('/goal ')
     // The zh dictionary owns a hint.goal entry, which overrides the machine's raw hint (production behavior).
-    expect(b.textarea.style.getPropertyValue('--dsh-composer-hint')).toBe(JSON.stringify('输入目标，智能体将持续执行'))
+    expect(b.view.container.querySelector('[data-decoration="hint"]')?.textContent).toBe('输入目标，智能体将持续执行')
     // Continue typing args; hint drops; claim holds.
     b.type('/goal 发布 v1')
     expect(b.shell.snapshot.phase).toBe('claimed')
     // Enter: submitting → command execute → commit clears.
     fireEvent.keyDown(b.textarea, { key: 'Enter' })
     await vi.waitFor(() => { expect(b.execute).toHaveBeenCalledWith('/goal 发布 v1', []) })
-    await vi.waitFor(() => { expect(b.shell.snapshot.draft).toBe('') })
+    await vi.waitFor(() => { expect(b.textarea.value).toBe('') })
     expect(b.shell.snapshot.phase).toBe('plain')
     expect(b.view.getByText('已执行 /goal 发布 v1')).toBeTruthy()
     expect(b.sink).not.toHaveBeenCalled()
@@ -244,7 +235,7 @@ describe('scenario C: pasted /goal xxx + enter (menu never opened)', () => {
     fireEvent.keyDown(b.textarea, { key: 'Enter' })
     await vi.waitFor(() => { expect(b.execute).toHaveBeenCalledWith('/goal 尽快发布', []) })
     await vi.waitFor(() => { expect(b.shell.snapshot.phase).toBe('plain') })
-    expect(b.shell.snapshot.draft).toBe('')
+    expect(b.textarea.value).toBe('')
     expect(b.sink).not.toHaveBeenCalled()
   })
 })
@@ -280,16 +271,16 @@ describe('scenario D: execute-kind /compact', () => {
 describe('scenario: images ride an accepting command through the real pipeline', () => {
   it('adjudication reports the image count; the claim chain serializes, submits, and consumes', async () => {
     const b = await bench()
-    act(() => { b.shell.addAttachments(['img-1' as DraftAttachmentId]) })
+    act(() => { b.shell.addImages(['img-1' as DraftAttachmentId]) })
     act(() => { b.shell.setDraft('/vision 这张图是什么') })
     fireEvent.keyDown(b.textarea, { key: 'Enter' })
     await vi.waitFor(() => { expect(b.execute).toHaveBeenCalledWith('/vision 这张图是什么', [PNG]) })
     // The envelope the controller forwarded to matchEnter carried the count.
-    expect(b.envelopes).toEqual([{ attachments: 1 }])
+    expect(b.envelopes).toEqual([{ images: 1 }])
     expect(b.serialize).toHaveBeenCalledWith(['img-1'])
-    await vi.waitFor(() => { expect(b.shell.snapshot.draft).toBe('') })
+    await vi.waitFor(() => { expect(b.textarea.value).toBe('') })
     expect(b.release).toHaveBeenCalledWith(['img-1'])
-    expect(b.shell.snapshot.attachmentIds).toEqual([])
+    expect(b.shell.snapshot.imageIds).toEqual([])
     expect(b.sink).not.toHaveBeenCalled()
   })
 
@@ -298,7 +289,7 @@ describe('scenario: images ride an accepting command through the real pipeline',
     act(() => { b.shell.setDraft('/goal 发布') })
     fireEvent.keyDown(b.textarea, { key: 'Enter' })
     await vi.waitFor(() => { expect(b.execute).toHaveBeenCalledWith('/goal 发布', []) })
-    expect(b.envelopes).toEqual([{ attachments: 0 }])
+    expect(b.envelopes).toEqual([{ images: 0 }])
     expect(b.serialize).not.toHaveBeenCalled()
     expect(b.release).not.toHaveBeenCalled()
   })
@@ -310,12 +301,12 @@ describe('scenario H: backspace breaks the token', () => {
     b.type('/goal')
     await vi.waitFor(() => { expect(b.controller.menu.getSnapshot().open).toBe(true) })
     // Space adjudication claims (space column, leadingInput).
-    fireEvent.keyDown(b.textarea, { key: ' ', keyCode: 32 })
+    fireEvent.keyDown(b.textarea, { key: ' ' })
     expect(b.shell.snapshot.phase).toBe('claimed')
     // Backspace into the token: watch break → plain, visuals gone.
     b.type('/goa ')
     expect(b.shell.snapshot.phase).toBe('plain')
-    expect(b.view.container.querySelector('[data-lexical-text][style*="warn-label"]')).toBeNull()
+    expect(b.view.container.querySelector('[data-decoration="token"]')).toBeNull()
   })
 })
 
@@ -337,14 +328,13 @@ describe('scenario: reference decoration lights up when the lexicon settles', ()
     })
     // Typed before the catalog settled: a plain token, no decoration.
     b.type('/deploy now')
-    expect(b.view.container.querySelector('[data-composer-text-ref]')).toBeNull()
+    expect(b.view.container.querySelector('[data-decoration="text-ref"]')).toBeNull()
     // The catalog settles (ui-skill's settle path fires the same notification).
     act(() => {
       roll = ['deploy']
       notify?.()
     })
-    act(() => { b.shell.editor.update(() => {}, { discrete: true }) }) // flush the queued re-scan
-    const mark = b.view.container.querySelector('[data-composer-text-ref]')
+    const mark = b.view.container.querySelector('[data-decoration="text-ref"]')
     expect(mark?.textContent).toBe('/deploy')
   })
 })
@@ -372,7 +362,7 @@ describe('scenario I: unknown /xyz + enter', () => {
     fireEvent.keyDown(b.textarea, { key: 'Enter' })
     await vi.waitFor(() => { expect(b.view.getByText('目录预热失败')).toBeTruthy() })
     // Never a silent downgrade: draft retained, sink untouched.
-    expect(b.shell.snapshot.draft).toBe('/plan 上线')
+    expect(b.textarea.value).toBe('/plan 上线')
     expect(b.sink).not.toHaveBeenCalled()
   })
 })

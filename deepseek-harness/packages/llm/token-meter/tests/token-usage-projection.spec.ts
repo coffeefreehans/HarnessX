@@ -3,12 +3,12 @@ import { Context } from '@deepseek-ai/cordis'
 import { createMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { TokenUsage } from '@deepseek-ai/dsh-llm'
 import SessionStore from '@deepseek-ai/dsh-session'
-import type { Session, SessionSeq } from '@deepseek-ai/dsh-session'
+import type { Session } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import TokenMeter from '@deepseek-ai/dsh-token-meter'
 import type { ContextPressureProjection, TokenUsageProjection } from '@deepseek-ai/dsh-token-meter/client'
-import { RetryId } from '@deepseek-ai/dsh-llm-retry'
 import { CompactionId } from '@deepseek-ai/dsh-compaction'
+import type {} from '../src/usage-projection.ts'
 
 const ZERO: TokenUsageProjection = {
   uncachedInputTokens: 0,
@@ -38,11 +38,11 @@ function usageChunk(
   usage: TokenUsage,
   turn: number,
   step: number,
-): SessionSeq {
-  return session.append('assistant/attempt', {
+): number {
+  return session.append('assistant/chunk', {
     turn,
     step,
-    stream: [{ type: 'chunk', time: 0, chunk: { type: 'usage', usage } }],
+    chunk: { type: 'usage', usage },
   }).seq
 }
 
@@ -51,9 +51,9 @@ function finalUsage(
   usage: TokenUsage,
   turn: number,
   step: number,
+  sourceSeqs: number[],
 ): void {
   session.append('assistant/message', {
-    stream: [{ type: 'chunk', time: 0, chunk: { type: 'usage', usage } }],
     turn,
     step,
     message: createMessage({
@@ -62,7 +62,7 @@ function finalUsage(
       source: { kind: 'model', provider: 'mock', model: 'mock' },
     }),
     usage,
-  }, { surfaceOp: 'append' })
+  }, { surfaceOp: 'append', sourceEventSeqs: sourceSeqs })
   session.append('step/end', { turn, step })
 }
 
@@ -77,7 +77,7 @@ const projected = (ctx: Context, session: Session): TokenUsageProjection => {
  * replaced span from the measurement service's own nodes and log the
  * shadow-price event directly before the replace.
  */
-function appendSummaryMeter(ctx: Context, session: Session, start: SessionSeq, end: SessionSeq): void {
+function appendSummaryMeter(ctx: Context, session: Session, start: number, end: number): void {
   const nodes = ctx.tokenMeter.measure(session).nodes
   const startIdx = nodes.findIndex(node => node.seq === start)
   const endIdx = nodes.findIndex(node => node.seq === end)
@@ -94,15 +94,8 @@ function appendSummaryMeter(ctx: Context, session: Session, start: SessionSeq, e
 }
 
 describe('tokenUsage session projection', () => {
-  it('serves zero buckets without usage samples', async () => {
+  it('serves zero buckets for an empty log', async () => {
     const { ctx, session } = await harness()
-    expect(projected(ctx, session)).toEqual(ZERO)
-    session.append('llm/retry-started', {
-      retryId: RetryId('token-meter-no-usage-retry'),
-      turn: 1,
-      step: 1,
-      retry: 1,
-    })
     expect(projected(ctx, session)).toEqual(ZERO)
   })
 
@@ -120,8 +113,8 @@ describe('tokenUsage session projection', () => {
       reasoningTokens: 3,
     }
     startStep(session, 1, 1)
-    usageChunk(session, usage, 1, 1)
-    finalUsage(session, usage, 1, 1)
+    const source = usageChunk(session, usage, 1, 1)
+    finalUsage(session, usage, 1, 1, [source])
 
     expect(projected(ctx, session)).toEqual({
       uncachedInputTokens: 10,
@@ -135,7 +128,7 @@ describe('tokenUsage session projection', () => {
   it('replaces an earlier same-step chunk sample with the final usage', async () => {
     const { ctx, session } = await harness()
     startStep(session, 1, 1)
-    usageChunk(session, {
+    const source = usageChunk(session, {
       inputTokens: 10,
       outputTokens: 2,
       cacheReadTokens: 3,
@@ -145,7 +138,7 @@ describe('tokenUsage session projection', () => {
       outputTokens: 5,
       cacheReadTokens: 8,
       cacheWriteTokens: 1,
-    }, 1, 1)
+    }, 1, 1, [source])
 
     expect(projected(ctx, session)).toEqual({
       uncachedInputTokens: 14,
@@ -155,66 +148,10 @@ describe('tokenUsage session projection', () => {
     })
   })
 
-  it('accumulates retried attempts while replacing samples within each attempt', async () => {
-    const { ctx, session } = await harness()
-    const retryId = RetryId('token-meter-retry')
-    session.append('turn/start', { turn: 1 })
-    startStep(session, 1, 1)
-    usageChunk(session, {
-      inputTokens: 10,
-      outputTokens: 2,
-      cacheReadTokens: 3,
-    }, 1, 1)
-    session.append('assistant/attempt', {
-      turn: 1,
-      step: 1,
-      stream: [{
-        type: 'chunk',
-        time: 1,
-        chunk: {
-          type: 'finish',
-          reason: { kind: 'error', failure: { code: 'RATE_LIMIT', message: 'busy', status: 429 } },
-        },
-      }],
-    })
-    session.append('llm/retry', {
-      retryId,
-      turn: 1,
-      step: 1,
-      provider: 'mock',
-      mode: 'normal',
-      policyKey: 'test',
-      retry: 1,
-      maxRetries: 1,
-      delayMs: 0,
-      failure: { code: 'RATE_LIMIT', message: 'busy', status: 429 },
-    })
-    session.append('llm/retry-started', { retryId, turn: 1, step: 1, retry: 1 })
-    usageChunk(session, {
-      inputTokens: 12,
-      outputTokens: 4,
-      cacheReadTokens: 6,
-    }, 1, 1)
-    finalUsage(session, {
-      inputTokens: 14,
-      outputTokens: 5,
-      cacheReadTokens: 8,
-      cacheWriteTokens: 1,
-    }, 1, 1)
-    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
-
-    expect(projected(ctx, session)).toEqual({
-      uncachedInputTokens: 24,
-      outputTokens: 7,
-      cacheReadTokens: 11,
-      cacheWriteTokens: 1,
-    })
-  })
-
   it('accumulates disjoint buckets across steps without adding reasoning twice', async () => {
     const { ctx, session } = await harness()
     startStep(session, 1, 1)
-    usageChunk(session, {
+    const first = usageChunk(session, {
       inputTokens: 10,
       outputTokens: 6,
       reasoningTokens: 5,
@@ -225,9 +162,9 @@ describe('tokenUsage session projection', () => {
       outputTokens: 6,
       reasoningTokens: 5,
       cacheReadTokens: 2,
-    }, 1, 1)
+    }, 1, 1, [first])
     startStep(session, 1, 2)
-    usageChunk(session, {
+    const second = usageChunk(session, {
       inputTokens: 20,
       outputTokens: 9,
       reasoningTokens: 7,
@@ -238,7 +175,7 @@ describe('tokenUsage session projection', () => {
       outputTokens: 9,
       reasoningTokens: 7,
       cacheWriteTokens: 4,
-    }, 1, 2)
+    }, 1, 2, [second])
 
     expect(projected(ctx, session)).toEqual({
       uncachedInputTokens: 30,
@@ -264,8 +201,8 @@ describe('tokenUsage session projection', () => {
   it('does not erase historical billing when the visible surface is replaced', async () => {
     const { ctx, session } = await harness()
     startStep(session, 1, 1)
-    usageChunk(session, { inputTokens: 12, outputTokens: 3 }, 1, 1)
-    finalUsage(session, { inputTokens: 12, outputTokens: 3 }, 1, 1)
+    const source = usageChunk(session, { inputTokens: 12, outputTokens: 3 }, 1, 1)
+    finalUsage(session, { inputTokens: 12, outputTokens: 3 }, 1, 1, [source])
     const before = session.append('user/message', createUserMessage({
       content: [{ type: 'text', text: 'before compaction' }],
       source: { kind: 'user' },
@@ -275,7 +212,7 @@ describe('tokenUsage session projection', () => {
       content: [{ type: 'text', text: 'compacted' }],
       source: { kind: 'plugin', plugin: 'test' },
     }), {
-      surfaceOp: { op: 'replace', startSeq: before.seq, endSeq: before.seq },
+      surfaceOp: { op: 'replace', start: before.seq, end: before.seq },
       sourceEventSeqs: [before.seq],
     })
 
@@ -323,7 +260,7 @@ function recordContext(session: Session, model: string, contextWindow?: number):
 }
 
 /** Append one model-visible user turn and return its surface seq. */
-function appendUser(session: Session, text: string): SessionSeq {
+function appendUser(session: Session, text: string): number {
   return session.append('user/message', createUserMessage({
     content: [{ type: 'text', text }],
     source: { kind: 'user' },
@@ -337,9 +274,8 @@ function appendAssistant(
   usage: TokenUsage,
   turn: number,
   step: number,
-): SessionSeq {
+): number {
   return session.append('assistant/message', {
-    stream: [],
     turn,
     step,
     message: createMessage({
@@ -348,7 +284,7 @@ function appendAssistant(
       source: { kind: 'model', provider: 'mock', model: 'mock' },
     }),
     usage,
-  }, { surfaceOp: 'append' }).seq
+  }, { surfaceOp: 'append', sourceEventSeqs: [] }).seq
 }
 
 describe('contextPressure session projection', () => {
@@ -381,8 +317,8 @@ describe('contextPressure session projection', () => {
   it('replaces pressure with the newest request rather than accumulating', async () => {
     const { ctx, session } = await harness()
     startStep(session, 1, 1)
-    usageChunk(session, { inputTokens: 100, outputTokens: 10 }, 1, 1)
-    finalUsage(session, { inputTokens: 100, outputTokens: 10 }, 1, 1)
+    const first = usageChunk(session, { inputTokens: 100, outputTokens: 10 }, 1, 1)
+    finalUsage(session, { inputTokens: 100, outputTokens: 10 }, 1, 1, [first])
     startStep(session, 2, 1)
     usageChunk(session, { inputTokens: 250, outputTokens: 10 }, 2, 1)
     expect(pressure(ctx, session).pressureTokens).toBe(250)
@@ -421,7 +357,7 @@ describe('contextPressure session projection', () => {
     const changed: string[] = []
     ctx.sessionProjections.onChanged((_session, key) => { changed.push(key) })
 
-    session.append('session/end-seed', {})
+    session.append('todo/write', { todos: [] })
     expect(changed).not.toContain('contextPressure')
     // A repeated capacity record for the same window is also a no-op.
     recordContext(session, 'small', 64_000)
@@ -478,28 +414,12 @@ describe('contextPressure session projection', () => {
       content: [{ type: 'text', text: 'summary' }],
       source: { kind: 'plugin', plugin: 'test' },
     }), {
-      surfaceOp: { op: 'replace', startSeq: question, endSeq: grown },
+      surfaceOp: { op: 'replace', start: question, end: grown },
       sourceEventSeqs: [question, answer, grown],
     })
     const compacted = pressure(ctx, session)
     expect(compacted.pressureTokens).toBe(900)
     expect(compacted.projectedTokens).toBeLessThan(beforeCompaction!)
-  })
-
-  it.each(['start', 'end'] as const)('rejects a shadow claim with a mismatched %s endpoint', async (endpoint) => {
-    const { ctx, session } = await harness()
-    try {
-      const first = appendUser(session, 'first')
-      const last = appendUser(session, 'last')
-      appendSummaryMeter(ctx, session, first, last)
-      const target = endpoint === 'start' ? last : first
-      session.append('user/message', createUserMessage({
-        content: [{ type: 'text', text: 'summary' }], source: { kind: 'plugin', plugin: 'test' },
-      }), { surfaceOp: { op: 'replace', startSeq: target, endSeq: target }, sourceEventSeqs: [target] })
-      expect(() => pressure(ctx, session)).toThrow('has no adjacent shadow price')
-    } finally {
-      await ctx.fiber.dispose()
-    }
   })
 
   it('folds a replacement without a claim at zero', async () => {
@@ -514,7 +434,7 @@ describe('contextPressure session projection', () => {
       content: [{ type: 'text', text: 'summary without a preceding claim' }],
       source: { kind: 'plugin', plugin: 'test' },
     }), {
-      surfaceOp: { op: 'replace', startSeq: question, endSeq: question },
+      surfaceOp: { op: 'replace', start: question, end: question },
       sourceEventSeqs: [question],
     })
 
@@ -535,7 +455,7 @@ describe('contextPressure session projection', () => {
       content: [{ type: 'text', text: '.' }],
       source: { kind: 'plugin', plugin: 'test' },
     }), {
-      surfaceOp: { op: 'replace', startSeq: question, endSeq: question },
+      surfaceOp: { op: 'replace', start: question, end: question },
       sourceEventSeqs: [question],
     })
     expect(pressure(ctx, session).projectedTokens).toBe(0)

@@ -44,10 +44,11 @@ function connect(
 }
 
 describe('LspConnection', () => {
-  it('completes an initialize request/response round-trip', async () => {
+  it('completes an initialize request/response round-trip and exposes a pid', async () => {
     const conn = connect({})
     const result = await conn.request('initialize', { capabilities: {} })
     expect(result).toMatchObject({ capabilities: { hoverProvider: true } })
+    expect(conn.pid).toBeGreaterThan(0)
   })
 
   it('forwards explicit DSH_* env entries to the child', async () => {

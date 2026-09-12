@@ -6,9 +6,8 @@ import { resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import {
   CLIENT_BUILD_RECORD_PATH,
-  CLIENT_BUILD_PROFILE_SELECTOR,
   clientBuildProcessEnvironment,
-  repositoryClientBuildEnvironment,
+  repositoryCommitHash,
   resolveClientBuildEnvironment,
   writeClientBuildRecord,
 } from './client-build-environment.ts'
@@ -35,13 +34,14 @@ function main(): void {
     allowPositionals: false,
   })
   const root = resolve(import.meta.dirname, '..')
-  const repositoryEnvironment = repositoryClientBuildEnvironment(root, process.env)
-  const profile = values.profile ?? process.env[CLIENT_BUILD_PROFILE_SELECTOR]
-  const clientEnvironment = resolveClientBuildEnvironment(repositoryEnvironment, profile)
-  const buildEnvironment = clientBuildProcessEnvironment(process.env, clientEnvironment)
+  const parentEnvironment = {
+    ...process.env,
+    DSH_CLIENT_COMMIT_HASH: repositoryCommitHash(root, process.env),
+  }
+  const clientEnvironment = resolveClientBuildEnvironment(parentEnvironment, values.profile)
+  const buildEnvironment = clientBuildProcessEnvironment(parentEnvironment, clientEnvironment)
 
   rmSync(resolve(root, CLIENT_BUILD_RECORD_PATH), { force: true })
-  runScript('build:native-system', buildEnvironment)
   runScript('build:lib', buildEnvironment)
   runScript('build:web', buildEnvironment)
   const record = writeClientBuildRecord(root, clientEnvironment)

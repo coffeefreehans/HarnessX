@@ -6,11 +6,12 @@
  * back into the mirror.
  */
 
-import type { Context as ClientContext } from '@deepseek-ai/cordis'
-import type { SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
+import type {
+  IApiClient, SettingsNamespaceView,
+} from '@deepseek-ai/dsh-api-remotes/client'
 import {
   createSnapshotStore, type SnapshotStore,
-} from '@deepseek-ai/dsh-client-store'
+} from '@deepseek-ai/dsh-client-runtime/client'
 import type {
   SchemaNode, SettingsDescribeFace, SettingsSchemaService,
 } from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -95,13 +96,12 @@ export class PermissionPresetSettingsController {
 
   /**
    * @param describeFace - the shared mirror's read/fold face (descriptor and schema source).
-   * @param ctx - the row plugin's context, whose `remote.settings` namespace
-   * carries the `defaultPreset` write.
+   * @param api - settings wire face for the `defaultPreset` write.
    * @param schema - settings-owned schema operations.
    */
   constructor(
     private readonly describeFace: SettingsDescribeFace,
-    private readonly ctx: ClientContext,
+    private readonly api: Pick<IApiClient, 'settings'>,
     private readonly schema: SettingsSchemaService,
   ) {}
 
@@ -138,26 +138,23 @@ export class PermissionPresetSettingsController {
       draft.status = 'saving'
       draft.error = null
     })
-    let response
     try {
-      response = await this.ctx.remote.settings.mutate(
-        PERMISSION_SETTINGS_NS,
-        [{ op: 'set', path: ['defaultPreset'], value: preset }],
-        view.revision,
-      )
-    } finally {
-      // Cleared before the fold below, whose publish reaches `derive` through
-      // this row's own subscription and is skipped while a save is pending.
+      const response = await this.api.settings.mutate({
+        ns: PERMISSION_SETTINGS_NS,
+        ops: [{ op: 'set', path: ['defaultPreset'], value: preset }],
+        expectedRevision: view.revision,
+      })
+      if (!response.result.ok) throw new Error(response.result.error.message)
       this.saving = false
+      if (this.disposed) return
+      // The mirror publish reaches this row's own subscription, so the fold
+      // is also what republishes the accepted value here.
+      this.describeFace.acceptView(response.result.value)
+    } catch (error) {
+      this.saving = false
+      if (this.disposed) return
+      this.fail(error)
     }
-    if (this.disposed) return
-    if (!response.ok) {
-      this.fail(response.error)
-      return
-    }
-    // The mirror publish reaches this row's own subscription, so the fold
-    // is also what republishes the accepted value here.
-    this.describeFace.acceptView(response.value)
   }
 
   /** Stop following the mirror; later publishes leave the snapshot alone. */
@@ -171,7 +168,7 @@ export class PermissionPresetSettingsController {
     if (this.disposed || this.saving) return
     const mirrored = this.describeFace.getSnapshot()
     if (mirrored.status === 'unavailable') {
-      // The terminal non-loopback state: this client keeps Host persistence disabled, so
+      // The terminal non-loopback state: settings RPCs are loopback-only, so
       // the row hides itself exactly like an unserved namespace.
       this.store.update((state) => {
         state.status = 'unavailable'

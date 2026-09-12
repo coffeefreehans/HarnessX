@@ -1,6 +1,9 @@
 /**
- * Exa-backed `WebSearchProvider` plugin. It contributes to the `ctx.web`
- * registry without owning the service.
+ * `@deepseek-ai/dsh-web-search-exa`: registers an Exa-backed `WebSearchProvider`
+ * with `ctx.web`. A function/namespace plugin (NOT a default-export service):
+ * a search provider does not own the `ctx.web` key — it registers INTO the
+ * seam's provider registry, exactly as `@deepseek-ai/dsh-llm-deepseek`
+ * registers an adapter into `ctx.llm`. The key is owned by `@deepseek-ai/dsh-web`.
  *
  * @module @deepseek-ai/dsh-web-search-exa
  */

@@ -47,7 +47,7 @@ export const inject = ['skills']
 
 /** Local filesystem skill provider configuration. */
 export interface Config {
-  /** Unique provider name. Defaults to `filesystem`. */
+  /** Unique provider name. Defaults to `local`. */
   providerName?: string
   /** Whether project and user roots are included around custom roots. */
   includeDefaultRoots?: boolean

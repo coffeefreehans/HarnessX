@@ -54,13 +54,12 @@
   padding: 4px;
   overflow: auto;
   list-style: none;
-  border: 0;
-  border-radius: 20px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
   background: var(--dsw-specific-menu);
   --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
-  --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
-  box-shadow: var(--dsw-elevation-prominent);
+  box-shadow: var(--dsw-shadow-lv3);
 }
 
 .row {

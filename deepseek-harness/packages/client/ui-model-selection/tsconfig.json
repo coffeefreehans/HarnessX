@@ -12,16 +12,13 @@
       "path": "../../api/remotes/tsconfig.client.json"
     },
     {
-      "path": "../connection/tsconfig.client.json"
-    },
-    {
       "path": "../../../vendor/cordis"
     },
     {
       "path": "../locale"
     },
     {
-      "path": "../store"
+      "path": "../runtime"
     },
     {
       "path": "../ui-commands"
@@ -33,22 +30,16 @@
       "path": "../ui-primitives"
     },
     {
-      "path": "../ui-renderer"
-    },
-    {
-      "path": "../ui-session"
-    },
-    {
       "path": "../ui-input-trigger"
     },
     {
       "path": "../ui-slots"
     },
     {
-      "path": "../../core/session"
+      "path": "../../runtime-diagnostics/invariants"
     },
     {
-      "path": "../../api/session-controller/tsconfig.client.json"
+      "path": "../../api/remotes/tsconfig.client.json"
     }
   ]
 }

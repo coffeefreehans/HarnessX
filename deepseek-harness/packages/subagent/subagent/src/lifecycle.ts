@@ -19,8 +19,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { foldConsumedWork } from '@deepseek-ai/dsh-agent'
-import { SessionLogOffset } from '@deepseek-ai/dsh-session'
-import type { SessionEvent, SessionId, SessionLogOffset as SessionLogOffsetType } from '@deepseek-ai/dsh-session'
+import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import { finalAssistantOutput } from './assistant-output.ts'
 import { SubagentRunId } from './types.ts'
 import type { SubagentResult, SubagentRun, SubagentRunEndInfo, SubagentRunInfo } from './types.ts'
@@ -183,7 +182,7 @@ export function createActivationObserver(
   // A cold resume replays earlier turns, so this epoch's telemetry must come
   // from the suffix it actually produced — never the whole session, which
   // would report a previous epoch's answer when this one opened no turn.
-  let boundary: SessionLogOffsetType = SessionLogOffset(0)
+  let boundary = 0
   // Assigned by `capture()`, which the disposal path always runs before
   // `settle()`; a resident epoch therefore always has its facts by then.
   let captured: ActivationTerminal = { stopReason: 'completed' }
@@ -194,11 +193,11 @@ export function createActivationObserver(
     : { stopReason: 'error' }
   return {
     start: (child: Agent): void => {
-      boundary = child.session.seq
+      boundary = child.session.events.length
       emit('subagent/start', identity, parent)
     },
     capture: (child: Agent): void => {
-      const own = child.session.snapshotEvents(boundary)
+      const own = child.session.events.slice(boundary)
       const output = finalAssistantOutput(own)
       captured = {
         stopReason: epochStopReason(own),

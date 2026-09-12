@@ -1,5 +1,8 @@
-// Session-header background jobs driven by a real `ctx.jobs` entry. No model
-// call is involved.
+// Web e2e scenario: the session-header background-job list over the real
+// host. No model call is involved — a genuine `run_in_background` bash call
+// registers with `ctx.jobs`, and the assertion chain is the whole delivery
+// path: registry change feed → api-proxy `session/jobs` frame → the client's
+// `jobsBySession` mirror → the header action.
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
@@ -7,7 +10,7 @@ import type { Browser, Page } from 'playwright'
 import { chromium } from 'playwright'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-import { ToolCallId } from '@deepseek-ai/dsh-llm'
+import { CallId } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { JobId } from '@deepseek-ai/dsh-jobs'
 import {
@@ -16,8 +19,8 @@ import {
 } from './scaffold.ts'
 import { newEnglishPage, saveFailureShot } from './support.ts'
 
-const FIXTURE = fileURLToPath(new URL('../../../snapshots/web/fresh-round-trip/session.v3.jsonl', import.meta.url))
-const SNAPSHOT_DIR = fileURLToPath(new URL('../../../snapshots/web/background-job-list', import.meta.url))
+const FIXTURE = fileURLToPath(new URL('./snapshots/fresh-round-trip/session.jsonl', import.meta.url))
+const SNAPSHOT_DIR = fileURLToPath(new URL('./snapshots/background-job-list', import.meta.url))
 const RUNNING_EXPECTED = join(SNAPSHOT_DIR, 'running.expected.md')
 const SETTLED_EXPECTED = join(SNAPSHOT_DIR, 'settled.expected.md')
 const MODE = webSnapshotMode()
@@ -27,7 +30,7 @@ const SEED_ID = 'background-job-list-web-e2e'
 const COMMAND = 'sleep 45'
 
 /**
- * Wait for opening a session to publish its live Agent.
+ * Wait for the Host to publish the live Agent that opening a session resumes.
  * @param scaffold - the booted web scaffold.
  * @param sessionId - the opened session's identity.
  * @returns the registered Agent instance.
@@ -56,7 +59,7 @@ describe.skipIf(MODE === 'record')('web e2e: background job list', () => {
     browser = await chromium.launch()
     page = await newEnglishPage(browser)
     tripwire = watchConsole(page)
-    await page.goto(scaffold.authenticatedUrl, { waitUntil: 'load' })
+    await page.goto(scaffold.baseUrl, { waitUntil: 'load' })
     await page.waitForSelector('[class*="frame"]', { timeout: 30_000 })
 
     const groupRow = page.locator('[role="treeitem"]').first()
@@ -79,13 +82,15 @@ describe.skipIf(MODE === 'record')('web e2e: background job list', () => {
 
   it('shows a running background job in the session header without a refresh', async () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-background-job-running'))
-    // Polling for zero would pass at t=0 before delivery and prove nothing.
+    // Point assertion, not a poll: `expect.poll` retries until a predicate
+    // holds, so polling for zero passes at t=0 and proves nothing. The
+    // "renders nothing without a task" branch is owned by the component suite.
     const trigger = page.getByRole('button', { name: '1 background job running' })
     expect(await trigger.count()).toBe(0)
 
     const started = await scaffold.ctx.tools.execute({
       signal: new AbortController().signal,
-      callId: ToolCallId('background-job-list-e2e'),
+      callId: CallId('background-job-list-e2e'),
       name: 'bash',
       arguments: { command: COMMAND, description: 'Hold a background slot open', run_in_background: true },
       agent,
@@ -111,7 +116,9 @@ describe.skipIf(MODE === 'record')('web e2e: background job list', () => {
     onTestFailed(() => saveFailureShot(page, 'web-e2e-background-job-settled'))
     expect(scaffold.ctx.jobs.kill(jobId, agent, 'web e2e cancellation')).toBe('requested')
 
-    const idle = page.getByRole('button', { name: '1 background job', exact: true })
+    // The trigger drops its live count once the task leaves running/stopping,
+    // which is also the proof that settlement reached the browser unprompted.
+    const idle = page.getByRole('button', { name: '1 background job' })
     await idle.waitFor({ timeout: 20_000 })
 
     const snapshot = await captureStableAria(page, '[class*="menu"]', scaffold.workspaceCwd)

@@ -1,11 +1,10 @@
-// Web e2e scenario (browserless): the subagents interrupt Remote against the real
+// Web e2e scenario (browserless): the subagent.interrupt RPC against the real
 // composition. A live continuable child holds its model turn open through a
 // replay hang entry; plain HTTP queues a follow-up, interrupts the turn, and
 // proves from the real session state that the turn aborted, the follow-up
 // parked without auto-starting a new turn, and a later waking send resumed the
 // preserved FIFO order. No browser: the RPC surface is the product surface
 // under test, and subagent-interrupt-ui.e2e.ts owns the composer interaction.
-import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -13,7 +12,7 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { SessionId as sessionId, type SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-agent'
-import { launchWebScaffold, readPersistedEvents, webSnapshotMode, type WebScaffold } from './scaffold.ts'
+import { launchWebScaffold, webSnapshotMode, type WebScaffold } from './scaffold.ts'
 
 const MODE = webSnapshotMode()
 const INITIAL = 'Explain event sourcing in one sentence.'
@@ -22,29 +21,20 @@ const WAKING = 'And add one concrete example.'
 
 type RpcResult<T> = { ok: true; value: T } | { ok: false; error: { code: string; message: string } }
 
-/** POST one generated Remote unary through the API Gateway carrier. */
-async function remote<T>(
-  scaffold: WebScaffold,
-  endpoint: string,
-  args: Readonly<Record<string, unknown>>,
-): Promise<RpcResult<T>> {
-  const response = await scaffold.hostFetch(`/api/${endpoint}`, {
+/** POST one unary RPC through the real HTTP carrier and unwrap its result. */
+async function rpc<T>(baseUrl: string, method: string, payload: unknown): Promise<RpcResult<T>> {
+  const response = await fetch(`${baseUrl}/api/${method}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       type: 'client-request',
-      rpcId: `interrupt-e2e-${endpoint}-${randomUUID()}`,
-      method: endpoint,
-      payload: { args },
+      rpcId: `interrupt-e2e-${method}-${crypto.randomUUID()}`,
+      method,
+      payload,
     }),
   })
-  if (!response.ok) throw new Error(`${endpoint} failed over HTTP ${response.status}: ${await response.text()}`)
+  if (!response.ok) throw new Error(`${method} failed over HTTP ${response.status}: ${await response.text()}`)
   return (await response.json() as { result: RpcResult<T> }).result
-}
-
-/** POST one generated Session Remote unary through the API Gateway carrier. */
-function sessionRemote<T>(scaffold: WebScaffold, method: string, request: unknown): Promise<RpcResult<T>> {
-  return remote<T>(scaffold, `session/${method}`, { request })
 }
 
 /** Poll a synchronous condition (hook-safe; expect.poll is test-body only). */
@@ -70,7 +60,7 @@ function textCompletion(text: string): object {
   }
 }
 
-describe.skipIf(MODE === 'record')('web e2e: subagents/interruptByParent over the real composition', () => {
+describe.skipIf(MODE === 'record')('web e2e: subagent.interrupt over the real composition', () => {
   let scaffold: WebScaffold
   let sidecarRoot: string
   let readyFile: string
@@ -100,7 +90,7 @@ describe.skipIf(MODE === 'record')('web e2e: subagents/interruptByParent over th
     })
 
     // A live parent Agent through the real API; no workspace or browser.
-    const created = await sessionRemote<{ sessionId: string }>(scaffold, 'create', {
+    const created = await rpc<{ sessionId: string }>(scaffold.baseUrl, 'session.create', {
       cwd: scaffold.workspaceCwd,
     })
     if (!created.ok) throw new Error(`session.create failed: ${created.error.code}`)
@@ -130,22 +120,18 @@ describe.skipIf(MODE === 'record')('web e2e: subagents/interruptByParent over th
 
   it('parks a queued follow-up on interrupt and resumes it FIFO on a waking send', async () => {
     // Queue the follow-up while the turn is still open, then interrupt.
-    const queued = await remote<{ messageId: string }>(scaffold, 'subagents/prompt', {
-      request: {
-        requestId: randomUUID(),
-        parentSessionId: parentId,
-        childSessionId: childId,
-        mode: 'continuable',
-        delivery: 'queue',
-        content: [{ type: 'text', text: FOLLOWUP }],
-      },
+    const queued = await rpc<{ messageId: string }>(scaffold.baseUrl, 'subagent.prompt', {
+      parentSessionId: parentId,
+      childSessionId: childId,
+      mode: 'continuable',
+      content: [{ type: 'text', text: FOLLOWUP }],
     })
     expect(queued).toMatchObject({ ok: true })
 
     const settled = scaffold.whenTurnSettled()
-    const interrupted = await remote<{ accepted: true }>(scaffold, 'subagents/interruptByParent', {
-      childSessionId: childId,
+    const interrupted = await rpc<{ accepted: true }>(scaffold.baseUrl, 'subagent.interrupt', {
       parentSessionId: parentId,
+      childSessionId: childId,
       mode: 'continuable',
     })
     expect(interrupted).toMatchObject({ ok: true, value: { accepted: true } })
@@ -159,38 +145,30 @@ describe.skipIf(MODE === 'record')('web e2e: subagents/interruptByParent over th
     expect(child).toBeDefined()
     expect(child!.status).toBe('idle')
     expect(child!.inbox.nextTurn).toHaveLength(1)
-    expect(child!.session.snapshotEvents().filter(event => event.type === 'turn/start')).toHaveLength(1)
-    const lastEnd = child!.session.snapshotEvents().filter(event => event.type === 'turn/end').at(-1)
+    expect(child!.session.events.filter(event => event.type === 'turn/start')).toHaveLength(1)
+    const lastEnd = child!.session.events.filter(event => event.type === 'turn/end').at(-1)
     expect((lastEnd)?.data.reason.kind).toBe('aborted')
 
     // Only an explicit waking send resumes the parked queue, FIFO, then the
     // child runs both turns to completion and settles.
-    const waking = await remote<{ messageId: string }>(scaffold, 'subagents/prompt', {
-      request: {
-        requestId: randomUUID(),
-        parentSessionId: parentId,
-        childSessionId: childId,
-        mode: 'continuable',
-        delivery: 'queue',
-        content: [{ type: 'text', text: WAKING }],
-      },
+    const waking = await rpc<{ messageId: string }>(scaffold.baseUrl, 'subagent.prompt', {
+      parentSessionId: parentId,
+      childSessionId: childId,
+      mode: 'continuable',
+      content: [{ type: 'text', text: WAKING }],
     })
     expect(waking).toMatchObject({ ok: true })
     await expect.poll(() => scaffold.ctx.agents.get(childId), { timeout: 60_000 }).toBeUndefined()
 
-    // The settled child's loop appended every turn's closing events durably,
-    // so the physical log carries the complete record asserted here.
-    const events = await readPersistedEvents(scaffold, childId)
+    const loaded = await scaffold.ctx.sessionPersistence.load(childId)
     // Human-origin messages only: the real composition also injects
     // runtime-context snapshots as non-user-source messages.
-    const userTexts = events.flatMap(event => event.type === 'user/message'
+    const userTexts = loaded.events.flatMap(event => event.type === 'user/message'
       && event.data.source.kind === 'user'
       ? event.data.content.flatMap(block => block.type === 'text' ? [block.text] : [])
       : [])
-    expect(userTexts[0]).toBe(INITIAL)
-    expect(userTexts[1]).toMatch(/^Your parent agent id is .+send_message\(\{ agent_id: /)
-    expect(userTexts.slice(2)).toEqual([FOLLOWUP, WAKING])
-    const turnEndKinds = events
+    expect(userTexts).toEqual([INITIAL, FOLLOWUP, WAKING])
+    const turnEndKinds = loaded.events
       .filter(event => event.type === 'turn/end')
       .map(event => (event).data.reason.kind)
     expect(turnEndKinds).toEqual(['aborted', 'completed', 'completed'])

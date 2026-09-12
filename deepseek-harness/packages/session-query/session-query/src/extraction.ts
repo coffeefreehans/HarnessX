@@ -1,13 +1,11 @@
 /** First-party semantic text extraction for session-query consumers. */
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
-// Type-only: includes the first-party todo event consumed below.
-import type {} from '@deepseek-ai/dsh-tool-todo'
 
 /**
  * Extract searchable semantic text from one first-party session event.
  *
- * Structural boundaries, embedded raw streams, request envelopes, and unknown
+ * Structural boundaries, raw stream chunks, request envelopes, and unknown
  * declaration-merged events contribute no text.
  * @param event - event to inspect.
  * @returns newline-joined semantic text, or an empty string when non-searchable.
@@ -33,7 +31,7 @@ export function extractSessionEventText(event: SessionEvent): string {
     case 'turn/start':
     case 'step/start':
     case 'step/end':
-    case 'assistant/attempt':
+    case 'assistant/chunk':
     case 'request/header':
       return ''
     // SessionEventMap is merge-extensible. Unknown events remain

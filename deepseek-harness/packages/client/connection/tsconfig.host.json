@@ -8,36 +8,26 @@
   "files": [
     "src/api-path.ts",
     "src/api-request-trust.ts",
-    "src/browser-auth.ts",
     "src/http-bridge.ts",
     "src/index.ts",
+    "src/invariant.ts",
     "src/loopback-hostname.ts",
-    "src/recovery-config.ts",
     "src/rpc-host.ts",
-    "src/rpc-schema.ts",
-    "src/rpc.ts"
+    "src/rpc.ts",
+    "src/websocket-downlink.ts"
   ],
   "references": [
-    {
-      "path": "../../../vendor/cordis"
-    },
-    {
-      "path": "../../../vendor/schemastery"
-    },
     {
       "path": "../../attachment/attachment"
     },
     {
-      "path": "../../credentials/credentials"
-    },
-    {
-      "path": "../../core/session"
+      "path": "../../host/apiproxy"
     },
     {
       "path": "../../host/webserver"
     },
     {
-      "path": "../../util/brand"
+      "path": "../../runtime-diagnostics/invariants"
     }
   ]
 }

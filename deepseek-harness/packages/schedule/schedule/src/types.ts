@@ -219,10 +219,3 @@ declare module '@deepseek-ai/dsh-session/types' {
     'schedule/change': ScheduleChange
   }
 }
-
-declare module '@deepseek-ai/dsh-session-projection/types' {
-  interface SessionProjectionMap {
-    /** Complete active reminders owned by this Session's post-fork suffix. */
-    schedule: readonly ScheduleRecord[]
-  }
-}

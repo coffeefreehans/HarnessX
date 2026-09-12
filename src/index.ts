@@ -3,13 +3,13 @@
 import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import type {} from '@deepseek-ai/dsh-client-connection'
 import type {} from '@deepseek-ai/dsh-cmdline'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import {
   THEME_SETTINGS_NAMESPACE,
   type ThemeSettings,
 } from '@deepseek-ai/dsh-client-ui-theme'
+import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { DesktopShellMode } from './runtime.ts'
 import type {} from './runtime.ts'
 
@@ -17,12 +17,12 @@ import type {} from './runtime.ts'
 export const name = 'desktop-shell'
 
 /** Services required before the shell can register its renderer generation. */
-export const inject = ['desktopRuntime', 'webServer', 'webRuntime', 'appExit', 'settings', 'connection']
+export const inject = ['desktopRuntime', 'webServer', 'webRuntime', 'appExit', 'settings']
 
 /** Standard settings namespace shared by tray and configuration surfaces. */
-export const DESKTOP_SETTINGS_NAMESPACE = 'dsh-desktop'
+export const DESKTOP_SETTINGS_NAMESPACE = settingsNamespace('dsh-desktop')
 
-const UI_THEME_SETTINGS_NAMESPACE = THEME_SETTINGS_NAMESPACE
+const UI_THEME_SETTINGS_NAMESPACE = settingsNamespace(THEME_SETTINGS_NAMESPACE)
 
 /** Desktop settings presented by the standard settings service. */
 export interface DesktopSettings {
@@ -71,34 +71,8 @@ export function desktopRendererUrl(
   platform: Context['desktopRuntime']['platform'],
 ): string {
   const url = new URL(`http://127.0.0.1:${String(port)}/`)
-  // The desktop markers ride the fragment: the 0.1.5-rc.1 token entry
-  // redirects to a clean '/' query, and browsers preserve fragments across
-  // redirects.
-  const markers = new URLSearchParams({
-    'dsh-desktop-mode': mode,
-    'dsh-desktop-platform': platform,
-  })
-  url.hash = `#${String(markers)}`
-  return url.href
-}
-
-/**
- * Authenticate the desktop renderer URL and reattach its desktop markers.
- * @param connection - Host Connection handle owning the launch token.
- * @param port - active loopback Web server port.
- * @param mode - active native presentation mode.
- * @param platform - active Electron platform.
- * @returns the token-bearing URL (fragment preserved) loaded by the BrowserWindow.
- */
-export function authenticatedDesktopRendererUrl(
-  connection: { authenticatedUrl(baseUrl: string): string },
-  port: number,
-  mode: DesktopShellMode,
-  platform: Context['desktopRuntime']['platform'],
-): string {
-  const base = new URL(desktopRendererUrl(port, mode, platform))
-  const url = new URL(connection.authenticatedUrl(base.href))
-  url.hash = base.hash
+  url.searchParams.set('dsh-desktop-mode', mode)
+  url.searchParams.set('dsh-desktop-platform', platform)
   return url.href
 }
 
@@ -165,16 +139,7 @@ export function apply(ctx: Context, config: Config): void {
   ctx.effect(
     () => ctx.desktopRuntime.schedule({
       ...config,
-      // The 0.1.5-rc.1 Connection carrier authenticates browser requests; the
-      // window must open the token-bearing URL (later requests ride its
-      // cookie). authenticatedUrl wipes the fragment, so the desktop markers
-      // are reattached after authentication.
-      url: authenticatedDesktopRendererUrl(
-        ctx.connection,
-        ctx.webServer.port,
-        config.mode,
-        ctx.desktopRuntime.platform,
-      ),
+      url: desktopRendererUrl(ctx.webServer.port, config.mode, ctx.desktopRuntime.platform),
       productName: 'DeepSeek HarnessX',
       windowTitle: 'DeepSeek HarnessX',
       iconPath,

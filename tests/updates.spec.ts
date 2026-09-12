@@ -208,7 +208,6 @@ describe('desktop update Host plugin', () => {
       '0.2',
       expect.objectContaining({ version: '0.2', tagName: 'v0.2' }),
       expect.any(AbortSignal),
-      expect.any(Function),
     )
     await harness.dispose()
   })

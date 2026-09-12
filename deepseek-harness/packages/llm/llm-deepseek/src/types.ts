@@ -145,17 +145,14 @@ export interface WireDelta {
 export interface WireToolCallDelta {
   /** Disambiguates parallel tool calls; stable across a call's deltas. */
   index: number
-  /**
-   * Carried by the first delta of each call. Gateways observed in the wild
-   * repeat it on continuation deltas as `''` or `null`; both mean "unchanged".
-   */
-  id?: string | null
+  /** Present on the first delta of each call only. */
+  id?: string
   type?: 'function'
   function?: {
-    /** Carried by the first delta of each call, with the same `''`/`null` repetition as {@link WireToolCallDelta.id}. */
-    name?: string | null
+    /** Present on the first delta of each call only. */
+    name?: string
     /** Argument JSON fragment (concatenate across deltas). */
-    arguments?: string | null
+    arguments?: string
   }
 }
 
@@ -169,8 +166,6 @@ export interface WireToolCallDelta {
 export interface WireUsage {
   prompt_tokens: number
   completion_tokens: number
-  /** Provider-reported aggregate across prompt and completion tokens. */
-  total_tokens?: number
   prompt_cache_hit_tokens?: number
   prompt_cache_miss_tokens?: number
   prompt_tokens_details?: { cached_tokens?: number }

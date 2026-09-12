@@ -16,16 +16,12 @@ const MODES = new Set<DesktopClientMode>(['compatibility', 'advanced'])
 const PLATFORMS = new Set<DesktopClientPlatform>(['darwin', 'win32', 'linux'])
 
 /**
- * Validate the Electron-owned markers before any desktop client effects run.
- * The 0.1.5-rc.1 Connection carrier's token entry redirects to a clean `/`
- * query, so the markers ride the URL fragment (browsers preserve fragments
- * across redirects); both placements stay accepted.
+ * Validate the Electron-owned query marker before any desktop client effects run.
  * @param search - URL search string, including or omitting the leading question mark.
- * @param hash - URL fragment, including or omitting the leading hash sign.
  * @returns the validated desktop renderer environment.
  */
-export function parseDesktopClientEnvironment(search: string, hash: string = ''): DesktopClientEnvironment {
-  const params = new URLSearchParams(`${search.replace(/^\?/u, '')}${hash.length > 0 ? `&${hash.replace(/^#/u, '')}` : ''}`)
+export function parseDesktopClientEnvironment(search: string): DesktopClientEnvironment {
+  const params = new URLSearchParams(search)
   const mode = params.get('dsh-desktop-mode')
   const platform = params.get('dsh-desktop-platform')
   if (!MODES.has(mode as DesktopClientMode)) {

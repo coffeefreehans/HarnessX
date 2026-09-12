@@ -26,16 +26,14 @@ import { pathToFileURL } from "node:url";
 const load = (path) => import(pathToFileURL(resolve(path)).href);
 const [
   { Context },
-  { default: AgentLoop },
-  { mountAgentLoopTestDependencies },
+  agentCore,
   { default: SubagentRuntime },
   { default: JsonlSessionPersistence },
   { HarnessSdkJsonRpcServer },
   { SessionId },
 ] = await Promise.all([
   load("vendor/cordis/lib/index.js"),
-  load("packages/core/agent-loop/lib/index.js"),
-  load("packages/test-support/agent-loop-testkit/lib/index.js"),
+  load("packages/examples/agent-spine-demo/lib/index.js"),
   load("packages/subagent/subagent/lib/index.js"),
   load("packages/session/session-persistence-jsonl/lib/index.js"),
   load("packages/sdk/server/lib/index.js"),
@@ -45,8 +43,7 @@ const [
 const storageRoot = await mkdtemp(join(tmpdir(), "jsonrpc-built-scope-"));
 const ctx = new Context();
 try {
-  await mountAgentLoopTestDependencies(ctx);
-  await ctx.plugin(AgentLoop, { agents: [] });
+  await ctx.plugin(agentCore, { workspaceContext: false });
   await ctx.plugin(SubagentRuntime);
   await ctx.plugin(JsonlSessionPersistence, { root: storageRoot });
   await new Promise((ready) => setTimeout(ready, 50));
@@ -65,12 +62,11 @@ try {
     sessionId: SessionId("built-child"),
     meta: { cwd: storageRoot, parentSession: SessionId("built-parent") },
     agentOptions: { model: "test" },
-    parentAgent: parent.agent,
   });
   const result = Promise.withResolvers();
   const unregister = ctx.subagents.registerProvider({
     name: "built-local",
-    capabilities: { agentOptions: false, outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
+    capabilities: { outputSchema: false, depthLimit: false, toolFilter: false, persona: false },
     inheritsParentContext: false,
     start() {
       return Promise.resolve({

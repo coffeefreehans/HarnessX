@@ -1,3 +1,8 @@
+/* Tree rows: project 34px, session 32px, radius 8, indent step 22px
+   (16px slot + 6px gap). Hover swaps
+   are pure CSS: project folder -> chevron + action buttons; session time ->
+   ellipsis button. */
+
 .projectRow,
 .sessionRow {
   display: flex;
@@ -50,7 +55,6 @@
 }
 
 .searchResultTitle {
-  flex: 0 1 auto;
   min-width: 0;
   margin-left: 4px;
   overflow: hidden;
@@ -181,7 +185,7 @@
   font-size: 14px;
   line-height: 20px;
   padding: 0 2px;
-  border: 0.5px solid var(--dsw-alias-border-l4);
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 4px;
   background: var(--dsw-alias-button-elevated-fill);
   color: inherit;
@@ -206,22 +210,6 @@
   font-size: 12px;
   line-height: 20px;
   color: var(--dsw-alias-label-tertiary);
-}
-
-.scheduleIndicator {
-  display: inline-flex;
-  flex: none;
-  width: 16px;
-  height: 20px;
-  align-items: center;
-  justify-content: center;
-  margin-right: 6px;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.searchScheduleIndicator {
-  margin-right: 0;
-  margin-left: 4px;
 }
 
 .dot {

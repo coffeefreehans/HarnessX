@@ -11,7 +11,9 @@ const ROOT = resolve(import.meta.dirname, '..')
 
 /** Shipped Cordis configuration these rules apply to. */
 const SHIPPED_CONFIG_GLOBS = [
-  'apps/*/config/**/*.yml',
+  'apps/*/config/*.yml',
+  'examples/*/*.cordis.yml',
+  'examples/*/cordis.yml',
   // Bundle identity comes from the package manifest, not the domain directory.
   'packages/*/*/cordis.patch.yml',
   // The Python runtime ships its own default composition inside the wheel.

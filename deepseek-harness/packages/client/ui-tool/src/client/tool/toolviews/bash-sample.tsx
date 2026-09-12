@@ -1,4 +1,19 @@
-import { useMemo, useState, type KeyboardEvent } from 'react'
+// Bash toolview registrant: third-party posture over the keyed toolview hole
+// (ctx.slots.register + ToolRowProps only — never imports the chat domain).
+// Product chrome matches ToolRow / Think (figma: Bash · {description}).
+//
+// A bash call normally declares the terminal render intent, so this row renders
+// the command's own output through TerminalBlock. Execution failures that
+// settle without terminal material use the bounded generic IN/OUT fallback —
+// both are expand-gated exactly like
+// ToolRow's unified interaction: collapsed by default, the whole summary row
+// is the toggle (click / Enter / Space, icon→chevron hover preview; the
+// summary stays inline while open),
+// and the expanded card max-height-scrolls inside its own surface with the
+// full output (maxLines Infinity — no middle collapse). An error row's
+// collapsed summary is the failure's first line in the error color.
+
+import { useState, type KeyboardEvent } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import clsx from 'clsx'
 import {
@@ -6,18 +21,12 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ToolCallViewProps } from '../../contract/slots.ts'
-import {
-  isSettledPersistentShellCall,
-  isSpilledShellCall,
-  localizeTerminalCardModel,
-  terminalBlockLabels,
-  terminalCardModel,
-  terminalFailed,
-} from '../models/terminal-card-model.ts'
-import { formatToolBody, toolRowModel, type ToolRowState } from '../models/tool-call-model.ts'
+import { terminalBlockLabels, terminalCardModel, terminalFailed } from '../models/terminal-card-model.ts'
+import { toolRowModel, type ToolRowState } from '../models/tool-call-model.ts'
 import { CONVERSATION_NS as NS } from '../../locale.ts'
 import css from './bash-sample.module.css'
 
+/** Bash row props: the toolview runtime share plus the standard locale seat. */
 type BashRowProps = ToolCallViewProps & PropsLocale<'conversation'>
 
 function leadingFor(state: ToolRowState) {
@@ -39,34 +48,32 @@ function stateStatus(state: ToolRowState, t: BashRowProps['t']): string | null {
   }
 }
 
-/** Renders expandable Bash output with an accessible lifecycle label. */
+/**
+ * Bash row: icon + Bash · {description} in the shared ToolRow chrome, the
+ * whole row toggling the command's terminal or generic error card (ToolRow's unified
+ * expand interaction, replicated locally per the registrant posture).
+ */
 export function BashRow({ toolName, block, sessionId, useSessions, inspect, t }: BashRowProps) {
   const model = toolRowModel(toolName, block)
-  // An omitted shell workdir is the session workspace; relative values resolve
-  // against it before reaching the terminal primitive.
+  // Session workspace root: the terminal view's cwd resolves against it (an
+  // omitted workdir IS the workspace), which the pure presenter cannot do.
   const cwd = useSessions(list => list.byId[sessionId]?.cwd)
-  const terminalModel = terminalCardModel(block, cwd)
-  const terminal = terminalModel === null ? null : localizeTerminalCardModel(terminalModel, t)
+  const terminal = terminalCardModel(block, cwd)
   // A failing exit status is the terminal card's own error signal (the call
   // itself settles isError:false), surfaced as the row's red state dot.
-  const state = model.state === 'ok' && terminalModel !== null && terminalFailed(terminalModel)
+  const state = model.state === 'ok' && terminal !== null && terminalFailed(terminal)
     ? 'error'
     : model.state
   const status = stateStatus(state, t)
   const [expanded, setExpanded] = useState(false)
-  // Failures, persistent-shell results, and spill previews use a generic body;
-  // background acknowledgements and malformed calls remain collapsed.
-  const genericBody = terminal === null
-    && (model.state === 'error' || isSettledPersistentShellCall(block) || isSpilledShellCall(block))
-    && (model.bodyRaw !== null || model.output !== null)
-  const expandable = terminal !== null || genericBody
+  // Execution failures (for example cancellation before the process reports a
+  // terminal result) use the generic presenter. Keep their recorded args and
+  // full error reachable instead of collapsing the row to the first line.
+  const genericError = terminal === null
+    && model.state === 'error'
+    && (model.body !== null || model.output !== null)
+  const expandable = terminal !== null || genericError
   const open = expanded && expandable
-  const body = useMemo(
-    () => open && genericBody && model.bodyRaw !== null
-      ? formatToolBody(model.variant, model.bodyRaw)
-      : null,
-    [genericBody, model.bodyRaw, model.variant, open],
-  )
   const failureLine = model.state === 'error' ? model.errorSummary : null
   const toggleExpand = () => {
     setExpanded(v => !v)
@@ -102,13 +109,17 @@ export function BashRow({ toolName, block, sessionId, useSessions, inspect, t }:
       >
         <span className={css.leading}>{leading}</span>
         {status !== null && <span className={css.visuallyHidden}>{status}</span>}
-        <span className={css.title}>{t(model.titleKey)}</span>
+        <span className={css.title}>{model.title}</span>
         <span className={css.sep} aria-hidden />
+        {/* The terminal presenter's description is the contractual
+            above-card summary; a failure's first line outranks both. */}
         <span className={clsx(css.summary, failureLine !== null && css.errorSummary)}>
           {failureLine ?? terminal?.description ?? model.summary}
         </span>
       </div>
       {open && (
+        /* Same hover-Inspect posture as ToolRow's expanded body, replicated
+           locally per the registrant posture. */
         <div className={css.bodyWrap}>
           {terminal !== null
             ? (
@@ -121,19 +132,19 @@ export function BashRow({ toolName, block, sessionId, useSessions, inspect, t }:
             )
             : (
               <div className={css.ioCard}>
-                {body !== null && (
+                {model.body !== null && (
                   <div className={css.ioSection}>
-                    <span className={css.ioLabel}>{t('row.input')}</span>
-                    <span className={css.ioText}>{body}</span>
+                    <span className={css.ioLabel}>IN</span>
+                    <span className={css.ioText}>{model.body}</span>
                   </div>
                 )}
-                {body !== null && model.output !== null && (
+                {model.body !== null && model.output !== null && (
                   <span className={css.ioDivider} aria-hidden />
                 )}
                 {model.output !== null && (
                   <div className={css.ioSection}>
-                    <span className={css.ioLabel}>{t('row.output')}</span>
-                    <span className={css.ioText} data-error={state === 'error' || undefined}>
+                    <span className={css.ioLabel}>OUT</span>
+                    <span className={css.ioText} data-error>
                       {model.output}
                     </span>
                   </div>
@@ -143,7 +154,7 @@ export function BashRow({ toolName, block, sessionId, useSessions, inspect, t }:
           {inspect !== undefined && (
             <button type="button" className={css.inspectButton} onClick={inspect}>
               <IconInspectOutline12 />
-              {t('row.inspect')}
+              Inspect
             </button>
           )}
         </div>
@@ -152,10 +163,17 @@ export function BashRow({ toolName, block, sessionId, useSessions, inspect, t }:
   )
 }
 
-/** Registers the standalone Bash conversation-row sample. */
+/**
+ * The sample as a plain registrant plugin. Slot injection follows the chat
+ * toolview declaration across independent activation and reload lifetimes.
+ */
 export const bashToolviewSample = {
   name: 'bash-toolview-sample',
   inject: ['slots'],
+  /**
+   * Register the bash row into the Tool-owned keyed view slot.
+   * @param ctx - registrant context (disposal rides ctx.effect inside slots.register).
+   */
   apply(ctx: Context): void {
     ctx.slots.inject('tool.call.toolview', () =>
       ctx.slots.register({ name: 'tool.call.toolview', key: 'bash', locale: NS }, BashRow))

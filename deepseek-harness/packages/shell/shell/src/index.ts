@@ -6,6 +6,7 @@
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
+import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type { ShellExecRequest, ShellExecSpec, ShellProcess, ShellRunResult } from './types.ts'
 
@@ -18,7 +19,7 @@ import type { ShellExecRequest, ShellExecSpec, ShellProcess, ShellRunResult } fr
  * registering it twice, and a settings document carried between platforms
  * keeps resolving on both.
  */
-export const SHELL_SETTINGS_NAMESPACE = 'shell'
+export const SHELL_SETTINGS_NAMESPACE = settingsNamespace('shell')
 
 export { DSH_ENV_PREFIX } from './types.ts'
 export type {

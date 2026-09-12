@@ -1,13 +1,9 @@
-/** Agent Teams runtime invariant companion. */
+/** Package-owned relational checks for Agent Teams durable records. */
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { InvariantFailure, InvariantInstaller } from '@deepseek-ai/dsh-invariants'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import {
-  isTeamEvent,
-  teamProjectionDefinition,
-  type TeamProjectionState,
-} from './projection.ts'
+import { applyTeamEvent, foldTeam, isTeamEvent } from './fold.ts'
 
 const PACKAGE_NAME = '@deepseek-ai/dsh-experimental-agent-team'
 
@@ -16,20 +12,22 @@ export const name = 'team-invariant'
 /** Invariant registry required by the companion. */
 export const inject = ['invariants']
 
-/** Validate candidate Team events against the projected committed prefix. */
+/** Validate candidate Team events against the committed prefix before append. */
 const install: InvariantInstaller = Object.assign((ctx: Context, fail: InvariantFailure) => {
   ctx.on('internal/dispatch', (_mode, eventName, args) => {
     if (eventName !== 'session/event') return
     const [session, event] = args as [Session, SessionEvent]
-    /* v8 ignore next -- non-Team Session events have no Agent Teams invariant. */
     if (!isTeamEvent(event)) return
-    const state = ctx.sessionProjections.stateOf(session, 'agentTeam') as TeamProjectionState
-    const candidate = teamProjectionDefinition.apply(structuredClone(state), event)
-    if (candidate.failure !== undefined) {
-      fail(`session event ${event.seq} violates the Agent Teams stream: ${candidate.failure}`)
+    try {
+      const state = foldTeam(session.id, session.events)
+      applyTeamEvent(state, event)
+    } catch (error: unknown) {
+      /* v8 ignore next -- the strict Team fold throws Error instances. */
+      const message = error instanceof Error ? error.message : String(error)
+      fail(`session event ${event.seq} violates the Agent Teams stream: ${message}`)
     }
   }, { global: true })
-}, { inject: ['sessionProjections'] })
+}, { inject: ['sessions'] })
 
 /** Register the package invariant companion. */
 export const apply = (ctx: Context): Promise<() => void> =>

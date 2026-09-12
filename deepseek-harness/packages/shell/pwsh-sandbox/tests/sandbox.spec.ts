@@ -15,7 +15,6 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { SandboxProvider, SandboxUnavailableError } from '@deepseek-ai/dsh-sandbox'
 import type { ConfinedArgv, RunnerFailureRule, SandboxExecutionPolicy, SandboxPolicy } from '@deepseek-ai/dsh-sandbox'
 import { resolvePwshPath } from '@deepseek-ai/dsh-pwsh-local'
-import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import { SandboxPwshExecutor } from '../src/index.ts'
@@ -65,7 +64,6 @@ async function setup(
     }
   }
   const ctx = new Context()
-  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(FakeSandboxProvider)
   await ctx.plugin(SandboxPolicyService, { mode: 'workspace-write', workspaceRoot: spillDir })
   await ctx.plugin(subprocess)
@@ -300,7 +298,7 @@ describe.skipIf(!pwshAvailable())('SandboxPwshExecutor', () => {
     expect(denied.sandbox).toEqual({ mode: 'read-only', denied: true, enforcement: 'full' })
   }, 30_000)
 
-  it('background provider rejections with runner provenance settle as runnerFailed facts', async () => {
+  it('background spawn rejections settle as runnerFailed facts', async () => {
     const { executor } = await setup(() => ({
       argv: ['definitely-not-a-real-runner', '--', 'pwsh'],
       enforcement: 'full',
@@ -312,7 +310,7 @@ describe.skipIf(!pwshAvailable())('SandboxPwshExecutor', () => {
     expect(proc.sandbox).toEqual({ mode: 'read-only', denied: false, enforcement: 'full', runnerFailed: true })
     // The failure note surfaces through the read path.
     const read = proc.readOutput()
-    expect(read.delta).toContain('subprocess failed before reporting an outcome')
+    expect(read.delta).toContain('spawn failed')
   }, 30_000)
 
   it('danger-full-access background runs bypass confine and carry no facts', async () => {

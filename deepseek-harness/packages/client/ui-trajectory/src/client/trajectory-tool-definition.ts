@@ -1,8 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {
-  ConversationMatch, ConversationNodeContext, ConversationNodeDefinition, RunningToolCall,
-  ToolCallBlock, ToolResultNode,
-} from '@deepseek-ai/dsh-client-ui-conversation/client'
+  ConversationMatch, ConversationNodeContext, ConversationNodeDefinition,
+  RunningToolCall, ToolCallBlock, ToolResultNode,
+} from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-tools/types'
 import { trajectoryNode } from './trajectory-definition-common.ts'
 
@@ -38,6 +38,7 @@ function rootCall(match: ConversationMatch): RunningToolCall {
     turn: match.event.data.turn,
     step: match.event.data.step,
     time: match.event.time,
+    callView: match.view?.for === 'call' ? match.view.view : null,
     subCalls: [],
   }
 }
@@ -59,6 +60,8 @@ function rootResult(
     isError: result.isError === true,
     ...(match.event.data.error === undefined ? {} : { error: match.event.data.error }),
     meta: match.event.data.meta,
+    callView: previous?.callView ?? null,
+    resultView: match.view?.for === 'result' ? match.view.view : null,
     subCalls: [],
   }
 }
@@ -76,12 +79,12 @@ function locationStep(match: ConversationMatch): number {
 function childCall(match: ConversationMatch, data: DispatchData): RunningToolCall {
   return {
     callId: data.subCallId,
-    parentCallId: data.parentCallId,
     name: data.name,
     argsRaw: JSON.stringify(data.arguments),
     turn: locationTurn(match),
     step: locationStep(match),
     time: match.event.time,
+    callView: null,
     subCalls: [],
   }
 }
@@ -96,11 +99,12 @@ function childResult(
     seq: match.event.seq,
     time: match.event.time,
     callId: data.subCallId,
-    parentCallId: data.parentCallId,
     call: { name: data.name, argsRaw: JSON.stringify(data.arguments) },
     callTime: previous === undefined || 'kind' in previous ? null : previous.time,
     content: data.content ?? [],
     isError: data.isError === true,
+    callView: null,
+    resultView: null,
     subCalls: [],
   }
 }
@@ -132,17 +136,17 @@ function acceptsEdge(state: ToolState, parent: string, child: string): boolean {
 
 function updateDispatch(state: ToolState, match: ConversationMatch): ToolState {
   const event = match.event
-  if (event.type !== 'tool/ptc-dispatch-start' && event.type !== 'tool/ptc-dispatch') return state
+  if (event.type !== 'tool/code-dispatch-start' && event.type !== 'tool/code-dispatch') return state
   const data = event.data
   const parentId = String(data.parentCallId)
   const childId = String(data.subCallId)
   const siblings = state.children.get(parentId) ?? []
   const index = siblings.indexOf(childId)
   if (index < 0 && !acceptsEdge(state, parentId, childId)) return state
-  if (event.type === 'tool/ptc-dispatch-start' && index >= 0) return state
+  if (event.type === 'tool/code-dispatch-start' && index >= 0) return state
 
   const calls = new Map(state.calls)
-  calls.set(childId, event.type === 'tool/ptc-dispatch-start'
+  calls.set(childId, event.type === 'tool/code-dispatch-start'
     ? childCall(match, data)
     : childResult(match, data, calls.get(childId)))
   if (index >= 0) return { ...state, calls }
@@ -186,12 +190,13 @@ function projectCall(
     seq: interruptedAt.seq - 0.8,
     time: interruptedAt.time,
     callId: block.callId,
-    ...block.parentCallId === undefined ? {} : { parentCallId: block.parentCallId },
     call: { name: block.name, argsRaw: block.argsRaw },
     callTime: block.time,
     content: [],
     isError: true,
     error: { name: 'Interrupted', code: 'interrupted' },
+    callView: block.callView,
+    resultView: null,
     subCalls,
   }
 }
@@ -210,7 +215,7 @@ function fallbackState(context: ConversationNodeContext<ToolState>): ToolState |
   return state
 }
 
-/** Trajectory-owned root Tool lifecycle with nested PTC dispatch calls. */
+/** Trajectory-owned root Tool lifecycle with nested Code Dispatch calls. */
 const trajectoryToolDefinition: ConversationNodeDefinition<ToolState> = {
   kind: 'trajectory-tool-call',
   target: 'trajectory',
@@ -219,7 +224,7 @@ const trajectoryToolDefinition: ConversationNodeDefinition<ToolState> = {
     if (event.type === 'tool/result') {
       return { id: String(event.data.message.source.callId), role: 'update' }
     }
-    if (event.type === 'tool/ptc-dispatch-start' || event.type === 'tool/ptc-dispatch') {
+    if (event.type === 'tool/code-dispatch-start' || event.type === 'tool/code-dispatch') {
       const rootCallId: unknown = event.data.rootCallId
       return typeof rootCallId === 'string' && rootCallId !== ''
         ? { id: rootCallId, role: 'update' }
@@ -264,5 +269,5 @@ const trajectoryToolDefinition: ConversationNodeDefinition<ToolState> = {
  * @param ctx - Plugin context receiving the Definition.
  */
 export function registerTrajectoryToolDefinition(ctx: Context): void {
-  ctx.uiConversation.events.register(trajectoryToolDefinition)
+  ctx.conversationEvents.register(trajectoryToolDefinition)
 }

@@ -24,7 +24,10 @@
       "path": "../../identity/anonymous-user-id"
     },
     {
-      "path": "../../typert/protocol"
+      "path": "../../session/session-telemetry"
+    },
+    {
+      "path": "../../runtime-diagnostics/invariants"
     }
   ]
 }

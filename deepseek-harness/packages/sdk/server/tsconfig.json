@@ -24,9 +24,6 @@
       "path": "../../core/agent"
     },
     {
-      "path": "../../attachment/attachment"
-    },
-    {
       "path": "../../core/session"
     },
     {
@@ -34,6 +31,9 @@
     },
     {
       "path": "../../subagent/subagent"
+    },
+    {
+      "path": "../../runtime-diagnostics/invariants"
     }
   ]
 }

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { RpcResponse } from '@deepseek-ai/dsh-api-remotes/client'
 import { Context } from '@deepseek-ai/cordis'
 import { SettingsSchemaService } from '@deepseek-ai/dsh-client-ui-settings/src/client/schema.ts'
 import { SettingsDescribeMirror } from '@deepseek-ai/dsh-client-ui-settings/src/client/settings-mirror.ts'
 import { SettingsScopeController } from '@deepseek-ai/dsh-client-ui-settings/src/client/settings-scope.ts'
-import { RemoteError } from '@deepseek-ai/dsh-client-test-runtime'
 import { decodeWelcomeSection, WelcomeNoticeStore } from '../src/client/welcome-store.ts'
 import {
   WELCOME_NOTICE_ACK_FIELD, WELCOME_NOTICE_SETTINGS_NAMESPACE, WELCOME_NOTICE_VERSION,
@@ -11,16 +11,9 @@ import {
 
 const schemaService = new SettingsSchemaService(new Context())
 
-/** The settings namespace answers over the Remote carrier, which has no envelope. */
-function ok<T>(value: T) {
-  return { ok: true as const, value }
-}
-
-function rejected(message: string) {
-  return {
-    ok: false as const,
-    error: new RemoteError('settings/rejected', message, { ns: WELCOME_NOTICE_SETTINGS_NAMESPACE }),
-  }
+let rpc = 0
+function ok<T>(value: T): RpcResponse<T> {
+  return { rpcId: `welcome-${rpc++}` as never, result: { ok: true, value } }
 }
 
 function namespace(value: unknown = {}, revision = 0) {
@@ -43,10 +36,10 @@ function buildWelcome(
   api: { describe?: ReturnType<typeof vi.fn>; mutate?: ReturnType<typeof vi.fn> },
   persistence: 'host' | 'memory' = 'host',
 ) {
-  const ctx = { remote: { settings: api } } as never
-  const mirror = new SettingsDescribeMirror(ctx, persistence)
+  const wire = { settings: api } as never
+  const mirror = new SettingsDescribeMirror(wire, persistence)
   const scope = new SettingsScopeController(
-    ctx,
+    wire,
     { namespace: WELCOME_NOTICE_SETTINGS_NAMESPACE, decode: decodeWelcomeSection },
     mirror,
     persistence,
@@ -56,7 +49,7 @@ function buildWelcome(
 }
 
 describe('WelcomeNoticeStore', () => {
-  it('acknowledges in memory while Host settings persistence is disabled', async () => {
+  it('acknowledges in memory without calling loopback-only settings APIs', async () => {
     const describeCall = vi.fn()
     const mutate = vi.fn()
     const { controller } = buildWelcome({ describe: describeCall, mutate }, 'memory')
@@ -98,11 +91,11 @@ describe('WelcomeNoticeStore', () => {
     await mirror.load()
     await controller.load()
     await expect(controller.acknowledge()).resolves.toBe(true)
-    expect(mutate).toHaveBeenCalledWith(
-      WELCOME_NOTICE_SETTINGS_NAMESPACE,
-      [{ op: 'set', path: [WELCOME_NOTICE_ACK_FIELD], value: WELCOME_NOTICE_VERSION }],
-      3,
-    )
+    expect(mutate).toHaveBeenCalledWith({
+      ns: WELCOME_NOTICE_SETTINGS_NAMESPACE,
+      ops: [{ op: 'set', path: [WELCOME_NOTICE_ACK_FIELD], value: WELCOME_NOTICE_VERSION }],
+      expectedRevision: 3,
+    })
     expect(controller.store.getSnapshot()).toMatchObject({ status: 'ready', acknowledged: true })
     // The write answer folded into the mirror; no re-read followed.
     expect(describeCall).toHaveBeenCalledTimes(1)
@@ -117,11 +110,11 @@ describe('WelcomeNoticeStore', () => {
     expect(controller.store.getSnapshot()).toEqual({ status: 'loading', acknowledged: false, error: null })
   })
 
-  it('reports a refused persistence attempt after its recovery read', async () => {
+  it('reports a failed or refused persistence attempt after its recovery read', async () => {
     const describeCall = vi.fn(() => Promise.resolve(ok({
       writable: true, hasDocument: false, namespaces: [namespace()],
     })))
-    const mutate = vi.fn(() => Promise.resolve(rejected('the settings document is read-only')))
+    const mutate = vi.fn(() => Promise.reject(new Error('disk full')))
     const { mirror, controller } = buildWelcome({ describe: describeCall, mutate })
     await mirror.load()
     await controller.load()

@@ -8,7 +8,7 @@
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
-import type { Session, SessionSeq } from '@deepseek-ai/dsh-session'
+import type { Session } from '@deepseek-ai/dsh-session'
 import type { CommandId } from '@deepseek-ai/dsh-commands/brand'
 import type { CompactionResult } from './types.ts'
 
@@ -162,8 +162,8 @@ export abstract class CompactionEngine extends Service {
    * @returns the appended event seqs, summary, replaced range, and token accounting.
    */
   abstract compactRegion(
-    start: SessionSeq,
-    end: SessionSeq,
+    start: number,
+    end: number,
     agent: CompactionAgentContext,
     signal?: AbortSignal,
   ): Promise<CompactionResult>

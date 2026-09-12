@@ -2,10 +2,8 @@
 
 import { isCompactCheckpointSource } from '@deepseek-ai/dsh-compaction'
 import type { SessionSurfaceSnapshot } from '@deepseek-ai/dsh-session-query'
+import { assertNever } from '@deepseek-ai/dsh-llm'
 import { TextRetainer } from '@deepseek-ai/dsh-output-retention'
-import { assertNever } from '@deepseek-ai/dsh-util-values'
-import { SessionSeq } from '@deepseek-ai/dsh-session'
-import type { OptionalSessionSeq, SessionId } from '@deepseek-ai/dsh-session'
 import { stringifyTagSafeJson } from './serialization.ts'
 import type { ReferencedConversationItem } from './types.ts'
 
@@ -17,10 +15,10 @@ interface ProjectedItem extends ReferencedConversationItem {
 
 /** Snapshot data serialized inside the untrusted prompt. */
 export interface ReferencedSessionData {
-  sessionId: SessionId
+  sessionId: string
   label: string
   cwd: string | null
-  capturedThroughSeq: OptionalSessionSeq
+  capturedThroughSeq: number | null
   conversation: ReferencedConversationItem[]
 }
 
@@ -51,7 +49,6 @@ function projectSessionConversation(snapshot: SessionSurfaceSnapshot): Projected
         if (text !== '') conversation.push({ role: 'assistant', text, checkpoint: false, originalText: text, omittedBytes: 0 })
         break
       }
-      case 'system/message':
       case 'tool/result':
         break
       /* v8 ignore next 2 -- SurfaceEventType is closed and every variant is handled above. */
@@ -67,13 +64,13 @@ function projectSessionConversation(snapshot: SessionSurfaceSnapshot): Projected
  * @param snapshot - current-surface source observation.
  * @param label - host-provided display label serialized with the source.
  * @param maxBytes - maximum UTF-8 bytes for the serialized data object.
- * @returns full projected data, retained preview and stats, or `undefined` when fixed data cannot fit.
+ * @returns retained data and stats, or `undefined` when fixed data cannot fit.
  */
 export function retainReferencedSession(
   snapshot: SessionSurfaceSnapshot,
   label: string,
   maxBytes: number,
-): { data: ReferencedSessionData; fullData: ReferencedSessionData; stats: ReferenceRetentionStats } | undefined {
+): { data: ReferencedSessionData; stats: ReferenceRetentionStats } | undefined {
   const original = projectSessionConversation(snapshot)
   const retained = original.map(item => ({ ...item }))
   let omittedMessages = 0
@@ -82,12 +79,9 @@ export function retainReferencedSession(
     sessionId: snapshot.session.id,
     label,
     cwd: snapshot.session.cwd ?? null,
-    capturedThroughSeq: snapshot.capturedThroughSeq === null
-      ? null
-      : SessionSeq(snapshot.capturedThroughSeq),
+    capturedThroughSeq: snapshot.capturedThroughSeq,
     conversation: retained.map(({ role, text }) => ({ role, text })),
   })
-  const fullData = data()
   const size = (): number => Buffer.byteLength(stringifyTagSafeJson(data()), 'utf8')
 
   while (size() > maxBytes) {
@@ -132,7 +126,6 @@ export function retainReferencedSession(
   const omittedBytes = retainedOmittedBytes + droppedOmittedBytes
   return {
     data: data(),
-    fullData,
     stats: {
       compacted,
       originalMessages: original.length,

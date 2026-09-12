@@ -11,7 +11,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { act, render } from '@testing-library/react'
 import {
   SlotCore, StaleAuthorizationError, type PropsRenderSlots, type SlotRendererHost,
-  type SlotScopeAdapter, type StandardSourceBinding,
 } from '@deepseek-ai/dsh-client-ui-slots'
 import { createSlotRenderer } from '../src/client/scoped-slots.tsx'
 
@@ -29,20 +28,7 @@ type FrameSlots = PropsRenderSlots<'spec.single' | 'spec.list'>
 
 /** Passthrough host over the real core (store/session seats unused here). */
 function hostOver(core: SlotCore): SlotRendererHost {
-  const absentBinding: StandardSourceBinding = {
-    key: undefined,
-    hooks: {},
-    keyedHooks: {},
-    props: {},
-  }
-  const bindingSource = {
-    getSnapshot: () => absentBinding,
-    subscribe: () => () => {},
-  }
-  const sessionAdapter: SlotScopeAdapter = {
-    current: bindingSource,
-    resolve: () => undefined,
-  }
+  const absentInfo = { sessionId: undefined, hooks: {}, props: {} }
   return {
     subscribe: (key, fn) => core.subscribe(key, fn),
     getVersion: key => core.getVersion(key),
@@ -52,9 +38,13 @@ function hostOver(core: SlotCore): SlotRendererHost {
     specOf: key => core.specDynamic(key),
     isLive: entry => core.isLive(entry),
     storeOf: () => undefined,
-    root: bindingSource,
-    scopeRevision: { getSnapshot: () => 0, subscribe: () => () => {} },
-    scope: () => sessionAdapter,
+    sessions: {
+      list: { getSnapshot: () => ({}), subscribe: () => () => {} },
+      provideInfo: { getSnapshot: () => absentInfo, subscribe: () => () => {} },
+    },
+    workspaces: {
+      list: { getSnapshot: () => ({}), subscribe: () => () => {} },
+    },
   }
 }
 

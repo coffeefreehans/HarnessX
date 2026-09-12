@@ -31,11 +31,13 @@ describe('ACP prompt lifecycle', () => {
     harness = undefined
   })
 
-  it('reports a max-token turn without losing its committed text', async () => {
+  it('maps a max-token turn to end_turn without losing its committed text', async () => {
     harness = await makeBridgeHarness({ script: [maxTokensResponse('cut off')] })
     const sessionId = await newSession(harness)
     const result = await harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'go' }] })
-    expect(result.stopReason).toBe('max_tokens')
+    // A token-limit turn ending is not a prompt-level stop reason (README):
+    // the prompt settles at whole-agent idle with end_turn.
+    expect(result.stopReason).toBe('end_turn')
     await vi.waitFor(() => { expect(messageText(harness!)).toBe('cut off') })
   })
 
@@ -57,12 +59,10 @@ describe('ACP prompt lifecycle', () => {
     ])
     const sessionId = await newSession(harness)
     await harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'show it' }] })
-    const image = harness.updates.find(update => update.sessionUpdate === 'agent_message_chunk')
-    expect(image).toMatchObject({
+    expect(harness.updates).toContainEqual({
       sessionUpdate: 'agent_message_chunk',
       content: { type: 'image', data: 'AQ==', mimeType: 'image/png' },
     })
-    expect(image !== undefined && 'messageId' in image && typeof image.messageId === 'string').toBe(true)
   })
 
   it('preserves committed text/image/text order on the ACP wire', async () => {
@@ -82,15 +82,11 @@ describe('ACP prompt lifecycle', () => {
 
     await harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'show it' }] })
 
-    expect(harness.updates.map(update => update.sessionUpdate)).toEqual([
-      'agent_message_chunk', 'agent_message_chunk', 'agent_message_chunk',
+    expect(harness.updates).toEqual([
+      { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'before' } },
+      { sessionUpdate: 'agent_message_chunk', content: { type: 'image', data: 'Ag==', mimeType: 'image/jpeg' } },
+      { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'after' } },
     ])
-    expect(harness.updates.map(update => 'content' in update ? update.content : undefined)).toEqual([
-      { type: 'text', text: 'before' },
-      { type: 'image', data: 'Ag==', mimeType: 'image/jpeg' },
-      { type: 'text', text: 'after' },
-    ])
-    expect(new Set(harness.updates.map(update => 'messageId' in update ? update.messageId : undefined)).size).toBe(1)
   })
 
   it('does not settle a prompt before ordered output delivery drains', async () => {
@@ -203,8 +199,8 @@ describe('ACP prompt lifecycle', () => {
     const agent = harness.ctx.agents.get(SessionId(sessionId))!
     let autonomousStarted!: () => void
     const started = new Promise<void>((resolve) => { autonomousStarted = resolve })
-    harness.ctx.on('agent/assistant-stream', ({ agent: subject, frame }) => {
-      if (subject === agent && frame.type === 'chunk') autonomousStarted()
+    harness.ctx.on('session/event', (session, event) => {
+      if (session === agent.session && event.type === 'assistant/chunk') autonomousStarted()
     })
     agent.followup(createUserMessage({
       content: [{ type: 'text', text: 'autonomous work' }],
@@ -216,7 +212,7 @@ describe('ACP prompt lifecycle', () => {
     const prompt = harness.client.prompt({ sessionId, prompt: [{ type: 'text', text: 'go' }] })
       .finally(() => { settled = true })
     await vi.waitFor(() => {
-      expect(agent.session.snapshotEvents().filter(event => event.type === 'agent/inbox/spliced'
+      expect(agent.session.events.filter(event => event.type === 'agent/inbox/spliced'
         && event.data.inserted.length > 0)).toHaveLength(2)
     })
     expect(settled).toBe(false)
@@ -263,35 +259,6 @@ describe('ACP prompt lifecycle', () => {
     await expect(first).resolves.toEqual({ stopReason: 'cancelled' })
   })
 
-  it('routes JSON-RPC request cancellation through the prompt cancellation path', async () => {
-    harness = await makeBridgeHarness({ script: ['hang'] })
-    const sessionId = await newSession(harness)
-    const controller = new AbortController()
-    const prompt = harness.client.prompt(
-      { sessionId, prompt: [{ type: 'text', text: 'one' }] },
-      { cancellationSignal: controller.signal },
-    )
-    await vi.waitFor(() => { expect(harness!.ctx.agents.get(SessionId(sessionId))?.status).toBe('running') })
-
-    controller.abort()
-
-    await expect(prompt).resolves.toEqual({ stopReason: 'cancelled' })
-    expect(harness.adapter.requests[0]?.signal?.aborted).toBe(true)
-  })
-
-  it('cancels a prompt request whose JSON-RPC signal is already aborted', async () => {
-    harness = await makeBridgeHarness({ script: [] })
-    const sessionId = await newSession(harness)
-    const controller = new AbortController()
-    controller.abort()
-
-    await expect(harness.client.prompt(
-      { sessionId, prompt: [{ type: 'text', text: 'never admitted' }] },
-      { cancellationSignal: controller.signal },
-    )).resolves.toEqual({ stopReason: 'cancelled' })
-    expect(harness.adapter.requests).toEqual([])
-  })
-
   it('reserves the prompt slot during image admission and cancels without a late followup', async () => {
     harness = await makeBridgeHarness({ imageCapable: true, script: [] })
     const validationStarted = Promise.withResolvers<undefined>()
@@ -316,7 +283,7 @@ describe('ACP prompt lifecycle', () => {
 
     await expect(first).resolves.toEqual({ stopReason: 'cancelled' })
     expect(harness.adapter.requests).toEqual([])
-    const events = harness.ctx.agents.get(SessionId(sessionId))?.session.snapshotEvents() ?? []
+    const events = harness.ctx.agents.get(SessionId(sessionId))?.session.events ?? []
     expect(events.some(event => event.type === 'user/message' || event.type === 'turn/start')).toBe(false)
   })
 
@@ -443,7 +410,7 @@ describe('ACP prompt lifecycle', () => {
     await harness.client.cancel({ sessionId })
     await expect(prompt).resolves.toEqual({ stopReason: 'cancelled' })
     await agent.whenIdle()
-    expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end')?.data.reason)
+    expect(agent.session.events.findLast(event => event.type === 'turn/end')?.data.reason)
       .toEqual({ kind: 'aborted', reason: { kind: 'user' } })
   })
 
@@ -468,13 +435,13 @@ describe('ACP prompt lifecycle', () => {
       source: { kind: 'plugin', plugin: 'test' },
     }))
     await vi.waitFor(() => {
-      expect(agent.session.snapshotEvents().some(event => event.type === 'turn/start')).toBe(true)
+      expect(agent.session.events.some(event => event.type === 'turn/start')).toBe(true)
     })
 
     await harness.client.cancel({ sessionId })
     await agent.whenIdle()
 
-    expect(agent.session.snapshotEvents().findLast(event => event.type === 'turn/end')?.data.reason)
+    expect(agent.session.events.findLast(event => event.type === 'turn/end')?.data.reason)
       .toEqual({ kind: 'aborted', reason: { kind: 'user' } })
   })
 

@@ -1,20 +1,24 @@
 // @vitest-environment jsdom
+// The Tool presentation package's acceptance chain on the REAL machinery stack:
+// SlotTestRuntime (cordis Context + SlotRegistry ledger + the ui-renderer
+// renderer) + ui-conversation and ui-tool apply — no outlet twins. Proves the
+// keyed 'tool.call.toolview' hole end to end: registered rows dispatch by
+// entryKey (the bash sample lands through its plugin), unregistered tools
+// fall back to GenericToolCard at the render site, live registration/unload
+// flips rows in place, duplicate keys fail loud, the inject channel feeds
+// (sessionId) => I into row components, and a registrant can activate before
+// the declaration then land through slots.inject when the chat entry appears.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup } from '@testing-library/react'
-import type { ISession } from '@deepseek-ai/dsh-api-session-controller/client'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import type { WorkspaceId } from '@deepseek-ai/dsh-workspace/types'
-import {
-  apply as applyChat, inject as injectChat, type ToolResultNode,
-} from '@deepseek-ai/dsh-client-ui-chat/client'
+import type { ISession, SessionId, ToolResultNode } from '@deepseek-ai/dsh-client-runtime/client'
 import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
-import { SlotTestRuntime, TestRemote, stubSettingsScope } from '@deepseek-ai/dsh-client-test-runtime'
+import { SlotTestRuntime, stubSettingsScope } from '@deepseek-ai/dsh-client-test-runtime'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { apply as applyConversation, inject as injectConversation } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { apply as applyTool, inject as injectTool } from '@deepseek-ai/dsh-client-ui-tool/client'
 import type { ToolCallViewProps } from '@deepseek-ai/dsh-client-ui-tool/client'
-import { toolSessionEvents } from './tool-fixtures.client.ts'
+import { toolChatSnapshot } from './tool-details-render.client.tsx'
 
 const SID = 's1' as SessionId
 
@@ -39,17 +43,18 @@ const toolResult = (seq: number, callId: string, name: string, args = '{"command
   kind: 'tool-result', seq, time: seq * 1_000, callId,
   call: { name, argsRaw: args },
   callTime: seq * 1_000 - 500,
-  content: [], isError: false, subCalls: [],
+  content: [], isError: false, callView: null, resultView: null, subCalls: [],
 })
 
 /** Test-owned AppFrame role: declares and renders the resident conversation area. */
-type AppRootProps = PropsRenderSlots<'main'>
+type AppRootProps = PropsRenderSlots<'conversation' | 'details'>
 function AppRoot({ renderSlot }: AppRootProps) {
-  return <>{renderSlot('main', {}, { entryKey: 'conversation' })}</>
+  return <>{renderSlot('conversation', {})}</>
 }
 
 const LAYOUT_CHILDREN = {
-  'main': { kind: 'keyed', scope: 'root' },
+  'conversation': { kind: 'single', scope: 'session-maybe' },
+  'details': { kind: 'single', scope: 'session' },
 } as const
 
 /**
@@ -59,27 +64,23 @@ const LAYOUT_CHILDREN = {
  */
 async function bench(nodes: ToolResultNode[]) {
   const runtime = await SlotTestRuntime.create()
-  const openWorkspacePath = vi.fn(async () => ({ ok: true, value: { opened: true } }))
-  new TestRemote(runtime.ctx, { session: { openWorkspacePath } })
-  runtime.ctx.provide('settingsScope', { bind: () => stubSettingsScope().scope } as never)
+  runtime.provide('connection', {
+    api: { settings: {} },
+    isLoopback: false,
+    hostDescription: { getSnapshot: () => undefined, subscribe: () => () => {} },
+  })
+  // ui-theme's Appearance row binds a durable scope through these two.
+  runtime.provide('remote', { $on: () => () => {} })
+  runtime.provide('settingsScope', { bind: () => stubSettingsScope().scope } as never)
   const layout = { openDetails: vi.fn(), closeDetails: vi.fn() }
-  runtime.ctx.provide('layout', layout)
-  const sidebarRight = { openResource: vi.fn<(address: string) => void>() }
-  runtime.ctx.provide('sidebarRight', sidebarRight as never)
-  runtime.ctx.provide('uiWorkspace', {
-    openWorkspace: vi.fn(async (_workspaceId: WorkspaceId, beforeOpen: (id: SessionId) => void) => {
-      beforeOpen(SID)
-      runtime.sessions.open(SID)
-    }),
-    openSession: (id: SessionId) => { runtime.sessions.open(id) },
-  } as never)
+  runtime.provide('layout', layout)
   const locale = new LocaleRuntime(runtime.ctx)
-  runtime.ctx.provide('locale', locale)
+  runtime.provide('locale', locale)
   runtime.slots.installLocale(locale)
   await runtime.sessions.add({
     id: SID,
-    summary: { title: 'S', displayTitle: 'S', cwd: '/w' },
-    events: toolSessionEvents(nodes),
+    summary: { title: 'S', displayTitle: 'S' },
+    snapshot: { nodes, chat: toolChatSnapshot(nodes) },
     session: {
       loadOlder: vi.fn<ISession['loadOlder']>(),
       prompt: vi.fn<ISession['prompt']>(async () => ({ ok: true, value: { accepted: true } })),
@@ -87,9 +88,8 @@ async function bench(nodes: ToolResultNode[]) {
   })
   await runtime.root.declare(LAYOUT_CHILDREN, AppRoot)
   await runtime.mount({ inject: [...injectConversation], apply: applyConversation })
-  await runtime.mount({ inject: [...injectChat], apply: applyChat })
   await runtime.mount({ inject: [...injectTool], apply: applyTool })
-  return { runtime, slots: runtime.slots, layout, openWorkspacePath, sidebarRight }
+  return { runtime, slots: runtime.slots, layout }
 }
 
 describe('keyed toolview hole through the real machinery', () => {
@@ -132,24 +132,23 @@ describe('keyed toolview hole through the real machinery', () => {
     await b.runtime.dispose()
   })
 
-  it('file-path clicks travel owner openFile → chat inject → the right Sidebar', async () => {
+  it('file-path clicks travel owner openFile → chat inject → workspaces.openPath', async () => {
     const b = await bench([toolResult(3, 'c1', 'read', '{"path":"src/a.ts"}')])
     const view = b.runtime.renderRoot()
     view.getByText('src/a.ts').click()
+    expect(b.layout.openDetails).not.toHaveBeenCalled()
     await vi.waitFor(() => {
-      expect(b.sidebarRight.openResource).toHaveBeenCalledWith('dsh-resource://file/session/s1/src/a.ts')
+      expect(b.runtime.workspaces.calls).toContainEqual({ method: 'openPath', args: ['src/a.ts'] })
     })
-    // Nothing on this path reaches the local machine any more.
-    expect(b.openWorkspacePath).not.toHaveBeenCalled()
     await b.runtime.dispose()
   })
 
-  it('bash summary clicks open nothing at all', async () => {
+  it('bash summary clicks do not open details or host paths', async () => {
     const b = await bench([toolResult(3, 'c1', 'bash')])
     const view = b.runtime.renderRoot()
     view.getByText('Build').click()
-    expect(b.sidebarRight.openResource).not.toHaveBeenCalled()
-    expect(b.openWorkspacePath).not.toHaveBeenCalled()
+    expect(b.layout.openDetails).not.toHaveBeenCalled()
+    expect(b.runtime.workspaces.calls.some(c => c.method === 'openPath')).toBe(false)
     await b.runtime.dispose()
   })
 
@@ -208,23 +207,17 @@ describe('keyed toolview hole through the real machinery', () => {
 describe('registrant declaration injection', () => {
   it('runs a registrant before ui-tool and waits on the actual toolview declaration', async () => {
     const runtime = await SlotTestRuntime.create()
-    new TestRemote(runtime.ctx, {
-      session: {
-        openWorkspacePath: vi.fn(async () => ({ ok: true, value: { opened: true } })),
-      },
+    runtime.provide('connection', {
+      api: { settings: {} },
+      isLoopback: false,
+      hostDescription: { getSnapshot: () => undefined, subscribe: () => () => {} },
     })
-    runtime.ctx.provide('settingsScope', { bind: () => stubSettingsScope().scope } as never)
-    runtime.ctx.provide('layout', { openDetails: vi.fn(), closeDetails: vi.fn() })
-    runtime.ctx.provide('sidebarRight', { openResource: vi.fn() } as never)
-    runtime.ctx.provide('uiWorkspace', {
-      openWorkspace: vi.fn(async (_workspaceId: WorkspaceId, beforeOpen: (id: SessionId) => void) => {
-        beforeOpen(SID)
-        runtime.sessions.open(SID)
-      }),
-      openSession: (id: SessionId) => { runtime.sessions.open(id) },
-    } as never)
+    // ui-theme's Appearance row binds a durable scope through these two.
+    runtime.provide('remote', { $on: () => () => {} })
+    runtime.provide('settingsScope', { bind: () => stubSettingsScope().scope } as never)
+    runtime.provide('layout', { openDetails: vi.fn(), closeDetails: vi.fn() })
     const locale = new LocaleRuntime(runtime.ctx)
-    runtime.ctx.provide('locale', locale)
+    runtime.provide('locale', locale)
     runtime.slots.installLocale(locale)
     await runtime.root.declare(LAYOUT_CHILDREN, AppRoot)
 
@@ -248,7 +241,6 @@ describe('registrant declaration injection', () => {
 
     // Mounting the package declares the slot and activates the waiting entry.
     await runtime.mount({ inject: [...injectConversation], apply: applyConversation })
-    await runtime.mount({ inject: [...injectChat], apply: applyChat })
     await runtime.mount({ inject: [...injectTool], apply: applyTool })
     expect(runtime.slots.entries('tool.call.toolview').map(e => e.options.key))
       .toEqual(expect.arrayContaining(['bash', 'late']))

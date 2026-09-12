@@ -1,52 +1,34 @@
-/** Per-session Conversation store shared by the shell body and header. */
-import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import type { ConversationStoreState } from './contract/views.ts'
+/**
+ * Per-session chat store shared by conversation and details registrations.
+ * The plugin creates its handle at apply time so identity follows the fiber.
+ */
+import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-runtime/client'
+import type { CallId, ChatStoreState, SelectionTarget } from './contract/views.ts'
 
-const CONVERSATION_STORE_KEY = 'dsh.conversation'
-
-/** Declared write set for the Conversation shell. */
-type ConversationActions = {
-  setDraft: (draft: ConversationStoreState, text: string) => void
-  setView: (draft: ConversationStoreState, view: string) => void
-  openView: (draft: ConversationStoreState, view: string, focus: string) => void
-  completeViewRequest: (draft: ConversationStoreState) => void
+/** Declared action shape used to give the exported factory a stable return type. */
+type ChatActions = {
+  select: (draft: ChatStoreState, target: SelectionTarget | null) => void
+  setDraft: (draft: ChatStoreState, text: string) => void
+  setView: (draft: ChatStoreState, view: string) => void
+  setInspect: (draft: ChatStoreState, target: { callId: CallId } | null) => void
 }
 
 /**
- * Declare per-session draft persistence and View selection.
+ * Declares the per-session chat state and write surface.
  * @returns the store handle.
  */
-export function createConversationStore(): EngineStoreHandle<ConversationStoreState, ConversationActions> {
+export function createChatStore(): EngineStoreHandle<ChatStoreState, ChatActions> {
   return defineStore({
-    init: (): ConversationStoreState => ({ draft: '', view: null, viewRequest: null }),
-    persist: CONVERSATION_STORE_KEY,
+    // Anchored to the contract shape: consumers read the store through
+    // PropsStore<ChatStore>'s SnapshotSelectorHook<ChatStoreState>, so init
+    // and the contract cannot drift.
+    init: (): ChatStoreState => ({ selection: null, draft: '', view: null, inspect: null }),
+    persist: 'dsh.conversation.chat',
     actions: {
+      select: (d, target: SelectionTarget | null) => { d.selection = target },
       setDraft: (d, text: string) => { d.draft = text },
       setView: (d, view: string) => { d.view = view },
-      openView: (d, view: string, focus: string) => {
-        d.view = view
-        d.viewRequest = { view, focus }
-      },
-      completeViewRequest: (d) => { d.viewRequest = null },
+      setInspect: (d, target: { callId: CallId } | null) => { d.inspect = target },
     },
   })
-}
-
-/**
- * Read the persisted View preference before the Slot store is materialized.
- * @param sessionId - Session-scoped persistence suffix.
- * @returns the preferred View id, or null when storage has no usable value.
- */
-export function readConversationViewPreference(sessionId: SessionId): string | null {
-  if (typeof localStorage === 'undefined') return null
-  try {
-    const raw = localStorage.getItem(`${CONVERSATION_STORE_KEY}.${sessionId}`)
-    if (raw === null) return null
-    const stored: unknown = JSON.parse(raw)
-    if (typeof stored !== 'object' || stored === null || !('view' in stored)) return null
-    return typeof stored.view === 'string' ? stored.view : null
-  } catch {
-    return null
-  }
 }

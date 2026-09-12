@@ -10,31 +10,10 @@ import type {
   SubprocessTerminalHandle,
   SubprocessTerminalSignal,
 } from '@deepseek-ai/dsh-subprocess'
-import type { BoundProcessOwner } from './managed-owner.ts'
-import type { ProcessIdentity, ProcessInspector, ProcessSnapshot } from './process-inspector.ts'
+import type { ProcessIdentity, ProcessInspector } from './process-inspector.ts'
 
-function delay(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const finish = (): void => {
-      clearTimeout(timer)
-      signal?.removeEventListener('abort', finish)
-      resolve()
-    }
-    const timer = setTimeout(finish, ms)
-    signal?.addEventListener('abort', finish, { once: true })
-  })
-}
-
-async function raceWithDelay<T, U>(operation: Promise<T>, ms: number, timeout: U): Promise<T | U> {
-  const controller = new AbortController()
-  try {
-    return await Promise.race([
-      operation,
-      delay(ms, controller.signal).then(() => timeout),
-    ])
-  } finally {
-    controller.abort()
-  }
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 function signalName(number: number | undefined): NodeJS.Signals | null {
@@ -46,8 +25,7 @@ function signalName(number: number | undefined): NodeJS.Signals | null {
 }
 
 /**
- * A local terminal whose native managed range or fallback process-session
- * ownership stays below the PTY backend.
+ * A local terminal whose process-session ownership stays below the PTY backend.
  * The seam's terminate() promise — no write, inspection, or signal in flight
  * after settlement — holds here without operation tracking only because every
  * handle call completes synchronously under the hood (node-pty write, ps-based
@@ -63,7 +41,6 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
   private readonly dataDisposable: IDisposable
   private readonly exitDisposable: IDisposable
   private cleanup: Promise<void> | undefined
-  private managedOwnerCleaned = false
   private exited = false
   private trackedDescendants: ProcessIdentity[] = []
   /** The spawned shell's start identity; scans stop adopting members once the root pid no longer carries it. */
@@ -80,32 +57,20 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
     private readonly inspector: ProcessInspector,
     private readonly graceMs: number,
     private readonly platform: NodeJS.Platform = process.platform,
-    private readonly managedOwner?: BoundProcessOwner,
-    private readonly resolveManagedOutcome?: (outcome: SubprocessOutcome) => SubprocessOutcome,
   ) {
     this.pid = terminal.pid
-    this.rootIdentity = inspector.snapshot().tree(this.pid).find(member => member.pid === this.pid)
+    this.rootIdentity = inspector.processTree(this.pid).find(member => member.pid === this.pid)
     this.done = this.outcome.promise
     this.dataDisposable = terminal.onData((data) => { this.output.write(Buffer.from(data, 'utf8')) })
     this.exitDisposable = terminal.onExit(({ exitCode, signal: exitSignal }) => {
       if (this.exited) return
       this.exited = true
       this.output.end()
-      const outcome = {
+      this.outcome.resolve({
         exitCode: exitSignal === undefined || exitSignal === 0 ? exitCode : null,
         signal: signalName(exitSignal),
-      }
-      try {
-        this.outcome.resolve(this.resolveManagedOutcome?.(outcome) ?? outcome)
-      } catch (error) {
-        this.outcome.reject(error)
-      }
+      })
     })
-  }
-
-  /** Whether node-pty has not yet published the top-level exit event. */
-  get running(): boolean {
-    return !this.exited
   }
 
   // node-pty writes synchronously; the seam returns a promise for remote transports.
@@ -118,12 +83,12 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
   // Local inspection is synchronous; the seam returns a promise for remote transports.
   // oxlint-disable-next-line typescript/require-await -- Preserve promise rejection semantics at the async provider contract.
   async inspectForeground(): Promise<SubprocessTerminalForeground | undefined> {
-    this.descendants(this.inspector.snapshot())
+    this.descendants()
     const processGroupId = this.inspector.foregroundPgid(this.pid)
     if (processGroupId === undefined) return undefined
     return {
       processGroupId,
-      inputWaiting: this.inspector.isStdinWaiting(processGroupId, this.pid),
+      inputWaiting: this.inspector.isStdinWaiting(processGroupId),
     }
   }
 
@@ -168,7 +133,6 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
     this.forceStopDescendants()
     this.forceStopShell()
     this.forceStopDescendants()
-    this.managedOwner?.terminateForHostExit()
   }
 
   private forceStopShell(): void {
@@ -188,35 +152,34 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
     }
   }
 
-  private survivors(members: ProcessIdentity[], observed: ProcessSnapshot): ProcessIdentity[] {
-    return members.filter(member => observed.alive(member))
+  private survivors(members: ProcessIdentity[]): ProcessIdentity[] {
+    return members.filter(member => this.inspector.isAlive(member))
   }
 
-  private descendants(observed: ProcessSnapshot): ProcessIdentity[] {
+  private descendants(): ProcessIdentity[] {
     // Adopt newly scanned members only while the numeric root pid provably
     // still carries the spawned shell's start identity: after the shell dies,
     // a recycled pid's tree and session must not donate an unrelated
     // process's children to this session's signalling. Already-adopted
     // members keep their own start identities, which every signal rechecks.
-    const tree = observed.tree(this.pid)
+    const tree = this.inspector.processTree(this.pid)
     const root = tree.find(member => member.pid === this.pid)
     const rootVerified = this.rootIdentity !== undefined
       && root !== undefined
       && root.started === this.rootIdentity.started
     this.trackedDescendants = this.survivors(this.unionMembers(
       this.trackedDescendants,
-      ...rootVerified ? [tree, observed.session(this.pid)] : [],
-    ).filter(member => member.pid !== this.pid), observed)
+      ...rootVerified ? [tree, this.inspector.processSession(this.pid)] : [],
+    ).filter(member => member.pid !== this.pid))
     return this.trackedDescendants
   }
 
   private async waitForMembers(members: ProcessIdentity[]): Promise<ProcessIdentity[]> {
-    if (members.length === 0) return []
     const until = Date.now() + this.graceMs
-    let survivors = this.survivors(members, this.inspector.snapshot())
+    let survivors = this.survivors(members)
     while (survivors.length > 0 && Date.now() < until) {
       await delay(Math.min(25, Math.max(1, until - Date.now())))
-      survivors = this.survivors(members, this.inspector.snapshot())
+      survivors = this.survivors(members)
     }
     return survivors
   }
@@ -224,8 +187,6 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
   private signalMembers(members: ProcessIdentity[], signal: 'SIGTERM' | 'SIGKILL'): void {
     for (const member of members) {
       try {
-        // Each signal reads its own identity fence, inside this try: a failed
-        // read must cost one target, never the rest of a teardown round.
         this.inspector.signalProcess(member, signal)
       } catch (_alreadyExitedDuringSignal) {
         // The exact process identity is rechecked; a same-tick exit is success.
@@ -236,7 +197,7 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
   private forceStopDescendants(): void {
     let members = this.trackedDescendants
     try {
-      members = this.descendants(this.inspector.snapshot())
+      members = this.descendants()
     } catch (_processTableUnavailableDuringHostExit) {
       // Preserve already-captured identities when a final process-table scan fails.
     }
@@ -258,14 +219,13 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
   }
 
   private async stopDescendants(): Promise<ProcessIdentity[]> {
-    const captured = this.descendants(this.inspector.snapshot())
+    const captured = this.descendants()
     this.signalMembers(captured, 'SIGTERM')
     const capturedSurvivors = await this.waitForMembers(captured)
-    const members = this.unionMembers(capturedSurvivors, this.descendants(this.inspector.snapshot()))
+    const members = this.unionMembers(capturedSurvivors, this.descendants())
     this.signalMembers(members, 'SIGKILL')
     const survivors = await this.waitForMembers(members)
-    const observed = this.inspector.snapshot()
-    return this.survivors(this.unionMembers(survivors, this.descendants(observed)), observed)
+    return this.survivors(this.unionMembers(survivors, this.descendants()))
   }
 
   private async stopShell(): Promise<void> {
@@ -331,16 +291,6 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
   }
 
   private async closeOnce(): Promise<void> {
-    if (this.managedOwner !== undefined) {
-      try {
-        await this.closeManagedRange(this.managedOwner)
-        this.dataDisposable.dispose()
-        this.exitDisposable.dispose()
-      } finally {
-        void this.done.finally(() => { this.cleanupManagedOwner(this.managedOwner as BoundProcessOwner) }).catch(() => {})
-      }
-      return
-    }
     let survivors = await this.stopDescendants()
     if (survivors.length > 0) {
       throw new Error(`terminal cleanup failed; surviving pids: ${survivors.map(member => member.pid).join(', ')}`)
@@ -353,39 +303,6 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
     this.settleExitIfGone()
     this.dataDisposable.dispose()
     this.exitDisposable.dispose()
-  }
-
-  private cleanupManagedOwner(owner: BoundProcessOwner): void {
-    if (this.managedOwnerCleaned) return
-    this.managedOwnerCleaned = true
-    owner.cleanup?.()
-  }
-
-  private async closeManagedRange(owner: BoundProcessOwner): Promise<void> {
-    owner.signal('SIGTERM')
-    const observation = owner.waitForExit()
-    const first = await raceWithDelay(observation.then(
-      () => ({ kind: 'stopped' as const }),
-      (error: unknown) => ({ kind: 'failed' as const, error }),
-    ), this.graceMs, { kind: 'timeout' as const })
-    if (first.kind !== 'stopped') {
-      owner.signal('SIGKILL')
-      if (first.kind === 'failed') {
-        // The observation failure is still authoritative, but force cleanup
-        // and a fresh final observation must be attempted before exposing it.
-        try {
-          await owner.waitForExit()
-        } catch (finalError: unknown) {
-          throw new AggregateError([first.error, finalError], 'terminal managed-range cleanup failed')
-        }
-        throw first.error
-      }
-      await observation
-    }
-    if (!this.exited) {
-      await raceWithDelay(this.done.then(() => undefined), this.graceMs, undefined)
-    }
-    if (!this.exited) throw new Error(`terminal cleanup failed; surviving pid: ${this.pid}`)
   }
 
   private settleExitIfGone(): void {

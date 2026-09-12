@@ -282,7 +282,6 @@ export class FaceModelEmitter {
     if (invocation.implementation !== undefined) {
       lines.push(`  implementation: ${quote(invocation.implementation)},`)
     }
-    if (invocation.mode !== undefined) lines.push(`  mode: ${quote(invocation.mode)},`)
     if (invocation.invocation.kind === 'direct') {
       lines.push('  invocation: { kind: \'direct\' },')
     } else {
@@ -468,11 +467,9 @@ export class FaceModelEmitter {
       `${safeIdentifier(parameter.wire)}${parameter.optional === true ? '?' : ''}: ${this.renderer.renderType(parameter.boundary.type, referenceNames)}`)
     if (invocation.cancellation !== undefined) parameters.push('signal?: AbortSignal')
     const result = this.renderer.renderType(invocation.result.type, referenceNames)
-    if (invocation.mode === 'stream') {
-      return `(${parameters.join(', ')}) => AsyncIterable<${result}>`
-    }
-    // The unary Client Remote face delivers the carrier's outcome, so every
-    // generated consumer signature resolves to a result the caller reads.
+    // The Client Remote face delivers the carrier's outcome, so every generated
+    // consumer signature resolves to a result the caller reads instead of a
+    // value it must guard with its own try/catch.
     return `(${parameters.join(', ')}) => Promise<RemoteResult<${result}>>`
   }
 }

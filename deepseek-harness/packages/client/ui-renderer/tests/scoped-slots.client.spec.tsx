@@ -5,31 +5,26 @@
  * binding, session pair, global useSessions, store pair), inject execution
  * point (inside component bodies, contained per entry) and parameter
  * derivation, and cache granularity (entry x scope key). Ledger semantics
- * (declaration conflicts, store instance accounting) belong to the renderer
+ * (declaration conflicts, store instance accounting) belong to the runtime
  * SlotRegistry suite, not here.
  */
 import { describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render } from '@testing-library/react'
 import { useEffect, useState, type ReactNode } from 'react'
-import { Context } from '@deepseek-ai/cordis'
 import {
   SlotOwnershipError, StaleAuthorizationError,
-  type ActionsDecl, type SessionProviderComponent, type SlotEntryDef,
-  type SlotSpec, type StoreHandle, type StoredEntry,
+  type ActionsDecl, type SlotEntryDef, type SlotSpec, type StoreHandle, type StoredEntry,
 } from '@deepseek-ai/dsh-client-ui-slots'
+import type { SessionMaybeProvideInfo } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
-  RenderOpts, ScopedStandardSourceBinding, SlotRendererHost, SlotScopeAdapter,
-  StandardSourceBinding, StoreInstanceLike,
+  RenderOpts, SessionProvideInfo, SlotRendererHost, StoreInstanceLike,
 } from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { createSlotRenderer } from '../src/client/scoped-slots.tsx'
+import { SessionProvider } from '../src/client/session-provider.tsx'
 
 type AnyProps = Record<string, unknown>
 type RenderSlotFn = (key: string, owner: object, opts?: RenderOpts) => ReactNode
-type RenderSlotChainFn = (
-  key: string,
-  owner: object,
-  opts?: { fallback?: ReactNode; fallbackOnly?: boolean; overlay?: boolean },
-) => ReactNode
+type RenderSlotChainFn = (key: string, owner: object, opts?: { fallback?: ReactNode; overlay?: boolean }) => ReactNode
 type DeclaredSpec = SlotSpec<SlotEntryDef>
 /** Entry literal helper: fake entries default the mandatory options bag. */
 const entryOf = (partial: Omit<StoredEntry, 'options'> & { options?: StoredEntry['options'] }): StoredEntry =>
@@ -40,7 +35,7 @@ const entryOf = (partial: Omit<StoredEntry, 'options'> & { options?: StoredEntry
  * create(scopeKey?) + instance with clearPersisted): the machinery consumes
  * only the StoreInstanceLike face (bare snapshot source + baked actions),
  * but entry.store is typed to the full contract — the real defineStore lives
- * in client-store, which UI-renderer tests must not import (dependency direction).
+ * in runtime, which UI-renderer tests must not import (dependency direction).
  */
 function miniStore<T extends object>(
   init: () => T,
@@ -81,12 +76,11 @@ function observable<T>(initial: T) {
 /**
  * Behavioral SlotRendererHost fake: registration mutates entries, bumps the
  * key version, and notifies synchronously (batching semantics belong to the
- * registry host, not this package's outlets). Store instances resolve through
+ * runtime host, not this package's outlets). Store instances resolve through
  * the entry's real handle, cached per (entry x scope key) like the real
- * ledger; session bindings are identity-stable per id.
+ * ledger; session cells are identity-stable per id.
  */
 function makeHost() {
-  const scopeCtx = new Context()
   const entries = new Map<string, StoredEntry[]>()
   const specs = new Map<string, DeclaredSpec>()
   const versions = new Map<string, number>()
@@ -96,31 +90,11 @@ function makeHost() {
   const storeCache = new Map<StoredEntry, Map<string, StoreInstanceLike>>()
   const list = observable<{ ids: string[] }>({ ids: [] })
   const workspaces = observable<{ ids: string[] }>({ ids: [] })
-  const absentBinding: StandardSourceBinding = {
-    key: undefined,
-    hooks: { session: undefined },
-    keyedHooks: {},
-    props: { sessionId: undefined },
-  }
-  const currentBinding = observable<StandardSourceBinding>(absentBinding)
+  const absentInfo: SessionMaybeProvideInfo = { sessionId: undefined, hooks: {}, props: {} }
+  const provide = observable<SessionMaybeProvideInfo>(absentInfo)
   let currentId: string | undefined
-  const bindings = new Map<string, ScopedStandardSourceBinding>()
+  const infos = new Map<string, SessionProvideInfo>()
   const sessionSources = new Map<string, ReturnType<typeof observable<unknown>>>()
-  const root = observable<StandardSourceBinding>({
-    key: undefined,
-    hooks: { sessions: list, workspaces },
-    keyedHooks: {},
-    props: {},
-  })
-  const sessionAdapter: SlotScopeAdapter = {
-    current: currentBinding,
-    resolve: key => bindings.get(key),
-    renderArea: (binding, { empty, children }) => binding.key === undefined
-      ? <>{empty?.() ?? null}</>
-      : <>{children}</>,
-  }
-  const scopeRevision = observable(0)
-  let activeScopeAdapter = sessionAdapter
 
   const bump = (key: string) => {
     versions.set(key, (versions.get(key) ?? 0) + 1)
@@ -159,38 +133,40 @@ function makeHost() {
     },
     specOf: key => specs.get(key),
     isLive: entry => live.has(entry),
-    storeOf: (entry, scopeBinding) => {
+    storeOf: (entry, scopeKey) => {
       if (entry.store === undefined) return undefined
       let perScope = storeCache.get(entry)
       if (!perScope) {
         perScope = new Map()
         storeCache.set(entry, perScope)
       }
-      const cacheKey = scopeBinding?.key ?? ''
+      const cacheKey = scopeKey ?? ''
       let instance = perScope.get(cacheKey)
       if (!instance) {
         // Fake entries always carry engine handles (never factories), and the
         // engine create() takes the scope key (persist suffixing).
         const handle = entry.store as { create(scopeKey?: string): StoreInstanceLike }
-        instance = handle.create(scopeBinding?.key)
+        instance = handle.create(scopeKey)
         perScope.set(cacheKey, instance)
       }
       return instance
     },
-    root,
-    scopeRevision,
-    scope: () => activeScopeAdapter,
+    sessions: {
+      list,
+      provideInfo: provide,
+    },
+    workspaces: { list: workspaces },
   }
   return {
     host,
     list,
     workspaces,
-    // Driver surface: set(id) publishes the resolved binding (or the absent
-    // projection) through the scope adapter.
+    // Driver surface: set(id) publishes the resolved bundle (or the absent
+    // projection) through the provide source.
     current: {
       set: (id: string | undefined) => {
         currentId = id
-        currentBinding.set((id === undefined ? undefined : bindings.get(id)) ?? absentBinding)
+        provide.set((id === undefined ? undefined : infos.get(id)) ?? absentInfo)
       },
     },
     declare: (key: string, spec: DeclaredSpec) => { specs.set(key, spec); bump(key) },
@@ -212,29 +188,23 @@ function makeHost() {
         bump(key)
       }
     },
-    addSession: (id: string, initial: unknown = { sid: id }): ScopedStandardSourceBinding => {
-      // Bare source per binding (identity-stable): the machinery binds useSession from it.
+    addSession: (id: string, initial: unknown = { sid: id }): SessionProvideInfo => {
+      // Bare source per bundle (identity-stable): the machinery binds useSession from it.
       const session = observable<unknown>(initial)
-      const binding: ScopedStandardSourceBinding = {
-        key: id,
-        ctx: scopeCtx,
+      const info: SessionProvideInfo = {
+        sessionId: id,
         hooks: { session },
-        keyedHooks: {},
-        props: { sessionId: id },
+        props: {},
       }
       sessionSources.set(id, session)
-      bindings.set(id, binding)
-      if (currentId === id) currentBinding.set(binding)
-      return binding
+      infos.set(id, info)
+      if (currentId === id) provide.set(info)
+      return info
     },
     setSession: (id: string, snapshot: unknown) => {
       const source = sessionSources.get(id)
       if (source === undefined) throw new Error(`unknown test session: ${id}`)
       source.set(snapshot)
-    },
-    replaceScope: (adapter: SlotScopeAdapter) => {
-      activeScopeAdapter = adapter
-      scopeRevision.set(scopeRevision.getSnapshot() + 1)
     },
   }
 }
@@ -242,16 +212,9 @@ function makeHost() {
 type Fake = ReturnType<typeof makeHost>
 
 /** Mount a root entry whose component renders `body` with its kit renderSlot. */
-function mountRoot(
-  h: Fake,
-  children: Record<string, DeclaredSpec>,
-  body: (renderSlot: RenderSlotFn, SessionProvider: SessionProviderComponent) => ReactNode,
-) {
+function mountRoot(h: Fake, children: Record<string, DeclaredSpec>, body: (renderSlot: RenderSlotFn) => ReactNode) {
   const dispose = h.add('root', {
-    component: (props: {
-      renderSlot: RenderSlotFn
-      SessionProvider: SessionProviderComponent
-    }) => <>{body(props.renderSlot, props.SessionProvider)}</>,
+    component: (props: { renderSlot: RenderSlotFn }) => <>{body(props.renderSlot)}</>,
     children,
   })
   const renderer = createSlotRenderer()
@@ -262,7 +225,6 @@ function mountRoot(
 const SINGLE_ROOT: DeclaredSpec = { kind: 'single', scope: 'root' }
 const SINGLE_SESSION: DeclaredSpec = { kind: 'single', scope: 'session' }
 const CHAIN_ROOT: DeclaredSpec = { kind: 'chain', scope: 'root' }
-const CHAIN_SESSION: DeclaredSpec = { kind: 'chain', scope: 'session' }
 
 /** Chain entry literal: top-level select, priority in the options bag (the StoredEntry chain shape). */
 const chainEntryOf = (partial: {
@@ -604,31 +566,6 @@ describe('overlay chains (ChainRenderOpts.overlay)', () => {
     expect(mounted).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps an explicit fallback-only strict chain mounted until its Session scope exists', () => {
-    const h = makeHost()
-    h.declare('k.chain', CHAIN_SESSION)
-    h.addSession('s1')
-    const select = vi.fn(() => null)
-    h.add('k.chain', chainEntryOf({ component: () => <b>never</b>, select }))
-    let fallbackOnly = true
-    const { view } = mountChainRoot(h, { 'k.chain': CHAIN_SESSION },
-      renderSlotChain => renderSlotChain(
-        'k.chain',
-        {},
-        { fallback: <input aria-label="resident" />, fallbackOnly, overlay: true },
-      ))
-    const input = view.getByRole('textbox', { name: 'resident' })
-    expect(select).not.toHaveBeenCalled()
-
-    fallbackOnly = false
-    act(() => {
-      h.current.set('s1')
-      h.add('root', { component: () => null })
-    })
-    expect(view.getByRole('textbox', { name: 'resident' })).toBe(input)
-    expect(select).toHaveBeenCalledOnce()
-  })
-
   it('leaves non-overlay chains on the unmount path: a takeover discards fallback state', () => {
     const h = makeHost()
     h.declare('k.chain', CHAIN_ROOT)
@@ -719,9 +656,9 @@ describe('standard-kit synthesis', () => {
         return null
       },
     })
-    mountRoot(h, { 'k.session': SINGLE_SESSION }, (renderSlot, SessionProvider) => (
+    mountRoot(h, { 'k.session': SINGLE_SESSION }, renderSlot => (
       <SessionProvider empty={() => <i>empty</i>}>
-        {renderSlot('k.session', {})}
+        {() => renderSlot('k.session', {})}
       </SessionProvider>
     ))
     act(() => { h.current.set('s1') })
@@ -761,11 +698,11 @@ describe('standard-kit synthesis', () => {
         return <b data-turn={label}>{String(useTurnData('tail'))}</b>
       },
     })
-    const { view } = mountRoot(h, { 'k.session': sessionSpec }, (renderSlot, SessionProvider) => (
-      <SessionProvider><>
+    const { view } = mountRoot(h, { 'k.session': sessionSpec }, renderSlot => (
+      <SessionProvider>{() => <>
         {renderSlot('k.session', { label: 'one' }, { hookContext: 1 })}
         {renderSlot('k.session', { label: 'two' }, { hookContext: 2 })}
-      </>
+      </>}
       </SessionProvider>
     ))
     act(() => { h.current.set('s1') })
@@ -809,11 +746,11 @@ describe('standard-kit synthesis', () => {
     h.add('root', {
       component: (props: AnyProps) => {
         rootSeen.push(props)
-        const Provider = props['SessionProvider'] as SessionProviderComponent
+        const Provider = props['SessionProvider'] as typeof SessionProvider
         const renderSlot = props['renderSlot'] as RenderSlotFn
         return (
           <Provider empty={() => <i>empty</i>}>
-            {renderSlot('k.session', {})}
+            {() => renderSlot('k.session', {})}
           </Provider>
         )
       },
@@ -836,15 +773,15 @@ describe('standard-kit synthesis', () => {
     expect(seen2.at(-1)!['SessionProvider']).toBeUndefined()
   })
 
-  it('fails loud for a strict session slot while no session is current', () => {
+  it('renders nothing for a strict session slot while no session is current', () => {
+    // Strict session entries decline (render null) without a session; the
+    // loud path is reserved for a missing root binding provider.
     const h = makeHost()
     h.declare('k.session', SINGLE_SESSION)
     h.add('k.session', { component: () => <b>x</b> })
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    expect(() => mountRoot(h, { 'k.session': SINGLE_SESSION },
-      renderSlot => renderSlot('k.session', {})))
-      .toThrow("strict session slot 'k.session' rendered without a scope binding")
-    spy.mockRestore()
+    const { view } = mountRoot(h, { 'k.session': SINGLE_SESSION },
+      renderSlot => renderSlot('k.session', {}))
+    expect(view.container.querySelector('b')).toBeNull()
   })
 
   it('delivers the store pair for store-declaring entries and writes through baked actions', () => {
@@ -885,8 +822,8 @@ describe('standard-kit synthesis', () => {
       },
       store: handle,
     })
-    const { view } = mountRoot(h, { 'k.session': SINGLE_SESSION }, (renderSlot, SessionProvider) => (
-      <SessionProvider>{renderSlot('k.session', {})}</SessionProvider>
+    const { view } = mountRoot(h, { 'k.session': SINGLE_SESSION }, renderSlot => (
+      <SessionProvider>{() => renderSlot('k.session', {})}</SessionProvider>
     ))
     act(() => { h.current.set('s1') })
     act(() => { setDraft('draft-one') })
@@ -930,41 +867,6 @@ describe('inject: execution point, parameter derivation, cache granularity', () 
     expect(seen.at(-1)!['read']).toBe('hot')
   })
 
-  it('binds the inject keyedHooks compartment without exposing source resolvers', () => {
-    const h = makeHost()
-    h.declare('k.single', SINGLE_ROOT)
-    const badges = new Map([
-      ['first', observable('cold')],
-      ['second', observable('idle')],
-    ])
-    const seen: Record<string, unknown>[] = []
-    h.add('k.single', {
-      component: (props: {
-        useBadge?: (key: string) => string | undefined
-        keyedHooks?: unknown
-        plain?: string
-      }) => {
-        seen.push({
-          keyedHooks: props.keyedHooks,
-          plain: props.plain,
-          read: props.useBadge!('first'),
-        })
-        return null
-      },
-      inject: () => ({
-        plain: 'kept',
-        keyedHooks: { badge: (key: string) => badges.get(key) },
-      }),
-    })
-    mountRoot(h, { 'k.single': SINGLE_ROOT }, renderSlot => renderSlot('k.single', {}))
-
-    expect(seen.at(-1)).toEqual({ keyedHooks: undefined, plain: 'kept', read: 'cold' })
-    act(() => { badges.get('second')!.set('ignored') })
-    expect(seen).toHaveLength(1)
-    act(() => { badges.get('first')!.set('hot') })
-    expect(seen.at(-1)!['read']).toBe('hot')
-  })
-
   it('session inject receives sessionId and caches per (entry x session): switch-back reuses', () => {
     const h = makeHost()
     h.declare('k.session', SINGLE_SESSION)
@@ -975,8 +877,8 @@ describe('inject: execution point, parameter derivation, cache granularity', () 
       component: ({ sid }: { sid?: string }) => <b>{sid}</b>,
       inject: inject,
     })
-    const { view } = mountRoot(h, { 'k.session': SINGLE_SESSION }, (renderSlot, SessionProvider) => (
-      <SessionProvider>{renderSlot('k.session', {})}</SessionProvider>
+    const { view } = mountRoot(h, { 'k.session': SINGLE_SESSION }, renderSlot => (
+      <SessionProvider>{() => renderSlot('k.session', {})}</SessionProvider>
     ))
     act(() => { h.current.set('s1') })
     expect(view.container.textContent).toBe('s1')
@@ -1010,9 +912,9 @@ describe('inject: execution point, parameter derivation, cache granularity', () 
       inject: sessionInject,
       store: handle,
     })
-    mountRoot(h, { 'k.single': SINGLE_ROOT, 'k.session': SINGLE_SESSION }, (renderSlot, SessionProvider) => <>
+    mountRoot(h, { 'k.single': SINGLE_ROOT, 'k.session': SINGLE_SESSION }, renderSlot => <>
       {renderSlot('k.single', {})}
-      <SessionProvider>{renderSlot('k.session', {})}</SessionProvider>
+      <SessionProvider>{() => renderSlot('k.session', {})}</SessionProvider>
     </>)
     act(() => { h.current.set('s1') })
     // The inject-received actions are the same baked callbacks the component
@@ -1126,25 +1028,5 @@ describe('session-maybe adoption identity', () => {
     act(() => { h.current.set('s1') })
     act(() => { h.current.set('s1') })
     expect(view.container.textContent).toBe('s1#1')
-  })
-
-  it('rebinds mounted scope consumers when the installed adapter changes', () => {
-    const h = makeHost()
-    const { view } = mountMaybeCounter(h)
-    expect(view.container.textContent).toBe('blank#1')
-    const binding: ScopedStandardSourceBinding = {
-      key: 'replacement',
-      ctx: new Context(),
-      hooks: { session: observable({ sid: 'replacement' }) },
-      keyedHooks: {},
-      props: { sessionId: 'replacement' },
-    }
-    act(() => {
-      h.replaceScope({
-        current: observable(binding),
-        resolve: key => key === binding.key ? binding : undefined,
-      })
-    })
-    expect(view.container.textContent).toBe('replacement#1')
   })
 })

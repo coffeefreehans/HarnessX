@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import LlmRuntime from '@deepseek-ai/dsh-llm'
+import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
+import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
+import ToolRuntime from '@deepseek-ai/dsh-tools'
+import AgentRegistry from '@deepseek-ai/dsh-agent'
 
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
-import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import * as LlmDeepSeek from '@deepseek-ai/dsh-llm-deepseek'
 import SubagentRuntime from '@deepseek-ai/dsh-subagent'
 import * as Spawn from '@deepseek-ai/dsh-subagent-spawn-in-process'
@@ -27,7 +30,11 @@ afterEach(async () => {
 
 async function harness(): Promise<Context> {
   const built = new Context()
-  await mountAgentLoopTestDependencies(built)
+  await built.plugin(LlmRuntime)
+  await built.plugin(SessionStore)
+  await built.plugin(SystemPrompt)
+  await built.plugin(ToolRuntime)
+  await built.plugin(AgentRegistry)
   await built.plugin(AgentLoop, { agents: [] })
   await built.plugin(LlmDeepSeek)
   await built.plugin(SubagentRuntime)

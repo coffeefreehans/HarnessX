@@ -4,6 +4,7 @@ import z from '@deepseek-ai/schemastery'
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { FileSettingsProvider } from '../src/index.ts'
 
 // chokidar is the nondeterministic OS boundary: faking it lets these tests
@@ -75,7 +76,7 @@ describe('watcher pipeline', () => {
     const dir = await tempDir()
     const path = join(dir, 'settings.yaml')
     const ctx = await boot({ path, debounceMs: 5 })
-    const scope = ctx.settings.register('ui-theme', ThemeSchema)
+    const scope = ctx.settings.register(settingsNamespace('ui-theme'), ThemeSchema)
     const [instance] = await fakeInstances()
 
     instance!.watcher.emit('error', new Error('watch backend failure'))
@@ -93,7 +94,7 @@ describe('watcher pipeline', () => {
     const path = join(dir, 'settings.yaml')
     await writeFile(path, 'ui-theme:\n  theme: light\n')
     const ctx = await boot({ path, debounceMs: 5 })
-    const scope = ctx.settings.register('ui-theme', ThemeSchema)
+    const scope = ctx.settings.register(settingsNamespace('ui-theme'), ThemeSchema)
 
     await chmod(path, 0o000)
     cleanups.push(() => chmod(path, 0o600))
@@ -109,7 +110,7 @@ describe('watcher pipeline', () => {
     const path = join(dir, 'settings.yaml')
     await writeFile(path, 'ui-theme:\n  theme: light\n')
     const ctx = await boot({ path, debounceMs: 5 })
-    const scope = ctx.settings.register('ui-theme', ThemeSchema)
+    const scope = ctx.settings.register(settingsNamespace('ui-theme'), ThemeSchema)
     let arm = true
     ctx.on('settings/updated', () => {
       if (!arm) return
@@ -138,7 +139,7 @@ describe('watcher pipeline', () => {
     const ctx = new Context()
     const fiber = ctx.plugin(FileSettingsProvider, { path, debounceMs: 5 })
     await fiber
-    ctx.settings.register('ui-theme', ThemeSchema)
+    ctx.settings.register(settingsNamespace('ui-theme'), ThemeSchema)
     let disposed = false
     let postDisposeCommits = 0
     ctx.on('settings/updated', () => {
@@ -163,7 +164,7 @@ describe('watcher pipeline', () => {
     const dir = await tempDir()
     const path = join(dir, 'settings.yaml')
     const ctx = await boot({ path, debounceMs: 5 })
-    const scope = ctx.settings.register('ui-theme', ThemeSchema)
+    const scope = ctx.settings.register(settingsNamespace('ui-theme'), ThemeSchema)
     const [instance] = await fakeInstances()
     instance!.watcher.emit('all', 'add', path)
     await new Promise(resolve => setTimeout(resolve, 50))
@@ -175,8 +176,8 @@ describe('watcher pipeline', () => {
     const path = join(dir, 'settings.yaml')
     await writeFile(path, 'ui-theme:\n  theme: light\n')
     const ctx = await boot({ path, debounceMs: 5 })
-    const theme = ctx.settings.register('ui-theme', ThemeSchema)
-    const editor = ctx.settings.register('editor', z.object({
+    const theme = ctx.settings.register(settingsNamespace('ui-theme'), ThemeSchema)
+    const editor = ctx.settings.register(settingsNamespace('editor'), z.object({
       tabWidth: z.number().default(2),
     }))
     // The external edit has landed on disk but its watcher event has not
@@ -196,7 +197,7 @@ describe('watcher pipeline', () => {
     const path = join(dir, 'settings.yaml')
     await writeFile(path, 'ui-theme:\n  theme: light\n')
     const ctx = await boot({ path, debounceMs: 5 })
-    const scope = ctx.settings.register('ui-theme', ThemeSchema)
+    const scope = ctx.settings.register(settingsNamespace('ui-theme'), ThemeSchema)
     // Written after the initial load but before the watcher became active:
     // no 'all' event will ever fire for it.
     await writeFile(path, 'ui-theme:\n  theme: written-before-ready\n')
@@ -212,7 +213,7 @@ describe('watcher pipeline', () => {
     const path = join(dir, 'settings.yaml')
     await writeFile(path, 'ui-theme:\n  theme: light\n')
     const ctx = await boot({ path, debounceMs: 5 })
-    const scope = ctx.settings.register('ui-theme', ThemeSchema)
+    const scope = ctx.settings.register(settingsNamespace('ui-theme'), ThemeSchema)
     const broken = 'ui-theme: [unclosed\n  flow: {\n'
     await writeFile(path, broken)
     await expect(scope.update({ theme: 'darker' })).rejects.toThrow(/invalid document/)

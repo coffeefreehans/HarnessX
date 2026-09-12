@@ -3,7 +3,7 @@
  * CommandUiRuntime (`ctx.commandUi`) implements this face; business packages
  * consume `register` alone.
  */
-import type { Context as ClientContext } from '@deepseek-ai/cordis'
+import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ClientSessionContext } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 
 /** Copy for an option that must be acknowledged before onSelect can run. */
@@ -31,29 +31,11 @@ export interface SelectOption {
  * The shell component is owned by ui-commands; business never sees it. Both
  * callbacks receive the ClientSessionContext captured at popup open.
  */
-export interface PopupSelectSpec {
+export type CommandUiSpec = {
   readonly kind: 'popupSelect'
   options(session: ClientSessionContext, signal: AbortSignal): Promise<readonly SelectOption[]>
   onSelect(option: SelectOption, session: ClientSessionContext): void | Promise<void>
 }
-
-/**
- * Business registration for the action command kind: a bare invocation
- * consumes the trigger token and runs one client-side callback (the Feedback
- * row opens the feedback dialog). It submits nothing, so an
- * attachment-carrying draft never refuses it.
- */
-export interface ActionSpec {
-  readonly kind: 'action'
-  /**
-   * Run the action for one session.
-   * @param session - the ClientSessionContext captured at invocation.
-   */
-  run(session: ClientSessionContext): void
-}
-
-/** The UI behavior of a contribution or decoration. */
-export type CommandUiSpec = PopupSelectSpec | ActionSpec
 
 /**
  * One client-owned command contribution: a slash-menu entry whose behavior
@@ -64,11 +46,11 @@ export type CommandUiSpec = PopupSelectSpec | ActionSpec
 export interface CommandContribution {
   /** Command name without the leading slash (unique across contributions). */
   readonly name: string
-  /** Resolve the localized menu row description when candidates are requested. */
-  readonly description: () => string
+  /** Menu row description. */
+  readonly description: string
   /** Capability filter, called with a fresh projection per candidate pass. */
   available(session: ClientSessionContext): boolean
-  /** The command's UI behavior. */
+  /** The command's UI behavior (this phase: popupSelect only). */
   readonly ui: CommandUiSpec
 }
 
@@ -86,7 +68,7 @@ export interface CommandDecoration {
   readonly name: string
   /** Capability filter, called with a fresh projection per bare invocation. */
   available(session: ClientSessionContext): boolean
-  /** The bare-invocation UI. */
+  /** The bare-invocation UI (this phase: popupSelect only). */
   readonly ui: CommandUiSpec
 }
 
