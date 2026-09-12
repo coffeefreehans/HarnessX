@@ -87,14 +87,14 @@ corepack yarn dev
 # 完整构建、类型检查、测试和运行时闭包检查
 corepack yarn check
 
-# Windows x64 与 ARM64 安装包及本地绿色 ZIP
+# Windows x64 与 ARM64 安装包及绿色 ZIP
 corepack yarn dist:win
 
 # macOS 签名与公证发布构建，需要 Apple 发布凭据
 corepack yarn dist:mac
 ```
 
-Windows 打包必须在 x64 Windows 主机上使用 x64 Node.js 执行。macOS 的 Intel 与 Apple Silicon 包由对应架构的 GitHub Actions runner 分别生成。公开 Release 只上传两个 Windows 安装包和两个 macOS DMG，不上传绿色 ZIP。
+Windows 打包必须在 x64 Windows 主机上使用 x64 Node.js 执行。macOS 的 Intel 与 Apple Silicon 包由对应架构的 GitHub Actions runner 分别生成。公开 Release 上传两个 Windows 安装包、两个 macOS DMG 和两个平台的绿色 ZIP。
 
 ## 仓库结构
 

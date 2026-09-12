@@ -13,6 +13,7 @@ import { MACOS_TITLEBAR_HEIGHT, WINDOWS_CAPTION_CONTROLS_WIDTH, WINDOWS_TITLEBAR
 import { isDesktopPrefsHydrated, schedulePersistDesktopPrefs } from './desktop-prefs.ts'
 import { isAbsoluteWorkspacePath, resolveDockWorkspace } from './workspace-source.ts'
 import {
+  getWorkbenchStore,
   WORKBENCH_WIDTH_MAX,
   WORKBENCH_WIDTH_MIN,
   WORKBENCH_PANEL_IDS,
@@ -492,10 +493,11 @@ function wait(milliseconds: number): Promise<void> {
 /* ------------------------------------------------------------------ */
 
 const WORKBENCH_STYLES = `
-.dshDesktopFrame[data-desktop-platform] .hxpWb { grid-column: 4; grid-row: 2; }
-.hxpWb { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--dsw-alias-bg-base, #fff); border-left: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08)); }
+.hxpWb { position: fixed; top: 0; right: 0; bottom: 0; z-index: 55; min-width: 0; min-height: 0; overflow: hidden; background: var(--dsw-alias-bg-base, #fff); border-left: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08)); box-shadow: -6px 0 24px rgba(0,0,0,.12); }
+body:not([data-dsh-desktop-mode="advanced"]) .hxpWb { display: none; }
 .hxpWbSlide { height: 100%; display: flex; flex-direction: column; transform: translateX(calc(100% + 1px)); opacity: 0; transition: transform var(--ds-transition-duration-slow, .25s) var(--ds-ease-in-out, ease), opacity var(--ds-transition-duration-slow, .25s) var(--ds-ease-in-out, ease); }
 .hxpWb[data-open] .hxpWbSlide { transform: translateX(0); opacity: 1; }
+.hxpWb:not([data-open]) { width: 0px !important; border-left: none; box-shadow: none; }
 .hxpWbRail { flex: none; display: flex; align-items: center; gap: 2px; padding: 4px 6px; border-bottom: 1px solid var(--dsw-alias-border-l1, rgba(0,0,0,.06)); }
 .hxpWbSpring { flex: 1 1 auto; }
 .hxpWbRailButton { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px 0 8px; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-secondary, #555); cursor: pointer; font-size: 12px; }
@@ -515,8 +517,9 @@ const WORKBENCH_STYLES = `
 .hxpWbDivider:hover { background: rgba(127,127,127,.18); }
 .hxpWbResize { position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; cursor: col-resize; touch-action: none; z-index: 10; }
 .hxpWbToggle { position: absolute; z-index: 60; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-tertiary, #888); cursor: pointer; }
-.dshDesktopFrame[data-desktop-platform="win32"] .hxpWbToggle { top: calc((${WINDOWS_TITLEBAR_HEIGHT}px - 28px) / 2); right: calc(${WINDOWS_CAPTION_CONTROLS_WIDTH}px + 8px); }
-.dshDesktopFrame[data-desktop-platform="darwin"] .hxpWbToggle { top: calc((${MACOS_TITLEBAR_HEIGHT}px - 28px) / 2); right: 12px; }
+body[data-dsh-desktop-platform="win32"] .hxpWbToggle { top: calc((${WINDOWS_TITLEBAR_HEIGHT}px - 28px) / 2); right: calc(${WINDOWS_CAPTION_CONTROLS_WIDTH}px + 8px); }
+body[data-dsh-desktop-platform="darwin"] .hxpWbToggle { top: calc((${MACOS_TITLEBAR_HEIGHT}px - 28px) / 2); right: 12px; }
+body:not([data-dsh-desktop-platform="win32"]):not([data-dsh-desktop-platform="darwin"]) .hxpWbToggle { top: 8px; right: 12px; }
 .hxpWbToggle:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.05)); color: var(--dsw-alias-label-primary, #222); }
 .hxpWbToggle[data-active] { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.07)); color: var(--dsw-alias-label-primary, #222); }
 .hxpWbPanel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; font-size: 12.5px; color: var(--dsw-alias-label-primary, #222); }
@@ -713,7 +716,22 @@ export function WorkbenchToggleButton(props: { state: WorkbenchState }): ReactNo
   )
 }
 
-export function WorkbenchDock(props: { state: WorkbenchState }): ReactNode {
+/**
+ * Combined shell-overlay entry: the caption-bar toggle plus the floating dock.
+ * Reads the shared workbench store directly so it can register without props.
+ * @returns the toggle and dock elements.
+ */
+export function WorkbenchOverlayEntry(): ReactNode {
+  const state = getWorkbenchStore()
+  return (
+    <>
+      <WorkbenchToggleButton state={state} />
+      <WorkbenchDock state={state} />
+    </>
+  )
+}
+
+export function WorkbenchDock(props: { state: WorkbenchState, 'data-platform'?: string }): ReactNode {
   const state = props.state
   const t = useStrings()
   const subscribeLayout = useCallback((listener: () => void) => state.subscribe(listener), [state])
@@ -740,7 +758,7 @@ export function WorkbenchDock(props: { state: WorkbenchState }): ReactNode {
   }, [snapshot])
 
   return (
-    <aside className="hxpWb" data-open={snapshot.open || undefined}>
+    <aside className="hxpWb" data-open={snapshot.open || undefined} style={{ width: snapshot.open ? String(snapshot.width) + 'px' : undefined }}>
       <div className="hxpWbSlide">
         <div className="hxpWbRail">
           {WORKBENCH_PANEL_IDS.filter(id => id !== 'chat').map(id => (

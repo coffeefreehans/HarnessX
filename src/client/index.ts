@@ -1,4 +1,4 @@
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type convergence only: locale/theme declarations expose settings slot rows.
 // The desktop client does not load or register a settings surface.
@@ -41,7 +41,7 @@ export const inject = [
 
 /** Register desktop-owned client surfaces for the current BrowserWindow mode. @param ctx - browser Cordis context. */
 export function apply(ctx: ClientContext): void {
-  const environment = parseDesktopClientEnvironment(window.location.search)
+  const environment = parseDesktopClientEnvironment(window.location.search, window.location.hash)
   if (environment.mode === 'advanced') applyAdvancedShell(ctx, environment)
   // The desktop bundle applies before appended community bundles; wrapping
   // registration here lets the compat shim see their slot calls.

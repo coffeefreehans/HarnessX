@@ -70,7 +70,11 @@ export async function runDesktopDshCli(
   if (profileName !== undefined) {
     argv.splice(2, argv.length - 2, ...withDefaultDesktopProfile(argv.slice(2), profileName))
   }
-  await load(DSH_ENTRY_URL)
+  // The 0.1.5-rc.1 dsh entry runs only under import.meta.main; when imported
+  // as a module the exported runCli must be invoked explicitly. Older
+  // families self-ran on import and exported no runCli.
+  const entry = await load(DSH_ENTRY_URL) as { runCli?: () => Promise<void> } | undefined
+  if (entry !== undefined && typeof entry.runCli === 'function') await entry.runCli()
 }
 
 function isDirectExecution(): boolean {

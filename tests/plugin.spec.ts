@@ -1,6 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { ThemePreference } from '@deepseek-ai/dsh-client-ui-theme'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   apply,
@@ -92,6 +91,16 @@ function createHarness(platform: DesktopRuntime['platform'] = 'darwin'): PluginH
       host: '127.0.0.1',
       port: 43120,
     },
+    connection: {
+      authenticatedUrl: (url: string) => {
+        const token = new URL(url)
+        token.pathname = '/'
+        token.search = ''
+        token.hash = ''
+        token.searchParams.set('token', 'TESTTOKEN')
+        return token.href
+      },
+    },
     settings,
     logger: { warn: vi.fn(), error: vi.fn() },
     get: vi.fn(() => () => {}),
@@ -111,7 +120,7 @@ function createHarness(platform: DesktopRuntime['platform'] = 'darwin'): PluginH
     notify: async (next, prev) => { await watcher?.(next, prev) },
     notifyTheme: (preference) => {
       themePreference = preference
-      settingsUpdated?.(settingsNamespace('ui-theme'), { preference })
+      settingsUpdated?.('ui-theme', { preference })
     },
   }
 }
@@ -129,7 +138,8 @@ describe('desktop Host plugin', () => {
     const url = new URL(desktopRendererUrl(43120, 'advanced', 'darwin'))
     expect(url.origin).toBe('http://127.0.0.1:43120')
     expect(url.pathname).toBe('/')
-    expect(Object.fromEntries(url.searchParams)).toEqual({
+    expect(Object.fromEntries(url.searchParams)).toEqual({})
+    expect(Object.fromEntries(new URLSearchParams(url.hash.slice(1)))).toEqual({
       'dsh-desktop-mode': 'advanced',
       'dsh-desktop-platform': 'darwin',
     })
@@ -150,7 +160,7 @@ describe('desktop Host plugin', () => {
     expect(loaderAwait).not.toHaveBeenCalled()
     expect(harness.shell()).toEqual(expect.objectContaining({
       mode: 'compatibility',
-      url: 'http://127.0.0.1:43120/?dsh-desktop-mode=compatibility&dsh-desktop-platform=darwin',
+      url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:43120\/\?token=[A-Za-z0-9_-]+#dsh-desktop-mode=compatibility&dsh-desktop-platform=darwin$/u),
       productName: 'DeepSeek HarnessX',
       windowTitle: 'DeepSeek HarnessX',
       iconPath: expect.stringMatching(/[\\/]build[\\/]app-icon-mac\.png$/u),

@@ -52,6 +52,8 @@ export interface DownloadDesktopUpdateOptions {
   readonly userDataPath: string
   /** Request implementation, normally backed by Electron `net.fetch`. */
   readonly request: UpdateArtifactRequest
+  /** Optional progress sink receiving 0-100 integers as installer bytes land. */
+  readonly onProgress?: (percent: number) => void
   /** Optional cancellation signal owned by the update coordinator. */
   readonly signal?: AbortSignal
 }
@@ -168,7 +170,14 @@ export async function downloadDesktopUpdate(options: DownloadDesktopUpdateOption
 
   let failure: unknown
   try {
-    const written = await writeResponseBody(paths.temporary, response.body, options.signal)
+    const totalBytes = expectedAsset.size ?? declaredContentLength(response)
+    const written = await writeResponseBody(
+      paths.temporary,
+      response.body,
+      options.signal,
+      totalBytes,
+      options.onProgress,
+    )
     throwIfAborted(options.signal)
     verifyHashAndSize(written, expectedAsset)
     await validateArtifact(paths.temporary, platform)
@@ -395,9 +404,16 @@ async function lstatOptional(filename: string): Promise<Awaited<ReturnType<typeo
   }
 }
 
-function assertDeclaredSize(response: Response, maxBytes: number): void {
+function declaredContentLength(response: Response): number | undefined {
   const declared = response.headers.get('content-length')
-  if (declared === null || !DECIMAL_BYTES.test(declared)) return
+  if (declared === null || !DECIMAL_BYTES.test(declared)) return undefined
+  const value = Number(declared)
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined
+}
+
+function assertDeclaredSize(response: Response, maxBytes: number): void {
+  const declared = declaredContentLength(response)
+  if (declared === undefined) return
   if (BigInt(declared) > BigInt(maxBytes)) {
     throw new UpdateDownloadError('response-too-large', `The update response exceeds ${String(maxBytes)} bytes.`)
   }
@@ -437,11 +453,14 @@ async function writeResponseBody(
   filename: string,
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal | undefined,
+  totalBytes: number | undefined,
+  onProgress: ((percent: number) => void) | undefined,
 ): Promise<WrittenArtifactResult> {
   const handle = await open(filename, 'wx', PRIVATE_FILE_MODE)
   const reader = body.getReader()
   const hash = createHash('sha512')
   let bytesWritten = 0
+  let lastPercent = 0
   try {
     while (true) {
       throwIfAborted(signal)
@@ -457,6 +476,13 @@ async function writeResponseBody(
       await writeAll(handle, chunk.value)
       hash.update(chunk.value)
       bytesWritten += chunk.value.byteLength
+      if (onProgress !== undefined && totalBytes !== undefined && totalBytes > 0) {
+        const percent = Math.min(100, Math.floor((bytesWritten / totalBytes) * 100))
+        if (percent > lastPercent) {
+          lastPercent = percent
+          onProgress(percent)
+        }
+      }
     }
     if (bytesWritten === 0) {
       throw new UpdateDownloadError('empty-body', 'The update download service returned an empty body.')

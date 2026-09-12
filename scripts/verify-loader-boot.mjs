@@ -49,7 +49,7 @@ try {
     stateDir: join(home, 'runtime-commands'),
     environment: process.env,
   })
-  const prepared = prepareDesktopProfile(undefined, home)
+  const prepared = await prepareDesktopProfile(undefined, home)
   const thirdPartyDir = join(prepared.profile.dir, 'node_modules', THIRD_PARTY_NAME)
   mkdirSync(thirdPartyDir, { recursive: true })
   writeFileSync(join(thirdPartyDir, 'package.json'), JSON.stringify({
@@ -115,6 +115,9 @@ try {
         port: 43120,
       })
       host.provide('webRuntime', {})
+      host.provide('connection', {
+        authenticatedUrl: (url) => url,
+      })
       host.provide('appExit', () => {})
       host.provide('settings', {
         register() {
@@ -142,7 +145,7 @@ try {
   if (mountedSpec?.mode !== 'compatibility') {
     throw new Error(`desktop plugin produced an unexpected shell mode: ${String(mountedSpec?.mode)}`)
   }
-  if (mountedSpec?.url !== 'http://127.0.0.1:43120/?dsh-desktop-mode=compatibility&dsh-desktop-platform=darwin') {
+  if (mountedSpec?.url !== 'http://127.0.0.1:43120/#dsh-desktop-mode=compatibility&dsh-desktop-platform=darwin') {
     throw new Error(`desktop plugin produced an unexpected renderer URL: ${String(mountedSpec?.url)}`)
   }
 } finally {

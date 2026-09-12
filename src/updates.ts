@@ -1,6 +1,9 @@
 /** Cordis Host plugin for scheduled, tray, and settings-page HarnessX updates. */
 
 import { open } from 'node:fs/promises'
+import { existsSync, readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
@@ -62,6 +65,8 @@ interface UpdateStateV2 {
 export interface UpdateApiSnapshot {
   /** Installed application version. */
   readonly currentVersion: string
+  /** DeepSeek Harness kernel (runtime package family) version. */
+  readonly kernelVersion: string
   /** Current CPU architecture. */
   readonly arch: string
   /** Whether this package can download an installer. */
@@ -70,6 +75,8 @@ export interface UpdateApiSnapshot {
   readonly checking: boolean
   /** Version currently being downloaded. */
   readonly downloadingVersion?: string
+  /** Download progress of `downloadingVersion`, as an integer 0-100. */
+  readonly downloadProgress?: number
   /** Latest version returned by GitHub. */
   readonly latestVersion?: string
   /** Update comparison result. */
@@ -90,6 +97,40 @@ export interface UpdateApiSnapshot {
 
 const EMPTY_STATE: UpdateStateV2 = { version: 2 }
 
+/** The desktop product runs the published `@deepseek-ai/dsh-*` package family; that shared version is the kernel version. */
+const KERNEL_PACKAGE = '@deepseek-ai/dsh-web-app'
+
+let kernelVersionCache: string | undefined
+
+/**
+ * Resolve the installed DeepSeek Harness kernel version by walking up from
+ * the runtime package's entry to its own manifest — the package metadata,
+ * not a compile-time constant, so the value always names what actually runs.
+ */
+function resolveKernelVersion(): string {
+  if (kernelVersionCache !== undefined) return kernelVersionCache
+  try {
+    const require = createRequire(import.meta.url)
+    let directory = dirname(require.resolve(KERNEL_PACKAGE))
+    for (let depth = 0; depth < 8; depth += 1) {
+      const manifestPath = join(directory, 'package.json')
+      if (existsSync(manifestPath)) {
+        const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { name?: unknown; version?: unknown }
+        if (manifest.name === KERNEL_PACKAGE && typeof manifest.version === 'string' && manifest.version.length > 0) {
+          kernelVersionCache = manifest.version
+          return kernelVersionCache
+        }
+      }
+      const parent = dirname(directory)
+      if (parent === directory) break
+      directory = parent
+    }
+  } catch {
+    // Fall through to the placeholder.
+  }
+  return (kernelVersionCache = '—')
+}
+
 /**
  * Register effect-scoped update polling, settings APIs, and a dynamic tray command.
  * @param ctx - Host context carrying native and web-server adapters.
@@ -101,6 +142,7 @@ export function apply(ctx: Context, config: Config): void {
     let disposed = false
     let checking = false
     let downloadingVersion: string | undefined
+    let downloadProgressPercent: number | undefined
     let latestResult: UpdateCheckResult | null | undefined
     let lastCheckedAt: string | undefined
     let lastError: string | undefined
@@ -146,10 +188,14 @@ export function apply(ctx: Context, config: Config): void {
       const release = latestResult?.release
       return {
         currentVersion: adapter.currentVersion,
+        kernelVersion: resolveKernelVersion(),
         arch: adapter.arch,
         canDownload: adapter.canDownload,
         checking,
         ...(downloadingVersion === undefined ? {} : { downloadingVersion }),
+        ...(downloadingVersion === undefined || downloadProgressPercent === undefined
+          ? {}
+          : { downloadProgress: downloadProgressPercent }),
         ...(latestResult === undefined || latestResult === null
           ? {}
           : { latestVersion: latestResult.latestVersion }),
@@ -237,6 +283,7 @@ export function apply(ctx: Context, config: Config): void {
         const controller = new AbortController()
         downloadController = controller
         downloadingVersion = confirmedResult.latestVersion
+        downloadProgressPercent = 0
         lastError = undefined
         refreshTray()
         try {
@@ -244,12 +291,14 @@ export function apply(ctx: Context, config: Config): void {
             confirmedResult.latestVersion,
             confirmedResult.release,
             controller.signal,
+            percent => { downloadProgressPercent = percent },
           )
         } catch (cause) {
           if (!controller.signal.aborted) lastError = errorMessage(cause)
         } finally {
           if (downloadController === controller) downloadController = undefined
           downloadingVersion = undefined
+          downloadProgressPercent = undefined
           refreshTray()
         }
       })().finally(() => {
