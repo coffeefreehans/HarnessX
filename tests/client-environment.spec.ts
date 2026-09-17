@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest'
 import { parseDesktopClientEnvironment } from '../src/client/environment.ts'
 import { installAdvancedStyles } from '../src/client/styles.ts'
 import {
-  MACOS_TITLEBAR_HEIGHT,
   WINDOWS_TITLEBAR_HEIGHT,
 } from '../src/window-chrome.ts'
 
@@ -45,8 +44,6 @@ describe('advanced desktop layout', () => {
       const dispose = installAdvancedStyles()
       expect(css).toContain('html, body, #root { width: 100%; height: 100%; }')
       expect(css).toMatch(/body\[data-dsh-desktop-mode="advanced"\] \{ margin: 0;[^}]*background: transparent !important; \}/)
-      expect(css).toContain(`body[data-dsh-desktop-mode="advanced"][data-dsh-desktop-platform="win32"] #root { padding-top: ${WINDOWS_TITLEBAR_HEIGHT}px; }`)
-      expect(css).toContain(`body[data-dsh-desktop-mode="advanced"][data-dsh-desktop-platform="darwin"] #root { padding-top: ${MACOS_TITLEBAR_HEIGHT}px; }`)
       // The kernel UI renders untouched: no desktop class may leak into it.
       expect(css).not.toMatch(/\.dshDesktop/)
       expect(appendChild).toHaveBeenCalledWith(style)

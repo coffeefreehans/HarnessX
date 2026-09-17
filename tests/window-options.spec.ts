@@ -6,7 +6,6 @@ import {
   compatibilityWindowOptions,
   desktopWindowOptions,
 } from '../src/window-options.ts'
-import { WINDOWS_TITLEBAR_HEIGHT } from '../src/window-chrome.ts'
 
 const spec: DesktopShellSpec = {
   mode: 'compatibility',
@@ -78,40 +77,19 @@ describe('compatibility BrowserWindow options', () => {
     )).toThrow('unsupported compatibility window mode advanced')
   })
 
-  it('uses hidden-inset transparent vibrancy on macOS advanced windows', () => {
+  it('keeps the native OS frame on advanced windows like compatibility mode', () => {
     const advanced = { ...spec, mode: 'advanced' as const }
-    const options = advancedWindowOptions(advanced, {} as NativeImage, 'darwin')
-
-    expect(options).toEqual(expect.objectContaining({
-      titleBarStyle: 'hiddenInset',
-      trafficLightPosition: { x: 16, y: 16 },
-      transparent: true,
-      backgroundColor: '#00000000',
-      vibrancy: 'sidebar',
-      visualEffectState: 'followWindow',
-    }))
-    expect(desktopWindowOptions(advanced, {} as NativeImage, 'darwin')).toEqual(options)
-  })
-
-  it('uses native Windows controls, Mica, shadow, and rounded corners in advanced mode', () => {
-    const options = advancedWindowOptions(
-      { ...spec, mode: 'advanced' },
-      {} as NativeImage,
-      'win32',
-    )
-
-    expect(options).toEqual(expect.objectContaining({
-      titleBarStyle: 'hidden',
-      titleBarOverlay: {
-        color: '#00000000',
-        symbolColor: '#7f858f',
-        height: WINDOWS_TITLEBAR_HEIGHT,
-      },
-      backgroundMaterial: 'mica',
-      hasShadow: true,
-      roundedCorners: true,
-      thickFrame: true,
-    }))
+    // The kernel UI is the entire interface now; the former frameless /
+    // transparent / mica window left a hard black strip above it.
+    for (const platform of ['darwin', 'win32'] as const) {
+      const options = advancedWindowOptions(advanced, {} as NativeImage, platform)
+      expect(options).not.toHaveProperty('titleBarStyle')
+      expect(options).not.toHaveProperty('titleBarOverlay')
+      expect(options).not.toHaveProperty('transparent')
+      expect(options).not.toHaveProperty('backgroundMaterial')
+      expect(desktopWindowOptions(advanced, {} as NativeImage, platform)).toEqual(options)
+    }
+    expect(advancedWindowOptions(advanced, {} as NativeImage, 'win32').autoHideMenuBar).toBe(true)
   })
 
   it('keeps renderer isolation while enabling the workbench webview tag', () => {

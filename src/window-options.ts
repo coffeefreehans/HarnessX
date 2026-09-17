@@ -2,7 +2,6 @@
 
 import type { BrowserWindowConstructorOptions, NativeImage } from 'electron'
 import type { DesktopPlatform, DesktopShellSpec } from './runtime.ts'
-import { WINDOWS_TITLEBAR_HEIGHT } from './window-chrome.ts'
 
 /**
  * Build a secure BrowserWindow while preserving the operating system frame.
@@ -53,6 +52,9 @@ export function advancedWindowOptions(
   if (spec.mode !== 'advanced') {
     throw new Error(`harnessx-desktop: unsupported advanced window mode ${spec.mode}`)
   }
+  if (platform === 'linux') {
+    throw new Error('harnessx-desktop: advanced shell mode is supported on macOS and Windows')
+  }
   const options: BrowserWindowConstructorOptions = {
     title: platform === 'win32' ? spec.windowTitle : '',
     width: spec.width,
@@ -71,35 +73,12 @@ export function advancedWindowOptions(
       webviewTag: true,
     },
   }
-  if (platform === 'darwin') {
-    return {
-      ...options,
-      titleBarStyle: 'hiddenInset',
-      trafficLightPosition: { x: 16, y: 16 },
-      transparent: true,
-      backgroundColor: '#00000000',
-      vibrancy: 'sidebar',
-      visualEffectState: 'followWindow',
-    }
-  }
-  if (platform === 'win32') {
-    return {
-      ...options,
-      autoHideMenuBar: true,
-      titleBarStyle: 'hidden',
-      titleBarOverlay: {
-        color: '#00000000',
-        symbolColor: '#7f858f',
-        height: WINDOWS_TITLEBAR_HEIGHT,
-      },
-      backgroundColor: '#00000000',
-      backgroundMaterial: 'mica',
-      hasShadow: true,
-      roundedCorners: true,
-      thickFrame: true,
-    }
-  }
-  throw new Error('harnessx-desktop: advanced shell mode is supported on macOS and Windows')
+  // The kernel UI is now the entire interface, so advanced mode keeps the
+  // same native OS frame as compatibility mode; only webviewTag differs (the
+  // workbench browser tab). The former frameless/mica/overlay window left a
+  // hard black strip above the kernel UI.
+  if (platform === 'win32') options.autoHideMenuBar = true
+  return options
 }
 
 /**
