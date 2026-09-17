@@ -492,7 +492,7 @@ function wait(milliseconds: number): Promise<void> {
 /* ------------------------------------------------------------------ */
 
 const WORKBENCH_STYLES = `
-.hxpWb { position: fixed; top: 40px; right: 8px; bottom: 8px; z-index: 55; border-radius: 10px; min-width: 0; min-height: 0; overflow: hidden; background: var(--dsw-alias-bg-base, #fff); border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08)); box-shadow: 0 10px 32px rgba(0,0,0,.16); }
+.hxpWb { position: fixed; top: 8px; right: 8px; bottom: 8px; z-index: 55; border-radius: 10px; min-width: 0; min-height: 0; overflow: hidden; background: var(--dsw-alias-bg-base, #fff); border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08)); }
 body:not([data-dsh-desktop-mode="advanced"]) .hxpWb { display: none; }
 .hxpWbSlide { height: 100%; display: flex; flex-direction: column; transform: translateX(calc(100% + 1px)); opacity: 0; transition: transform var(--ds-transition-duration-slow, .25s) var(--ds-ease-in-out, ease), opacity var(--ds-transition-duration-slow, .25s) var(--ds-ease-in-out, ease); }
 .hxpWb[data-open] .hxpWbSlide { transform: translateX(0); opacity: 1; }
@@ -720,6 +720,21 @@ export function WorkbenchToggleButton(props: { state: WorkbenchState }): ReactNo
  */
 export function WorkbenchOverlayEntry(): ReactNode {
   const state = getWorkbenchStore()
+  const subscribe = useCallback((listener: () => void) => state.subscribe(listener), [state])
+  const read = useCallback(() => state.getSnapshot(), [state])
+  const snapshot = useSyncExternalStore(subscribe, read)
+  // The open dock reserves room: the kernel UI shrinks beside it instead of
+  // being covered, so both surfaces stay fully visible and interactive.
+  useEffect(() => {
+    const root = document.getElementById('root')
+    if (root !== null) {
+      root.style.width = snapshot.open ? `calc(100% - ${String(snapshot.width + 8)}px)` : ''
+    }
+    return () => {
+      const current = document.getElementById('root')
+      if (current !== null) current.style.width = ''
+    }
+  }, [snapshot.open, snapshot.width])
   return (
     <>
       <WorkbenchToggleButton state={state} />
