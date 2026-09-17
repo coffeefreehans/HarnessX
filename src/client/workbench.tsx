@@ -9,7 +9,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
-import { MACOS_TITLEBAR_HEIGHT, WINDOWS_CAPTION_CONTROLS_WIDTH, WINDOWS_TITLEBAR_HEIGHT } from '../window-chrome.ts'
 import { isDesktopPrefsHydrated, schedulePersistDesktopPrefs } from './desktop-prefs.ts'
 import { isAbsoluteWorkspacePath, resolveDockWorkspace } from './workspace-source.ts'
 import {
@@ -493,7 +492,7 @@ function wait(milliseconds: number): Promise<void> {
 /* ------------------------------------------------------------------ */
 
 const WORKBENCH_STYLES = `
-.hxpWb { position: fixed; top: 0; right: 0; bottom: 0; z-index: 55; min-width: 0; min-height: 0; overflow: hidden; background: var(--dsw-alias-bg-base, #fff); border-left: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08)); box-shadow: -6px 0 24px rgba(0,0,0,.12); }
+.hxpWb { position: fixed; top: 40px; right: 8px; bottom: 8px; z-index: 55; border-radius: 10px; min-width: 0; min-height: 0; overflow: hidden; background: var(--dsw-alias-bg-base, #fff); border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08)); box-shadow: 0 10px 32px rgba(0,0,0,.16); }
 body:not([data-dsh-desktop-mode="advanced"]) .hxpWb { display: none; }
 .hxpWbSlide { height: 100%; display: flex; flex-direction: column; transform: translateX(calc(100% + 1px)); opacity: 0; transition: transform var(--ds-transition-duration-slow, .25s) var(--ds-ease-in-out, ease), opacity var(--ds-transition-duration-slow, .25s) var(--ds-ease-in-out, ease); }
 .hxpWb[data-open] .hxpWbSlide { transform: translateX(0); opacity: 1; }
@@ -516,10 +515,8 @@ body:not([data-dsh-desktop-mode="advanced"]) .hxpWb { display: none; }
 .hxpWbDivider { position: relative; z-index: 5; flex: none; height: 5px; cursor: row-resize; touch-action: none; }
 .hxpWbDivider:hover { background: rgba(127,127,127,.18); }
 .hxpWbResize { position: absolute; top: 0; bottom: 0; left: -4px; width: 8px; cursor: col-resize; touch-action: none; z-index: 10; }
-.hxpWbToggle { position: absolute; z-index: 60; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-tertiary, #888); cursor: pointer; }
-body[data-dsh-desktop-platform="win32"] .hxpWbToggle { top: calc((${WINDOWS_TITLEBAR_HEIGHT}px - 28px) / 2); right: calc(${WINDOWS_CAPTION_CONTROLS_WIDTH}px + 8px); }
-body[data-dsh-desktop-platform="darwin"] .hxpWbToggle { top: calc((${MACOS_TITLEBAR_HEIGHT}px - 28px) / 2); right: 12px; }
-body:not([data-dsh-desktop-platform="win32"]):not([data-dsh-desktop-platform="darwin"]) .hxpWbToggle { top: 8px; right: 12px; }
+.hxpWbToggle { position: fixed; bottom: 18px; right: 18px; z-index: 56; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; padding: 0; border: 1px solid var(--dsw-alias-border-l2, rgba(0,0,0,.08)); border-radius: 50%; background: var(--dsw-alias-bg-base, #fff); box-shadow: 0 4px 16px rgba(0,0,0,.18); color: var(--dsw-alias-label-secondary, #555); cursor: pointer; }
+.hxpWbToggle:hover { color: var(--dsw-alias-label-primary, #222); box-shadow: 0 6px 20px rgba(0,0,0,.22); }
 .hxpWbToggle:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.05)); color: var(--dsw-alias-label-primary, #222); }
 .hxpWbToggle[data-active] { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.07)); color: var(--dsw-alias-label-primary, #222); }
 .hxpWbPanel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; font-size: 12.5px; color: var(--dsw-alias-label-primary, #222); }
