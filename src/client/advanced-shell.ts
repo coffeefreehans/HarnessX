@@ -8,7 +8,6 @@
  * sidebar's brand seat, and its settings sections.
  */
 
-import type { ReactNode } from 'react'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-theme/client'
 import type {} from './contracts.ts'
@@ -16,11 +15,6 @@ import type { DesktopClientEnvironment } from './environment.ts'
 import { installAdvancedStyles } from './styles.ts'
 import { DesktopThemePresenter } from './theme-presenter.ts'
 import { setWorkbenchApiClient, WorkbenchOverlayEntry, type WorkbenchWireApi } from './workbench.tsx'
-
-/** Product name occupying the sidebar's documented brand-name seat. */
-export function DesktopBrandName(): ReactNode {
-  return 'HARNESSX'
-}
 
 /**
  * Layer desktop-owned surfaces over the running kernel UI.
@@ -65,11 +59,4 @@ export function applyAdvancedShell(ctx: ClientContext, environment: DesktopClien
     id: 'harnessx-workbench',
   }, WorkbenchOverlayEntry), 'desktop: workbench overlay')
 
-  // Occupy the sidebar's documented brand-name seat with the product name.
-  // Slot shadowing (priority below the official brand plugin's default 0) is
-  // the sanctioned composition path, so kernel updates cannot regress it.
-  ctx.effect(() => ctx.slots.inject('sidebar.brand.name', () => ctx.slots.register({
-    name: 'sidebar.brand.name',
-    priority: -1,
-  }, DesktopBrandName)), 'desktop: product brand name')
 }
